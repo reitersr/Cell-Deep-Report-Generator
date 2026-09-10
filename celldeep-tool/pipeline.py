@@ -26,6 +26,7 @@ import argparse
 from dataclasses import asdict
 
 from anthropic import Anthropic
+from json_repair import repair_json
 
 from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint
 from markers_reference import MARKER_LIBRARY, DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
@@ -45,6 +46,22 @@ if os.path.exists(".env"):
                 os.environ.setdefault(k, v)
 
 MODEL = "claude-sonnet-4-6"
+
+
+def _parse_json_response(text):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        repaired = repair_json(text)
+        return json.loads(repaired)
 
 
 def _pdf_content_block(path: str) -> dict:
@@ -89,13 +106,8 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         messages=[{"role": "user", "content": content}],
     )
     text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
-    raw_text = "".join(text_blocks).strip()
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("```")[1]
-        if raw_text.startswith("json"):
-            raw_text = raw_text[4:]
-        raw_text = raw_text.strip()
-    return json.loads(raw_text)
+    raw_text = "".join(text_blocks)
+    return _parse_json_response(raw_text)
 
 
 def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionReviewNotice]:
@@ -169,13 +181,8 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> dict:
                                                  "Generate the interpretive copy per the instructions."}],
     )
     text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
-    raw_text = "".join(text_blocks).strip()
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("```")[1]
-        if raw_text.startswith("json"):
-            raw_text = raw_text[4:]
-        raw_text = raw_text.strip()
-    return json.loads(raw_text)
+    raw_text = "".join(text_blocks)
+    return _parse_json_response(raw_text)
 
 
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
