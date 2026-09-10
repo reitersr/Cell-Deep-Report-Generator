@@ -144,11 +144,16 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
 
     protocol = []
     for raw in extracted.get("protocol", []):
-        protocol.append(ProtocolItem(
-            name=raw["name"], cadence=raw.get("cadence") or "as directed",
-            target_categories=raw.get("target_categories", []),
-            lab_visible=raw.get("lab_visible", True),
-        ))
+        if isinstance(raw, str):
+            protocol.append(ProtocolItem(name=raw, cadence="as directed",
+                                          target_categories=[], lab_visible=True))
+        else:
+            protocol.append(ProtocolItem(
+                name=raw.get("name") or raw.get("item") or str(raw),
+                cadence=raw.get("cadence") or "as directed",
+                target_categories=raw.get("target_categories", []),
+                lab_visible=raw.get("lab_visible", True),
+            ))
 
     pain_points = [PainPoint(text=p["text"], categories=p.get("categories", []))
                    for p in extracted.get("pain_points", [])]
