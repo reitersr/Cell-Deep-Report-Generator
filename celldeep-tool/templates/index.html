@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CellDeep Report Generator</title>
+  <style>
+    body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #373436; }
+    h1 { font-family: Georgia, serif; font-size: 22px; margin-bottom: 4px; }
+    p.sub { color: #5A5A5A; font-size: 13px; margin-bottom: 28px; }
+    label { display: block; font-weight: 700; font-size: 13px; margin: 18px 0 6px; }
+    input[type=text], input[type=number], select, textarea, input[type=file] {
+      width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; box-sizing: border-box;
+    }
+    textarea { min-height: 160px; font-family: inherit; }
+    .hint { font-size: 11.5px; color: #888; margin-top: 3px; }
+    button {
+      margin-top: 26px; background: #373436; color: #fff; border: none; padding: 12px 22px;
+      border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; width: 100%;
+    }
+    button:hover { background: #2A2827; }
+    .flash { background: #B75B4E22; border: 1px solid #B75B4E; color: #7a3a30; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+  </style>
+</head>
+<body>
+  <h1>CellDeep Report Generator</h1>
+  <p class="sub">Upload whatever's available for this patient. Fields left blank are simply left out of the report — nothing is required beyond a name.</p>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <form action="/generate" method="post" enctype="multipart/form-data">
+    <label>Patient Name</label>
+    <input type="text" name="patient_name" required>
+
+    <div class="row">
+      <div>
+        <label>Age</label>
+        <input type="number" name="age">
+      </div>
+      <div>
+        <label>Sex</label>
+        <select name="sex">
+          <option value="">Not specified</option>
+          <option value="female">Female</option>
+          <option value="male">Male</option>
+        </select>
+      </div>
+    </div>
+
+    <label>Bloodwork Lab PDF</label>
+    <input type="file" name="labs_pdf" accept="application/pdf">
+    <div class="hint">The raw lab report, exactly as received. Leave blank if no bloodwork this round.</div>
+
+    <label>DEXA Scan PDF(s)</label>
+    <input type="file" name="dexa_pdfs" accept="application/pdf" multiple>
+    <div class="hint">Upload one or more. Leave blank if no DEXA this round.</div>
+
+    <label>Provider's Consultation Note</label>
+    <textarea name="note_text" placeholder="Paste the provider's note here, exactly as written."></textarea>
+    <div class="hint">Paste the full note as-is.</div>
+
+    <button type="submit">Generate Report</button>
+  </form>
+</body>
+</html>

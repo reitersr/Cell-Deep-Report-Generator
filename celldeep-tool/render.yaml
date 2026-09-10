@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: celldeep-report-generator
+    env: python
+    buildCommand: "pip install -r requirements.txt && playwright install --with-deps chromium"
+    startCommand: "gunicorn app:app --timeout 120"
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: FLASK_SECRET_KEY
+        generateValue: true
