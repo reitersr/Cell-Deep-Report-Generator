@@ -84,7 +84,7 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
 
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=8000,
+        max_tokens=16000,
         system=EXTRACTION_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": content}],
     )
@@ -163,7 +163,7 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> dict:
     payload = json.dumps(asdict(record), default=str, indent=2)
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=8000,
+        max_tokens=16000,
         system=GENERATION_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": f"Here is the fully scored patient record:\n\n{payload}\n\n"
                                                  "Generate the interpretive copy per the instructions."}],
