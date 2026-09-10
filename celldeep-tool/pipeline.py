@@ -88,7 +88,13 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         system=EXTRACTION_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": content}],
     )
-    raw_text = resp.content[0].text
+    text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
+    raw_text = "".join(text_blocks).strip()
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("```")[1]
+        if raw_text.startswith("json"):
+            raw_text = raw_text[4:]
+        raw_text = raw_text.strip()
     return json.loads(raw_text)
 
 
@@ -162,7 +168,14 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> dict:
         messages=[{"role": "user", "content": f"Here is the fully scored patient record:\n\n{payload}\n\n"
                                                  "Generate the interpretive copy per the instructions."}],
     )
-    return json.loads(resp.content[0].text)
+    text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
+    raw_text = "".join(text_blocks).strip()
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("```")[1]
+        if raw_text.startswith("json"):
+            raw_text = raw_text[4:]
+        raw_text = raw_text.strip()
+    return json.loads(raw_text)
 
 
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
