@@ -23,6 +23,7 @@ import os
 import json
 import base64
 import argparse
+import re
 from dataclasses import asdict
 
 from anthropic import Anthropic
@@ -52,7 +53,13 @@ MODEL = "claude-sonnet-4-6"
 def _sanitize_em_dashes(value):
     """Return a recursively sanitized copy of generated JSON-compatible data."""
     if isinstance(value, str):
-        return value.replace(" — ", ". ").replace("—", ", ")
+        sanitized = value.replace(" — ", "; ").replace("—", ", ")
+        sanitized = re.sub(r"\.{2,}", ".", sanitized)
+        sanitized = re.sub(r";\s*\.", ";", sanitized)
+        sanitized = re.sub(r"\s+,", ",", sanitized)
+        sanitized = re.sub(r",\s*([A-Za-z])", r", \1", sanitized)
+        sanitized = re.sub(r"([.!?%])\s+(?=[a-z])", r"; ", sanitized)
+        return sanitized
     if isinstance(value, dict):
         return {key: _sanitize_em_dashes(item) for key, item in value.items()}
     if isinstance(value, list):
@@ -61,27 +68,35 @@ def _sanitize_em_dashes(value):
 
 
 def _extract_dexa_scan_image(dexa_pdfs: list[str]) -> str | None:
-    """Extract the largest plausible embedded DEXA image as a PNG payload."""
+    """Extract a confidently identified portrait-oriented embedded DEXA image."""
     candidates = []
     for pdf_path in dexa_pdfs:
         with fitz.open(pdf_path) as document:
-            for page in document:
+            for page_number, page in enumerate(document, start=1):
+                page_heading = page.get_text().lower()
+                heading_match = "body composition" in page_heading or "color coding" in page_heading
                 for image in page.get_images(full=True):
                     xref = image[0]
                     extracted = document.extract_image(xref)
                     width = extracted.get("width", 0)
                     height = extracted.get("height", 0)
-                    if width < 80 or height < 80:
-                        continue
                     aspect = height / width if width else 0
-                    if aspect < 0.75 or aspect > 2.5:
+                    area = width * height
+                    print(f"DEXA image candidate: page={page_number} dimensions={width}x{height} aspect={aspect:.3f}")
+                    if width < 80 or height < 80 or aspect < 1.1 or aspect > 3.5:
                         continue
-                    pixmap = fitz.Pixmap(document, xref)
-                    png_bytes = pixmap.tobytes("png")
-                    candidates.append((width * height, png_bytes))
+                    candidates.append((heading_match, area, pdf_path, xref))
     if not candidates:
         return None
-    _, png_bytes = max(candidates, key=lambda candidate: candidate[0])
+    preferred = [candidate for candidate in candidates if candidate[0]] or candidates
+    preferred.sort(key=lambda candidate: candidate[1], reverse=True)
+    if len(preferred) > 1 and preferred[0][1] <= preferred[1][1] * 1.15:
+        print("DEXA image selection: ambiguous portrait candidates, omitting scan image")
+        return None
+    _, _, selected_pdf, xref = preferred[0]
+    with fitz.open(selected_pdf) as document:
+        pixmap = fitz.Pixmap(document, xref)
+        png_bytes = pixmap.tobytes("png")
     return base64.b64encode(png_bytes).decode("ascii")
 
 

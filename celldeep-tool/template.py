@@ -47,7 +47,7 @@ PATIENT_CATEGORY_SUB = {
 }
 
 
-def fmt(value, dash="—"):
+def fmt(value, dash=""):
     if value is None or value == "" or value == "None":
         return dash
     return value
@@ -77,6 +77,18 @@ def fmt_date(date_str):
         return datetime.fromisoformat(text).strftime("%B %-d, %Y")
     except ValueError:
         return text
+
+
+def parse_date_value(date_str):
+    text = str(date_str).strip()
+    for fmt_string in (
+        "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y", "%Y/%m/%d", "%m-%d-%Y",
+    ):
+        try:
+            return datetime.strptime(text, fmt_string)
+        except ValueError:
+            pass
+    return datetime.fromisoformat(text)
 
 
 def fmt_patient_name(raw):
@@ -385,7 +397,7 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
         f'<div class="dexa-hist-row"><span class="d">{fmt_date(d.date_display)}</span>'
         f'<span class="v">{fmt(d.total_mass_lb)} lb total</span><span class="v">{fmt(d.fat_mass_lb)} lb fat</span>'
         f'<span class="v">{fmt(d.lean_mass_lb)} lb lean</span><span class="v">{fmt(d.body_fat_pct)} fat</span>'
-        f'<span class="v">{(str(d.vat_fat_mass_lb) + " lb") if d.vat_fat_mass_lb is not None else "\u2014"} VAT</span></div>'
+        f'<span class="v">{(str(d.vat_fat_mass_lb) + " lb") if d.vat_fat_mass_lb is not None else ""} VAT</span></div>'
         for d in record.dexa_history
     )
     structure_now = roll.get("Structure", {}).get("now", "")
@@ -467,7 +479,7 @@ def bio_row_tr(m, copy, color_override=None):
         then_color = TIER_COLOR.get(m.then_tier, YELLOW)
         then_cell = f'<span class="bio-pill" style="background:{then_color}22; color:{then_color};">{m.disp_then}</span>'
     else:
-        then_cell = '<span class="bio-dash">&mdash;</span>'
+        then_cell = '<span class="bio-dash"></span>'
     now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{m.disp_now}</span>{unit}'
     row = f'''<tr class="bio-tr" style="--c:{color};">
       <td class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span></td>
@@ -521,17 +533,17 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     latest_draw = record.latest_draw_date
     try:
         if first_draw and latest_draw:
-            start_dt = datetime.strptime(str(first_draw), "%Y-%m-%d")
-            end_dt = datetime.strptime(str(latest_draw), "%Y-%m-%d")
-            days_apart = f"· {abs((end_dt - start_dt).days)} days"
+            start_dt = parse_date_value(first_draw)
+            end_dt = parse_date_value(latest_draw)
+            days_apart = f"· {(end_dt - start_dt).days} days"
         else:
             days_apart = ""
     except ValueError:
         try:
             if first_draw and latest_draw:
-                start_dt = datetime.fromisoformat(str(first_draw))
-                end_dt = datetime.fromisoformat(str(latest_draw))
-                days_apart = f"· {abs((end_dt - start_dt).days)} days"
+                start_dt = parse_date_value(first_draw)
+                end_dt = parse_date_value(latest_draw)
+                days_apart = f"· {(end_dt - start_dt).days} days"
             else:
                 days_apart = ""
         except ValueError:
@@ -599,7 +611,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     </div>
     <div class="color-legend">Red = flagged &nbsp;&middot;&nbsp; Yellow = moderate &nbsp;&middot;&nbsp; Green = optimal &nbsp;&middot;&nbsp; {CHECK_SM} = improved since your first visit</div>
     <div class="journey-row">
-      <div class="jstep"><div class="lbl">You were</div><div class="val">{overall_then if overall_then is not None else "&mdash;"}%</div><div class="sub">{fmt_date(first_draw)}</div></div>
+    <div class="jstep"><div class="lbl">You were</div><div class="val">{overall_then if overall_then is not None else ""}{"%" if overall_then is not None else ""}</div><div class="sub">{fmt_date(first_draw)}</div></div>
       <div class="jstep"><div class="lbl">You are</div><div class="val">{overall_now}%</div><div class="sub">{fmt_date(latest_draw)}</div></div>
       <div class="jstep"><div class="lbl">Next 30 days</div><div class="val">{next_30_label}</div><div class="sub">{next_30_sub}</div></div>
       <div class="jstep"><div class="lbl">Next 90 days</div><div class="val">{next_90_label}</div><div class="sub">{next_90_sub}</div></div>
