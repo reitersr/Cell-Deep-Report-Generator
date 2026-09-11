@@ -47,7 +47,7 @@ PATIENT_CATEGORY_SUB = {
 }
 
 
-def fmt(value, dash=""):
+def fmt(value, dash="—"):
     if value is None or value == "" or value == "None":
         return dash
     return value
@@ -399,7 +399,7 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
         f'<div class="dexa-hist-row"><span class="d">{fmt_date(d.date_display)}</span>'
         f'<span class="v">{fmt(d.total_mass_lb)} lb total</span><span class="v">{fmt(d.fat_mass_lb)} lb fat</span>'
         f'<span class="v">{fmt(d.lean_mass_lb)} lb lean</span><span class="v">{fmt(d.body_fat_pct)} fat</span>'
-        f'<span class="v">{(str(d.vat_fat_mass_lb) + " lb") if d.vat_fat_mass_lb is not None else ""} VAT</span></div>'
+        f'<span class="v">{fmt(d.vat_fat_mass_lb)} lb VAT</span></div>'
         for d in record.dexa_history
     )
     structure_now = roll.get("Structure", {}).get("now", "")
@@ -479,10 +479,10 @@ def bio_row_tr(m, copy, color_override=None):
     tier_word = {"optimal": "Optimal", "moderate": "Moderate", "flag": "Flagged"}.get(m.now_tier, "Optimal")
     if m.then is not None:
         then_color = TIER_COLOR.get(m.then_tier, YELLOW)
-        then_cell = f'<span class="bio-pill" style="background:{then_color}22; color:{then_color};">{m.disp_then}</span>'
+        then_cell = f'<span class="bio-pill" style="background:{then_color}22; color:{then_color};">{fmt(m.disp_then)}</span>'
     else:
-        then_cell = '<span class="bio-dash"></span>'
-    now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{m.disp_now}</span>{unit}'
+        then_cell = f'<span class="bio-dash">{fmt(m.disp_then)}</span>'
+    now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{fmt(m.disp_now)}</span>{unit}'
     row = f'''<tr class="bio-tr" style="--c:{color};">
       <td class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span></td>
       <td class="td-range">{m.disp_range}</td>
@@ -592,6 +592,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     next_90_sub = fmt(copy.get("next_90_sub", ""))
     by_age_label = fmt(copy.get("by_age_label", f"By {record.age}" if record.age else "By target age"))
     by_age_sub = fmt(copy.get("by_age_sub", ""))
+    overall_then_display = f"{overall_then}%" if overall_then is not None else fmt(overall_then)
 
     HTML = f'''<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>CellDeep: Patient and Protocol Record</title>
@@ -617,7 +618,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     </div>
     <div class="color-legend">Red = flagged &nbsp;&middot;&nbsp; Yellow = moderate &nbsp;&middot;&nbsp; Green = optimal &nbsp;&middot;&nbsp; {CHECK_SM} = improved since your first visit</div>
     <div class="journey-row">
-    <div class="jstep"><div class="lbl">You were</div><div class="val">{overall_then if overall_then is not None else ""}{"%" if overall_then is not None else ""}</div><div class="sub">{fmt_date(first_draw)}</div></div>
+    <div class="jstep"><div class="lbl">You were</div><div class="val">{overall_then_display}</div><div class="sub">{fmt_date(first_draw)}</div></div>
       <div class="jstep"><div class="lbl">You are</div><div class="val">{overall_now}%</div><div class="sub">{fmt_date(latest_draw)}</div></div>
       <div class="jstep"><div class="lbl">Next 30 days</div><div class="val">{next_30_label}</div><div class="sub">{next_30_sub}</div></div>
       <div class="jstep"><div class="lbl">Next 90 days</div><div class="val">{next_90_label}</div><div class="sub">{next_90_sub}</div></div>

@@ -176,6 +176,7 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
     resp = client.messages.create(
         model=MODEL,
         max_tokens=16000,
+        temperature=0,
         system=EXTRACTION_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": content}],
     )
