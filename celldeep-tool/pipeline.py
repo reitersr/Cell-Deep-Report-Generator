@@ -27,6 +27,7 @@ from dataclasses import asdict
 
 from anthropic import Anthropic
 from json_repair import repair_json
+import fitz
 
 from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint
 from markers_reference import MARKER_LIBRARY, DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
@@ -46,6 +47,42 @@ if os.path.exists(".env"):
                 os.environ.setdefault(k, v)
 
 MODEL = "claude-sonnet-4-6"
+
+
+def _sanitize_em_dashes(value):
+    """Return a recursively sanitized copy of generated JSON-compatible data."""
+    if isinstance(value, str):
+        return value.replace(" — ", ". ").replace("—", ", ")
+    if isinstance(value, dict):
+        return {key: _sanitize_em_dashes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_em_dashes(item) for item in value]
+    return value
+
+
+def _extract_dexa_scan_image(dexa_pdfs: list[str]) -> str | None:
+    """Extract the largest plausible embedded DEXA image as a PNG payload."""
+    candidates = []
+    for pdf_path in dexa_pdfs:
+        with fitz.open(pdf_path) as document:
+            for page in document:
+                for image in page.get_images(full=True):
+                    xref = image[0]
+                    extracted = document.extract_image(xref)
+                    width = extracted.get("width", 0)
+                    height = extracted.get("height", 0)
+                    if width < 80 or height < 80:
+                        continue
+                    aspect = height / width if width else 0
+                    if aspect < 0.75 or aspect > 2.5:
+                        continue
+                    pixmap = fitz.Pixmap(document, xref)
+                    png_bytes = pixmap.tobytes("png")
+                    candidates.append((width * height, png_bytes))
+    if not candidates:
+        return None
+    _, png_bytes = max(candidates, key=lambda candidate: candidate[0])
+    return base64.b64encode(png_bytes).decode("ascii")
 
 
 def _parse_json_response(text):
@@ -142,10 +179,8 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         scoring.attach_scores(m)   # computes now_tier/then_tier/pct in place — pure math, no AI
         markers.append(m)
 
-    dexa_history = [
-        DexaReading(**scoring.normalize_dexa_body_fat(d))
-        for d in extracted.get("dexa_history", [])
-    ]
+    dexa_history = [DexaReading(**scoring.normalize_dexa_body_fat(d))
+                    for d in extracted.get("dexa_history", [])]
 
     protocol = []
     for raw in extracted.get("protocol", []):
@@ -208,10 +243,14 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
     record, notice = score_and_build_record(extracted)
 
     print("Step 3/3: generating interpretive copy...")
-    copy = generate_copy(client, record)
+    copy = _sanitize_em_dashes(generate_copy(client, record))
+
+    dexa_img_b64 = _extract_dexa_scan_image(dexa_pdfs)
+    if dexa_img_b64 and record.dexa_history:
+        record.dexa_history[-1].scan_image_b64 = dexa_img_b64
 
     print("Rendering PDF...")
-    template.render(record, copy, out_path)
+    template.render(record, copy, out_path, dexa_img_b64=dexa_img_b64)
 
     review = format_review_notice(notice)
     if review:

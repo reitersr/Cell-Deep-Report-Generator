@@ -85,6 +85,9 @@ def fmt_patient_name(raw):
     name = str(raw).strip()
     if not name:
         return "Patient"
+    if "," in name:
+        last, first = (part.strip() for part in name.split(",", 1))
+        name = " ".join(part for part in (first, last) if part)
     return " ".join(part.capitalize() for part in name.split())
 
 
@@ -512,6 +515,8 @@ def render(record: PatientRecord, copy: dict, out_path: str,
            logo_traced_path: str | None = None, dexa_img_b64: str | None = None):
     """The single entry point. Produces a finished PDF at out_path."""
 
+    if dexa_img_b64 is None and record.dexa_history:
+        dexa_img_b64 = record.dexa_history[-1].scan_image_b64
     first_draw = record.first_draw_date
     latest_draw = record.latest_draw_date
     try:
@@ -594,6 +599,8 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     </div>
     <div class="color-legend">Red = flagged &nbsp;&middot;&nbsp; Yellow = moderate &nbsp;&middot;&nbsp; Green = optimal &nbsp;&middot;&nbsp; {CHECK_SM} = improved since your first visit</div>
     <div class="journey-row">
+      <div class="jstep"><div class="lbl">You were</div><div class="val">{overall_then if overall_then is not None else "&mdash;"}%</div><div class="sub">{fmt_date(first_draw)}</div></div>
+      <div class="jstep"><div class="lbl">You are</div><div class="val">{overall_now}%</div><div class="sub">{fmt_date(latest_draw)}</div></div>
       <div class="jstep"><div class="lbl">Next 30 days</div><div class="val">{next_30_label}</div><div class="sub">{next_30_sub}</div></div>
       <div class="jstep"><div class="lbl">Next 90 days</div><div class="val">{next_90_label}</div><div class="sub">{next_90_sub}</div></div>
       <div class="jstep"><div class="lbl">By age</div><div class="val">{by_age_label}</div><div class="sub">{by_age_sub}</div></div>

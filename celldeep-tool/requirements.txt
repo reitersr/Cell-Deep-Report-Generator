@@ -3,3 +3,4 @@ playwright
 flask
 gunicorn
 json-repair
+PyMuPDF
