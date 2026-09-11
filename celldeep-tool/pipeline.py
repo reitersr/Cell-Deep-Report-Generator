@@ -24,7 +24,6 @@ import json
 import base64
 import argparse
 import inspect
-import re
 from dataclasses import asdict
 
 from anthropic import Anthropic
@@ -51,16 +50,16 @@ if os.path.exists(".env"):
 MODEL = "claude-sonnet-4-6"
 
 
+def sanitize_text(s: str) -> str:
+    s = s.replace(" — ", "; ")
+    s = s.replace("—", ", ")
+    return s
+
+
 def _sanitize_em_dashes(value):
     """Return a recursively sanitized copy of generated JSON-compatible data."""
     if isinstance(value, str):
-        sanitized = value.replace(" — ", "; ").replace("—", ", ")
-        sanitized = re.sub(r"\.{2,}", ".", sanitized)
-        sanitized = re.sub(r";\s*\.", ";", sanitized)
-        sanitized = re.sub(r"\s+,", ",", sanitized)
-        sanitized = re.sub(r",\s*([A-Za-z])", r", \1", sanitized)
-        sanitized = re.sub(r"([.!?%])\s+(?=[a-z])", r"; ", sanitized)
-        return sanitized
+        return sanitize_text(value)
     if isinstance(value, dict):
         return {key: _sanitize_em_dashes(item) for key, item in value.items()}
     if isinstance(value, list):
