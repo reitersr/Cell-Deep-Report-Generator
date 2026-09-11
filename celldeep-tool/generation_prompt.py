@@ -41,8 +41,9 @@ definition.
 - Marker names ARE allowed in copy (this was explicitly reversed during calibration) — the rule is: name the \
 marker, then explain it in a way anyone could understand, never assume clinical literacy.
 - Protocol reasoning must be grounded in THIS patient's actual moderate/flagged markers, not a compound's \
-generic textbook purpose. State it as: this compound targets [specific marker(s) that are actually \
-moderate/flagged for this patient], because that's what's true for them specifically.
+generic textbook purpose. When a sentence needs a list of markers, use the exact placeholder \
+{moderate_markers} or {flagged_markers} rather than typing marker names. The renderer replaces these \
+placeholders from the deterministically scored record. Never manually enumerate a marker-name list.
 - A synthesized pain point/goal is never presented as a literal quotation. No quotation marks, no "in her own \
 words" framing. It's your plain-language synthesis, labeled simply "At first visit:" — present it as summary, \
 not transcript.
@@ -90,6 +91,11 @@ WHAT YOU GENERATE — return a single JSON object with EXACTLY these top-level k
   "structure_score_then": 58,
   "structure_improved": true
 }
+
+MARKER LIST SAFETY:
+- Never type a list of marker names from memory. Use {optimal_markers}, {moderate_markers}, or
+  {flagged_markers} wherever a sentence needs multiple marker names. Single-marker explanations may
+  continue to use their real marker-name key because that key is validated against the record.
 
 PROJECTION-ROW CONTENT LOGIC:
 - NEXT 30 DAYS: name the single most time-sensitive action given the patient's actual moderate/flagged markers and current protocol. Only use a generic "stay the course" message if literally nothing needs attention.

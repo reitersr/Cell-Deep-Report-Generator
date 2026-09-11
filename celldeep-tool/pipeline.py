@@ -67,6 +67,28 @@ def _sanitize_em_dashes(value):
     return value
 
 
+def _marker_list_placeholders(record: PatientRecord) -> dict[str, str]:
+    """Build marker-list tokens from deterministic scores, never generated prose."""
+    return {
+        "{optimal_markers}": ", ".join(marker.name for marker in record.markers if marker.now_tier == "optimal"),
+        "{moderate_markers}": ", ".join(marker.name for marker in record.markers if marker.now_tier == "moderate"),
+        "{flagged_markers}": ", ".join(marker.name for marker in record.markers if marker.now_tier == "flag"),
+    }
+
+
+def _substitute_marker_list_placeholders(value, placeholders):
+    if isinstance(value, str):
+        for token, marker_list in placeholders.items():
+            value = value.replace(token, marker_list)
+        return value
+    if isinstance(value, dict):
+        return {key: _substitute_marker_list_placeholders(item, placeholders)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_substitute_marker_list_placeholders(item, placeholders) for item in value]
+    return value
+
+
 def _extract_dexa_scan_image(dexa_pdfs: list[str]) -> str | None:
     """Extract a confidently identified portrait-oriented embedded DEXA image."""
     candidates = []
@@ -242,6 +264,8 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> dict:
     )
     text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
     raw_text = "".join(text_blocks)
+    with open("/tmp/pre_sanitize_copy.json", "w", encoding="utf-8") as f:
+        f.write(raw_text)
     return _parse_json_response(raw_text)
 
 
@@ -259,6 +283,9 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
 
     print("Step 3/3: generating interpretive copy...")
     copy = _sanitize_em_dashes(generate_copy(client, record))
+    copy = _substitute_marker_list_placeholders(copy, _marker_list_placeholders(record))
+    with open("/tmp/post_sanitize_copy.json", "w", encoding="utf-8") as f:
+        json.dump(copy, f, indent=2, ensure_ascii=False)
 
     dexa_img_b64 = _extract_dexa_scan_image(dexa_pdfs)
     if dexa_img_b64 and record.dexa_history:

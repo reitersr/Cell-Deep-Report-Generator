@@ -249,7 +249,9 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .dexa-quote{{margin-top:4px; padding-top:4px; border-top:1px solid {LINE}; font-size:10px; font-style:italic; color:{AQUA_DK}; position:relative; z-index:2;}}
 .dexa-quote .lbl{{font-style:normal; font-size:9px; color:{MUTE}; text-transform:uppercase; letter-spacing:0.04em;}}
 
-.grid{{display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-bottom:4px;}}
+.grid{{margin-bottom:4px;}}
+.grid-row{{display:flex; gap:7px; margin-bottom:7px; break-inside:avoid;}}
+.grid-row .box{{flex:1; min-width:0;}}
 .box{{border:1.5px solid var(--c); border-top:4px solid var(--c); border-radius:9px; padding:9px 14px 10px; background:var(--c-bg); position:relative; overflow:hidden; min-height:80px;}}
 .box-top{{display:flex; align-items:center; gap:9px; position:relative; z-index:2;}}
 .box-icon{{width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex:none; background:#fff; color:var(--c); border:2px solid var(--c);}}
@@ -560,7 +562,11 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     logo_mark = logo_svg(CHARCOAL, resolved_logo_path)
     logo = logo_svg(CHARCOAL, resolved_logo_path)
 
-    grid_html = "\n".join(box_html(c, roll, copy, record, logo_mark) for c in order)
+    grid_pairs = (("Reserves", "Flow"), ("Fuel", "Repair"), ("Pace", "Drive"))
+    grid_html = "\n".join(
+        f'<div class="grid-row">{"".join(box_html(cat, roll, copy, record, logo_mark) for cat in pair)}</div>'
+        for pair in grid_pairs
+    )
     dexa_html = dexa_panel(record, copy, roll, dexa_img_b64) if has_dexa else ""
     protocol_html = protocol_section(record, roll, copy)
 
