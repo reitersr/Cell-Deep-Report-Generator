@@ -17,10 +17,12 @@ know the correct answer to.
 import math
 import base64
 import os
+import html as html_lib
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 from schema import PatientRecord
+from unknown_marker_policy import ExtractionReviewNotice, format_review_notice
 import scoring
 from markers_reference import DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
 
@@ -281,6 +283,8 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .nonlab-item span{{color:#4c4744;}}
 
 .footer-note{{font-size:8.5px; color:{MUTE}; margin-top:6px; max-width:6.9in; line-height:1.4; border-top:1px solid {LINE}; padding-top:6px;}}
+.staff-review{{border:2px solid {RED}; background:{RED}12; color:{RED}; padding:8px 12px; margin:6px 0 9px; font-size:10px; line-height:1.35;}}
+.staff-review .title{{font-weight:800; letter-spacing:0.06em; margin-bottom:4px;}}
 
 .legend{{display:flex; gap:16px; font-size:10.5px; color:#4c4744; margin:2px 0 9px;}}
 .legend .sw{{width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px;}}
@@ -526,7 +530,8 @@ def bio_group(cat, record, copy, first_draw, latest_draw):
 
 
 def render(record: PatientRecord, copy: dict, out_path: str,
-           logo_traced_path: str | None = None, dexa_img_b64: str | None = None):
+           logo_traced_path: str | None = None, dexa_img_b64: str | None = None,
+           review_notice: ExtractionReviewNotice | None = None):
     """The single entry point. Produces a finished PDF at out_path."""
 
     if dexa_img_b64 is None and record.dexa_history:
@@ -593,6 +598,11 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     by_age_label = fmt(copy.get("by_age_label", f"By {record.age}" if record.age else "By target age"))
     by_age_sub = fmt(copy.get("by_age_sub", ""))
     overall_then_display = f"{overall_then}%" if overall_then is not None else fmt(overall_then)
+    review_text = format_review_notice(review_notice) if review_notice else ""
+    review_html = ""
+    if review_text:
+        review_lines = "<br>".join(html_lib.escape(line) for line in review_text.splitlines())
+        review_html = f'<div class="staff-review"><div class="title">FOR STAFF REVIEW — NOT PATIENT FACING</div>{review_lines}</div>'
 
     HTML = f'''<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>CellDeep: Patient and Protocol Record</title>
@@ -607,6 +617,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
       <div class="ddates">{fmt(date_range)}</div>
     </div>
   </div>
+    {review_html}
 
   <div class="hero avoid">
     <div class="hero-eyebrow">{f"AGE {record.age} &nbsp;&rarr;&nbsp; " if record.age else ""}{fmt(copy.get("hero_target_line", ""))}</div>

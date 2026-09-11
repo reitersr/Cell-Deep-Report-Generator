@@ -23,7 +23,7 @@ import os
 import json
 import base64
 import argparse
-import inspect
+import re
 from dataclasses import asdict
 
 from anthropic import Anthropic
@@ -32,7 +32,7 @@ import fitz
 
 from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint
 from markers_reference import MARKER_LIBRARY, DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
-from protocol_reference import PROTOCOL_LIBRARY
+from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
 from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
 from extraction_prompt import EXTRACTION_SYSTEM_PROMPT, build_extraction_user_message
 from generation_prompt import GENERATION_SYSTEM_PROMPT
@@ -144,6 +144,91 @@ def _pdf_content_block(path: str) -> dict:
     return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}}
 
 
+def _pdf_text(path: str | None) -> str:
+    if not path:
+        return ""
+    with fitz.open(path) as document:
+        return "\n".join(page.get_text() for page in document)
+
+
+def _nearby_cadence(note_text: str, start: int, end: int) -> str | None:
+    window_start = max(0, start - 40)
+    window = note_text[window_start:min(len(note_text), end + 40)].lower()
+    matches = list(re.finditer(r"\b(daily|weekly|as directed)\b", window))
+    if not matches:
+        return None
+    mention_center = ((start - window_start) + (end - window_start)) / 2
+    nearest = min(matches, key=lambda match: abs(match.start() - mention_center))
+    return nearest.group(1)
+
+
+def verify_extraction_completeness(extracted: dict, provider_note_text: str = "",
+                                   lab_text: str = "", dexa_text: str = "") -> ExtractionReviewNotice:
+    """Verify model omissions against source text without inventing lab values."""
+    notice = ExtractionReviewNotice()
+    log_lines = []
+    note_lower = provider_note_text.lower()
+    extracted_protocols = set()
+    for item in extracted.get("protocol", []):
+        name = item if isinstance(item, str) else item.get("name") or item.get("item") or ""
+        match = lookup_protocol_item(name)
+        extracted_protocols.add(match[0] if match else name.lower())
+
+    for canonical, config in PROTOCOL_LIBRARY.items():
+        for name in [canonical, *config.get("aliases", [])]:
+            start = note_lower.find(name.lower())
+            if start == -1:
+                continue
+            if canonical in extracted_protocols:
+                break
+            cadence = _nearby_cadence(provider_note_text, start, start + len(name))
+            extracted.setdefault("protocol", []).append({
+                "name": canonical,
+                "cadence": cadence,
+                "target_categories": config.get("typical_categories", []),
+                "lab_visible": config.get("lab_visible", True),
+            })
+            log_lines.append(
+                f"ADDED MISSING PROTOCOL ITEM: {canonical} (cadence: {cadence or 'none found'})"
+            )
+            extracted_protocols.add(canonical)
+            break
+
+    extracted_markers = set()
+    for marker in extracted.get("markers", []):
+        match = markers_reference_lookup(marker.get("name", ""))
+        if match:
+            extracted_markers.add(match[0])
+    lab_lower = lab_text.lower()
+    for canonical, config in MARKER_LIBRARY.items():
+        if canonical.lower() not in lab_lower and not any(alias.lower() in lab_lower for alias in config.get("aliases", [])):
+            continue
+        if canonical not in extracted_markers:
+            warning = (f"WARNING: MARKER '{canonical}' FOUND IN SOURCE BUT MISSING FROM EXTRACTION - "
+                       "NEEDS HUMAN REVIEW")
+            notice.other_notes.append(warning)
+            log_lines.append(warning)
+
+    dexa_entries = extracted.get("dexa_history", [])
+    if dexa_entries:
+        first = dexa_entries[0]
+        value = str(first.get("body_fat_pct") or "")
+        date = str(first.get("date_display") or "")
+        numeric = value.rstrip("%").strip()
+        date_match = dexa_text.lower().find(date.lower()) if date else -1
+        context = dexa_text[max(0, date_match - 500):date_match + 500] if date_match >= 0 else dexa_text
+        if numeric and numeric not in context and value not in context:
+            warning = (f"WARNING: DEXA BODY FAT % FOR {date} = {value} NOT FOUND VERBATIM IN SOURCE PDF - "
+                       "POSSIBLE HALLUCINATION, NEEDS HUMAN REVIEW")
+            notice.other_notes.append(warning)
+            log_lines.append(warning)
+
+    if log_lines:
+        with open("/tmp/extraction_completeness_log.txt", "a", encoding="utf-8") as log:
+            log.write("\n".join(log_lines) + "\n")
+    return notice
+
+
 def _marker_library_summary() -> str:
     lines = []
     for name, cfg in MARKER_LIBRARY.items():
@@ -173,21 +258,12 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         "text": build_extraction_user_message(_marker_library_summary(), _protocol_library_summary(), note_text),
     })
 
-    _create_kwargs = {
-        "model": MODEL,
-        "max_tokens": 16000,
-        "system": EXTRACTION_SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": content}],
-    }
-    try:
-        _sig = inspect.signature(client.messages.create)
-        if "temperature" in _sig.parameters:
-            _create_kwargs["temperature"] = 0
-    except (TypeError, ValueError) as exc:
-        print(f"TEMPERATURE SIGNATURE CHECK ERROR: {type(exc).__name__}: {exc}", flush=True)
-    print(f"TEMPERATURE INCLUDED: {'temperature' in _create_kwargs}", flush=True)
-
-    resp = client.messages.create(**_create_kwargs)
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=16000,
+        system=EXTRACTION_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": content}],
+    )
     text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
     raw_text = "".join(text_blocks)
     with open("/tmp/last_extraction_raw.txt", "w") as f:
@@ -236,7 +312,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         else:
             protocol.append(ProtocolItem(
                 name=raw.get("name") or raw.get("item") or str(raw),
-                cadence=raw.get("cadence") or "as directed",
+                cadence=raw.get("cadence"),
                 target_categories=raw.get("target_categories", []),
                 lab_visible=raw.get("lab_visible", True),
             ))
@@ -280,15 +356,22 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> dict:
 
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
     client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    raw_lab_text = _pdf_text(labs_pdf)
+    raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
 
     print("Step 1/3: extracting raw material...")
     extracted = extract(client, labs_pdf, dexa_pdfs, note_text)
     extracted.setdefault("name", patient_name)
     extracted.setdefault("age", age)
     extracted.setdefault("sex", sex)
+    completeness_notice = verify_extraction_completeness(
+        extracted, provider_note_text=note_text or extracted.get("provider_note_raw", ""),
+        lab_text=raw_lab_text, dexa_text=raw_dexa_text,
+    )
 
     print("Step 2/3: scoring (deterministic, no AI)...")
     record, notice = score_and_build_record(extracted)
+    notice.other_notes.extend(completeness_notice.other_notes)
 
     print("Step 3/3: generating interpretive copy...")
     copy = _sanitize_em_dashes(generate_copy(client, record))
@@ -301,7 +384,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
         record.dexa_history[-1].scan_image_b64 = dexa_img_b64
 
     print("Rendering PDF...")
-    template.render(record, copy, out_path, dexa_img_b64=dexa_img_b64)
+    template.render(record, copy, out_path, dexa_img_b64=dexa_img_b64, review_notice=notice)
 
     review = format_review_notice(notice)
     if review:
