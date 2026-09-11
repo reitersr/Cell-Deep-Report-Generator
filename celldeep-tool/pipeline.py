@@ -184,8 +184,9 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         _sig = inspect.signature(client.messages.create)
         if "temperature" in _sig.parameters:
             _create_kwargs["temperature"] = 0
-    except (TypeError, ValueError):
-        pass
+    except (TypeError, ValueError) as exc:
+        print(f"TEMPERATURE SIGNATURE CHECK ERROR: {type(exc).__name__}: {exc}", flush=True)
+    print(f"TEMPERATURE INCLUDED: {'temperature' in _create_kwargs}", flush=True)
 
     resp = client.messages.create(**_create_kwargs)
     text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
