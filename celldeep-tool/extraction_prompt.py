@@ -68,11 +68,55 @@ failure. Do not manufacture a plausible-sounding concern to fill the gap.
 - Extract protocol items exactly as named, with whatever cadence is stated. If cadence isn't stated for a \
 given item, leave it null rather than guessing "daily" by default.
 
-OUTPUT FORMAT:
-Return a single JSON object matching the schema you're given, and nothing else — no preamble, no \
-explanation, no markdown formatting around the JSON. If a top-level section has no source material at all \
-(for example, no DEXA PDF was provided this round), return that section as an empty list, not as a guess or \
-placeholder.
+OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
+
+{
+    "name": "patient's full name as found, or null if not stated",
+    "age": 38,
+    "sex": "female",
+    "first_draw_date": "exact date as printed on the earliest lab draw, or null if only one draw exists",
+    "latest_draw_date": "exact date as printed on the most recent lab draw",
+    "markers": [
+        {
+            "name": "MUST exactly match a name from the recognized marker list provided above",
+            "then": 3.1,
+            "now": 0.7,
+            "disp_then": "3.1",
+            "disp_now": "0.7",
+            "is_good_then": null,
+            "is_good_now": null
+        }
+    ],
+    "dexa_history": [
+        {
+            "date_display": "May 21, 2025",
+            "total_mass_lb": 170.5,
+            "fat_mass_lb": 56.5,
+            "lean_mass_lb": 107.6,
+            "body_fat_pct": "34.4%",
+            "vat_fat_mass_lb": 1.01
+        }
+    ],
+    "protocol": [
+        {"name": "Omega-3 HP-D", "cadence": "daily", "target_categories": [], "lab_visible": true}
+    ],
+    "pain_points": [
+        {"text": "plain synthesized statement, no quotation marks", "categories": ["Structure", "Fuel"]}
+    ],
+    "unrecognized_markers": [],
+    "other_notes": []
+}
+
+CRITICAL RULES, apply to every patient this runs on, not just the current one:
+- Include one entry in "markers" for EVERY marker found in the lab PDF that matches a name on the recognized list, even if it only has a "now" value and no "then". Do not skip markers. Do not summarize or sample — every match goes in.
+- If TWO DEXA PDFs are provided, they must both be read, and dexa_history must contain every distinct scan date found across BOTH documents, not just the first one. A DEXA PDF may itself contain multiple historical scan dates in a table — extract every row, not just the most recent.
+- Read the ENTIRE provider's note for both protocol items and pain points — do not stop after the first paragraph. Every compound the note names goes into "protocol". Any patient-stated concern or goal, anywhere in the note, produces a "pain_points" entry.
+- "then", "vat_fat_mass_lb", "first_draw_date" are the only fields that should ever be null — every other field must be filled from the actual source material when that material was provided.
+- If a whole section has genuinely no source material at all (e.g. no DEXA PDF provided), return that key as an empty list — never omit the key, and never partially fill it from only some of the available source material.
+- Numbers must be actual JSON numbers (170.5), not strings ("170.5").
+- This schema and these rules apply identically to every patient's data run through this pipeline — never adjust field names or structure based on what a specific patient's documents contain.
+
+Return ONLY this JSON object. No markdown fences, no prose before or after, no explanation.
 """
 
 
