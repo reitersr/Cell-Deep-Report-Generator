@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 files=(
-  celldeep-tool/schema.py
-  celldeep-tool/pipeline.py
-  celldeep-tool/generation_prompt.py
-  celldeep-tool/template.py
-  celldeep-tool/extraction_prompt.py
+  "$SCRIPT_DIR/celldeep-tool/schema.py"
+  "$SCRIPT_DIR/celldeep-tool/pipeline.py"
+  "$SCRIPT_DIR/celldeep-tool/generation_prompt.py"
+  "$SCRIPT_DIR/celldeep-tool/template.py"
+  "$SCRIPT_DIR/celldeep-tool/extraction_prompt.py"
 )
 
-printf '%s\n' '# CellDeep Report Generator - Claude Review Export'
-printf '%s\n' '# Generated from the current working tree. Review all five files below.'
-printf '\n'
+cat <<'EOF'
+# CellDeep Report Generator - Claude Review Export
+# Generated from the current working tree. Review all five files below.
+
+EOF
 
 for file in "${files[@]}"; do
-  printf '===== BEGIN %s =====\n' "$file"
+  rel_path="${file#$SCRIPT_DIR/}"
+  printf '\n## %s\n\n```python\n' "$rel_path"
   cat "$file"
-  printf '\n===== END %s =====\n\n' "$file"
+  printf '\n```\n'
 done

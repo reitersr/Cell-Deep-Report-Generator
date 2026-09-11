@@ -16,6 +16,8 @@ know the correct answer to.
 
 import math
 import base64
+import os
+from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 from schema import PatientRecord
@@ -43,6 +45,56 @@ PATIENT_CATEGORY_SUB = {
     "Flow": "Lipids & Cardiovascular", "Repair": "Inflammation", "Reserves": "Vitamins & Minerals",
     "Structure": "Body Composition",
 }
+
+
+def fmt(value, dash="—"):
+    if value is None or value == "" or value == "None":
+        return dash
+    return value
+
+
+def fmt_date(date_str):
+    if date_str in (None, "", "None"):
+        return ""
+    if isinstance(date_str, datetime):
+        return date_str.strftime("%B %-d, %Y")
+    text = str(date_str).strip()
+    for fmt_string in (
+        "%Y-%m-%d",
+        "%m/%d/%Y",
+        "%m/%d/%y",
+        "%B %d, %Y",
+        "%b %d, %Y",
+        "%Y/%m/%d",
+        "%m-%d-%Y",
+        "%Y-%m-%d %H:%M:%S",
+    ):
+        try:
+            return datetime.strptime(text, fmt_string).strftime("%B %-d, %Y")
+        except ValueError:
+            pass
+    try:
+        return datetime.fromisoformat(text).strftime("%B %-d, %Y")
+    except ValueError:
+        return text
+
+
+def fmt_patient_name(raw):
+    if raw in (None, ""):
+        return "Patient"
+    name = str(raw).strip()
+    if not name:
+        return "Patient"
+    return " ".join(part.capitalize() for part in name.split())
+
+
+def _load_logo_traced_path() -> str | None:
+    candidate = os.path.join(os.path.dirname(__file__), "logo_traced_path.txt")
+    if os.path.exists(candidate):
+        with open(candidate, "r", encoding="utf-8") as f:
+            value = f.read().strip()
+            return value or None
+    return None
 
 
 def icon_svg(category: str, size: int) -> str:
@@ -327,9 +379,9 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     img_html = (f'<img src="data:image/png;base64,{dexa_img_b64}" class="dexa-scan-img" '
                 f'alt="{record.name} DEXA scan comparison"/>') if dexa_img_b64 else ""
     history_rows = "".join(
-        f'<div class="dexa-hist-row"><span class="d">{d.date_display}</span>'
-        f'<span class="v">{d.total_mass_lb} lb total</span><span class="v">{d.fat_mass_lb} lb fat</span>'
-        f'<span class="v">{d.lean_mass_lb} lb lean</span><span class="v">{d.body_fat_pct} fat</span>'
+        f'<div class="dexa-hist-row"><span class="d">{fmt_date(d.date_display)}</span>'
+        f'<span class="v">{fmt(d.total_mass_lb)} lb total</span><span class="v">{fmt(d.fat_mass_lb)} lb fat</span>'
+        f'<span class="v">{fmt(d.lean_mass_lb)} lb lean</span><span class="v">{fmt(d.body_fat_pct)} fat</span>'
         f'<span class="v">{(str(d.vat_fat_mass_lb) + " lb") if d.vat_fat_mass_lb is not None else "\u2014"} VAT</span></div>'
         for d in record.dexa_history
     )
@@ -339,37 +391,37 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     return f'''<div class="dexa-panel avoid">
       <div class="dexa-top">
         <div><div class="dexa-eyebrow">STRUCTURE &middot; DEXA BODY COMPOSITION SCAN</div>
-        <div class="dexa-title">{copy.get("headlines", {}).get("Structure", "")}</div></div>
+        <div class="dexa-title">{fmt(copy.get("headlines", {}).get("Structure", ""))}</div></div>
         <div class="dexa-badge">{CHECK}</div>
       </div>
       <div class="dexa-body">
         <div class="dexa-figure">{img_html}</div>
         <div class="dexa-stat-block">
           <div class="dexa-row">
-            <div class="dexa-row-lbl">When you came in &middot; {first.date_display}</div>
+            <div class="dexa-row-lbl">When you came in &middot; {fmt_date(first.date_display)}</div>
             <div class="dexa-row-stats dim">
-              <div class="dexa-stat"><div class="num">{first.body_fat_pct}</div><div class="cap">Body fat</div></div>
-              <div class="dexa-stat"><div class="num">{first.fat_mass_lb}</div><div class="cap">Fat mass, lb</div></div>
-              <div class="dexa-stat"><div class="num">{first.lean_mass_lb}</div><div class="cap">Lean mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{fmt(first.body_fat_pct)}</div><div class="cap">Body fat</div></div>
+              <div class="dexa-stat"><div class="num">{fmt(first.fat_mass_lb)}</div><div class="cap">Fat mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{fmt(first.lean_mass_lb)}</div><div class="cap">Lean mass, lb</div></div>
             </div>
           </div>
           <div class="dexa-row">
-            <div class="dexa-row-lbl bright">Where you are now &middot; {latest.date_display}</div>
+            <div class="dexa-row-lbl bright">Where you are now &middot; {fmt_date(latest.date_display)}</div>
             <div class="dexa-row-stats">
-              <div class="dexa-stat"><div class="num">{latest.body_fat_pct}</div><div class="cap">Body fat</div></div>
-              <div class="dexa-stat"><div class="num">{latest.fat_mass_lb}</div><div class="cap">Fat mass, lb</div></div>
-              <div class="dexa-stat"><div class="num">{latest.lean_mass_lb}</div><div class="cap">Lean mass, lb</div></div>
-              <div class="dexa-stat"><div class="num" style="color:{color};">{structure_now}%</div><div class="cap">Optimized</div></div>
+              <div class="dexa-stat"><div class="num">{fmt(latest.body_fat_pct)}</div><div class="cap">Body fat</div></div>
+              <div class="dexa-stat"><div class="num">{fmt(latest.fat_mass_lb)}</div><div class="cap">Fat mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{fmt(latest.lean_mass_lb)}</div><div class="cap">Lean mass, lb</div></div>
+              <div class="dexa-stat"><div class="num" style="color:{color};">{fmt(structure_now)}%</div><div class="cap">Optimized</div></div>
             </div>
           </div>
         </div>
       </div>
-      <div class="dexa-delta">{delta}</div>
+      <div class="dexa-delta">{fmt(delta)}</div>
       <div class="dexa-history">
         <div class="dexa-history-title">Full scan history</div>
         {history_rows}
       </div>
-      <p class="dexa-note">{note}</p>
+      <p class="dexa-note">{fmt(note)}</p>
       {quote_html}
     </div>'''
 
@@ -433,6 +485,7 @@ def bio_group(cat, record, copy, first_draw, latest_draw):
         return ""
     pcat = DATA_TO_PATIENT_CATEGORY.get(cat)
     link = f'<span class="link">&uarr; see {pcat} above</span>' if pcat else '<span class="link">general screening</span>'
+    tagline = copy.get("category_taglines", {}).get(cat, "")
     def row_color(m):
         override_cat = NARRATIVE_CATEGORY_OVERRIDE.get(m.name)
         if override_cat:
@@ -440,10 +493,12 @@ def bio_group(cat, record, copy, first_draw, latest_draw):
         return None
     rows_html = "\n".join(bio_row_tr(m, copy, row_color(m)) for m in rows)
     narrative = copy.get("group_narratives", {}).get(cat, "")
-    narr_html = f'<p style="font-size:9.5px; color:#4c4744; margin:4px 0 8px; font-style:italic;">{narrative}</p>' if narrative else ""
-    date_headers = f'<th class="th-date">{first_draw}</th><th class="th-date">{latest_draw}</th>' if first_draw else f'<th class="th-date">{latest_draw}</th>'
+    narr_html = f'<p style="font-size:9.5px; color:#4c4744; margin:4px 0 8px; font-style:italic;">{fmt(narrative)}</p>' if narrative else ""
+    date_headers = f'<th class="th-date">{fmt_date(first_draw)}</th><th class="th-date">{fmt_date(latest_draw)}</th>' if first_draw else f'<th class="th-date">{fmt_date(latest_draw)}</th>'
+    tagline_html = f'<div style="font-size:10.5px; color:#4c4744; margin:4px 0 8px;">{fmt(tagline)}</div>' if tagline else ""
     return f'''<div class="bio-group">
       <div class="bio-group-title keepnext">{cat.upper()} {link}</div>
+      {tagline_html}
       {narr_html}
       <table class="bio-table">
         <colgroup><col class="c-name"><col class="c-range"><col class="c-date"><col class="c-date"></colgroup>
@@ -457,7 +512,25 @@ def render(record: PatientRecord, copy: dict, out_path: str,
            logo_traced_path: str | None = None, dexa_img_b64: str | None = None):
     """The single entry point. Produces a finished PDF at out_path."""
 
-    days_apart = ""  # left blank unless computed upstream and passed in copy
+    first_draw = record.first_draw_date
+    latest_draw = record.latest_draw_date
+    try:
+        if first_draw and latest_draw:
+            start_dt = datetime.strptime(str(first_draw), "%Y-%m-%d")
+            end_dt = datetime.strptime(str(latest_draw), "%Y-%m-%d")
+            days_apart = f"· {abs((end_dt - start_dt).days)} days"
+        else:
+            days_apart = ""
+    except ValueError:
+        try:
+            if first_draw and latest_draw:
+                start_dt = datetime.fromisoformat(str(first_draw))
+                end_dt = datetime.fromisoformat(str(latest_draw))
+                days_apart = f"· {abs((end_dt - start_dt).days)} days"
+            else:
+                days_apart = ""
+        except ValueError:
+            days_apart = ""
 
     structure_now = copy.get("structure_score_now")
     structure_then = copy.get("structure_score_then")
@@ -466,8 +539,9 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     roll, order, overall_now, overall_then, has_dexa = build_rollups(
         record, structure_now, structure_then, structure_improved)
 
-    logo_mark = logo_svg(CHARCOAL, logo_traced_path)
-    logo = logo_svg(CHARCOAL, logo_traced_path)
+    resolved_logo_path = logo_traced_path or _load_logo_traced_path()
+    logo_mark = logo_svg(CHARCOAL, resolved_logo_path)
+    logo = logo_svg(CHARCOAL, resolved_logo_path)
 
     grid_html = "\n".join(box_html(c, roll, copy, record, logo_mark) for c in order)
     dexa_html = dexa_panel(record, copy, roll, dexa_img_b64) if has_dexa else ""
@@ -480,11 +554,21 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     breakdown_html = "\n".join(
         bio_group(c, record, copy, record.first_draw_date, record.latest_draw_date) for c in data_categories)
 
-    bullets_html = "".join(f'<li>{b}</li>' for b in copy.get("optimization_summary_bullets", []))
+    bullets_html = "".join(f'<li>{fmt(b)}</li>' for b in copy.get("optimization_summary_bullets", []))
 
     gauge_zone = "optimal" if overall_now >= 88 else "moderate"
-    date_range = (f"{record.first_draw_date} &nbsp;&rarr;&nbsp; {record.latest_draw_date}"
-                  if record.first_draw_date else record.latest_draw_date)
+    first_date = fmt_date(first_draw)
+    latest_date = fmt_date(latest_draw)
+    date_range = f"{first_date} &nbsp;&rarr;&nbsp; {latest_date}"
+    if days_apart:
+        date_range = f"{date_range} {days_apart}"
+
+    next_30_label = fmt(copy.get("next_30_label", "Stay the course"))
+    next_30_sub = fmt(copy.get("next_30_sub", ""))
+    next_90_label = fmt(copy.get("next_90_label", "Next 90 days"))
+    next_90_sub = fmt(copy.get("next_90_sub", ""))
+    by_age_label = fmt(copy.get("by_age_label", f"By {record.age}" if record.age else "By target age"))
+    by_age_sub = fmt(copy.get("by_age_sub", ""))
 
     HTML = f'''<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>CellDeep: Patient and Protocol Record</title>
@@ -495,24 +579,24 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     <div class="brand-row">{logo}<span class="brand-name">CELLDEEP</span></div>
     <div class="meta">
       <div class="eyebrow">Patient &amp; Protocol Record</div>
-      <div class="pname">{record.name}</div>
-      <div class="ddates">{date_range}</div>
+      <div class="pname">{fmt_patient_name(record.name)}</div>
+      <div class="ddates">{fmt(date_range)}</div>
     </div>
   </div>
 
   <div class="hero avoid">
-    <div class="hero-eyebrow">{f"AGE {record.age} &nbsp;&rarr;&nbsp; " if record.age else ""}{copy.get("hero_target_line", "")}</div>
+    <div class="hero-eyebrow">{f"AGE {record.age} &nbsp;&rarr;&nbsp; " if record.age else ""}{fmt(copy.get("hero_target_line", ""))}</div>
     <div class="hero-top">
-      <div class="big">{copy.get("hero_question", "")}</div>
+      <div class="big">{fmt(copy.get("hero_question", ""))}</div>
       <div class="hero-ring">
         {gauge_svg(overall_then, overall_now, gauge_zone)}
       </div>
     </div>
     <div class="color-legend">Red = flagged &nbsp;&middot;&nbsp; Yellow = moderate &nbsp;&middot;&nbsp; Green = optimal &nbsp;&middot;&nbsp; {CHECK_SM} = improved since your first visit</div>
     <div class="journey-row">
-      <div class="jstep"><div class="lbl">You were</div><div class="val">{overall_then if overall_then is not None else "&mdash;"}%</div><div class="sub">{record.first_draw_date or ""}</div></div>
-      <div class="jstep"><div class="lbl">You are</div><div class="val">{overall_now}%</div><div class="sub">{record.latest_draw_date}</div></div>
-      {copy.get("forward_steps_html", "")}
+      <div class="jstep"><div class="lbl">Next 30 days</div><div class="val">{next_30_label}</div><div class="sub">{next_30_sub}</div></div>
+      <div class="jstep"><div class="lbl">Next 90 days</div><div class="val">{next_90_label}</div><div class="sub">{next_90_sub}</div></div>
+      <div class="jstep"><div class="lbl">By age</div><div class="val">{by_age_label}</div><div class="sub">{by_age_sub}</div></div>
     </div>
   </div>
 
@@ -523,7 +607,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
 
   {dexa_html}
 
-  <div class="sec-title">Your Systems, Attention Needed First</div>
+  <div class="sec-title">YOUR SIX SYSTEMS, ATTENTION NEEDED FIRST</div>
   <div class="grid">{grid_html}</div>
 
   <div class="sec-title">Why You're On What You're On</div>

@@ -11,6 +11,34 @@ are computed here, never left to the generation model to decide.
 from schema import Marker
 
 
+def normalize_dexa_body_fat(dexa_data: dict) -> dict:
+    """Derive a body-fat percentage only from already-reported mass values when needed."""
+    body_fat = dexa_data.get("body_fat_pct")
+    if body_fat not in (None, "", "None"):
+        return dexa_data
+
+    total_mass = dexa_data.get("total_mass_lb")
+    fat_mass = dexa_data.get("fat_mass_lb")
+    if total_mass in (None, "") or fat_mass in (None, ""):
+        dexa_data["body_fat_pct"] = None
+        return dexa_data
+
+    try:
+        total_mass = float(total_mass)
+        fat_mass = float(fat_mass)
+    except (TypeError, ValueError):
+        dexa_data["body_fat_pct"] = None
+        return dexa_data
+
+    if total_mass == 0:
+        dexa_data["body_fat_pct"] = None
+        return dexa_data
+
+    value = (fat_mass / total_mass) * 100
+    dexa_data["body_fat_pct"] = f"{value:.1f}%"
+    return dexa_data
+
+
 def score_bounded(value: float, direction: str, optimal: float, moderate: float):
     if direction == "lower":
         if value <= optimal:

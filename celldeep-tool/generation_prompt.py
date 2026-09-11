@@ -79,6 +79,7 @@ WHAT YOU GENERATE — return a single JSON object with EXACTLY these top-level k
   "next_90_sub": "short sub with estimated date if reasonable",
   "by_age_label": "short label e.g. 'Everything, optimized'",
   "by_age_sub": "short sub",
+  "category_taglines": {"Inflammation": "one short line, e.g. 'The quiet engine behind energy, drive, and mood, holding steady.'", "Lipids": "...", "Metabolic": "...", "Hormones": "...", "Thyroid": "...", "Foundational": "...", "General Screening": "..."},
   "marker_notes": {"Marker Name": "interpretation sentence, only for markers with something noteworthy"},
   "marker_what": {"Marker Name": "plain-language definition, only for markers with a marker_notes entry"},
   "protocol_reasons": {"Compound Name": "one sentence tying it to this patient's actual weak markers"},
@@ -88,6 +89,12 @@ WHAT YOU GENERATE — return a single JSON object with EXACTLY these top-level k
   "structure_score_then": 58,
   "structure_improved": true
 }
+
+PROJECTION-ROW CONTENT LOGIC:
+- NEXT 30 DAYS: name the single most time-sensitive action given the patient's actual moderate/flagged markers and current protocol. Only use a generic "stay the course" message if literally nothing needs attention.
+- NEXT 90 DAYS: name which specific system is expected to change tier and why, grounded in real trend direction already in the data. Never invent a specific re-test date the source data doesn't support — describe the expected change without a date if no date is known.
+- BY [target age]: describe the long-range goal state, grounded in the patient's actual target_age field.
+- category_taglines is required only for categories actually present in this patient's data — never invent an entry for a category with no markers.
 
 CRITICAL: every dictionary above uses REAL data as keys (real category names, real marker names, real compound names, exactly as they appear in the patient record you were given) — never use a field name from this schema itself (like "pain_points" or "compounds") as if it were a real value. If a patient record has no markers, no protocol, or no pain points, output empty objects/lists for those keys — never invent placeholder entries.
 

@@ -142,7 +142,10 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         scoring.attach_scores(m)   # computes now_tier/then_tier/pct in place — pure math, no AI
         markers.append(m)
 
-    dexa_history = [DexaReading(**d) for d in extracted.get("dexa_history", [])]
+    dexa_history = [
+        DexaReading(**scoring.normalize_dexa_body_fat(d))
+        for d in extracted.get("dexa_history", [])
+    ]
 
     protocol = []
     for raw in extracted.get("protocol", []):
