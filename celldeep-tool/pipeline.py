@@ -107,6 +107,8 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
     )
     text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
     raw_text = "".join(text_blocks)
+    with open("/tmp/last_extraction_raw.txt", "w") as f:
+        f.write(raw_text)
     return _parse_json_response(raw_text)
 
 
