@@ -23,6 +23,7 @@ import os
 import json
 import base64
 import argparse
+import inspect
 import re
 from dataclasses import asdict
 
@@ -173,13 +174,20 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         "text": build_extraction_user_message(_marker_library_summary(), _protocol_library_summary(), note_text),
     })
 
-    resp = client.messages.create(
-        model=MODEL,
-        max_tokens=16000,
-        temperature=0,
-        system=EXTRACTION_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": content}],
-    )
+    _create_kwargs = {
+        "model": MODEL,
+        "max_tokens": 16000,
+        "system": EXTRACTION_SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": content}],
+    }
+    try:
+        _sig = inspect.signature(client.messages.create)
+        if "temperature" in _sig.parameters:
+            _create_kwargs["temperature"] = 0
+    except (TypeError, ValueError):
+        pass
+
+    resp = client.messages.create(**_create_kwargs)
     text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
     raw_text = "".join(text_blocks)
     with open("/tmp/last_extraction_raw.txt", "w") as f:
