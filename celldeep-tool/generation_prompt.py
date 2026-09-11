@@ -64,27 +64,32 @@ signal for arterial health, not yet symptomatic, and worth close attention next 
   "A marker for hidden inflammation in your arteries" (this is the correct register for a "what this is" \
 line — plain, real-world framed, zero jargon)
 
-WHAT YOU GENERATE, per patient, in one pass:
-1. optimization_summary_bullets: a list of short bulleted facts (label + one sentence each) covering: what \
-was resolved, what remains the focus (naming the actual moderate/flagged system(s) and marker(s)), what's \
-already being addressed by current protocol, what's being monitored without active treatment, that \
-everything else is optimal or holding, and an honest expected-resolution timeframe if one is reasonable to \
-state.
-2. Per patient-facing category (Drive/Pace/Fuel/Flow/Repair/Reserves/Structure) that has any markers: a \
-short "box story" (2-4 sentences) covering what's true for that system right now, stated with real numbers \
-where relevant.
-3. Per marker that is moderate, flagged, or has a note-worthy movement even while optimal: a "what this is" \
-clause (one plain sentence) and an interpretation sentence with real then/now numbers and tangible stakes.
-4. Per protocol item: a one-sentence reasoning tying it to this patient's actual weak marker(s) it's \
-plausibly addressing, based on the compound's typical categories AND this patient's real moderate/flagged \
-markers in those categories. If a compound's typical categories don't overlap anything weak for this \
-patient, state its purpose plainly without forcing a manufactured connection.
-5. If pain_points exist: one line per tagged category, stating the synthesized concern plus a brief clause \
-on how current protocol addresses it — framed as an ongoing fact ("X is what's protecting this"), never as \
-an instruction telling the patient what to do.
-6. A DEXA delta line, if DEXA history exists: one plain sentence stating the real total change in fat mass \
-and lean mass across the full history available.
+WHAT YOU GENERATE — return a single JSON object with EXACTLY these top-level keys, nothing more, nothing renamed:
 
-OUTPUT FORMAT: a single JSON object with these keys, matching exactly what's requested above. No preamble, \
-no markdown, no explanation outside the JSON.
+{
+  "hero_question": "one sentence, in voice, e.g. 'What if you were fully optimized by your next birthday?'",
+  "hero_target_line": "short line, e.g. 'TARGET: FULLY OPTIMIZED BY 38'",
+  "optimization_summary_bullets": ["<b>Starting point:</b> ...", "<b>Remaining focus:</b> ...", "(4-6 bullets total)"],
+  "headlines": {"Drive": "short subtitle", "Pace": "...", "Fuel": "...", "Flow": "...", "Repair": "...", "Reserves": "...", "Structure": "..."},
+  "box_stories": {"Drive": "2-4 sentence story", "Pace": "...", "Fuel": "...", "Flow": "...", "Repair": "...", "Reserves": "...", "Structure": "..."},
+  "box_forward": {"Drive": "Next 90 days: ...", "Pace": "...", "Fuel": "...", "Flow": "...", "Repair": "...", "Reserves": "..."},
+  "next_30_label": "short label e.g. 'Stay the course'",
+  "next_30_sub": "short sub e.g. 'Omega-3 + Klow, daily'",
+  "next_90_label": "short label",
+  "next_90_sub": "short sub with estimated date if reasonable",
+  "by_age_label": "short label e.g. 'Everything, optimized'",
+  "by_age_sub": "short sub",
+  "marker_notes": {"Marker Name": "interpretation sentence, only for markers with something noteworthy"},
+  "marker_what": {"Marker Name": "plain-language definition, only for markers with a marker_notes entry"},
+  "protocol_reasons": {"Compound Name": "one sentence tying it to this patient's actual weak markers"},
+  "pain_point_maintenance": {"Category": "maintenance clause, only for categories with a real pain point"},
+  "dexa_delta": "one sentence, only if dexa_history has 2+ entries, else empty string",
+  "structure_score_now": 92,
+  "structure_score_then": 58,
+  "structure_improved": true
+}
+
+CRITICAL: every dictionary above uses REAL data as keys (real category names, real marker names, real compound names, exactly as they appear in the patient record you were given) — never use a field name from this schema itself (like "pain_points" or "compounds") as if it were a real value. If a patient record has no markers, no protocol, or no pain points, output empty objects/lists for those keys — never invent placeholder entries.
+
+Return ONLY this JSON object. No markdown fences, no prose before or after.
 """
