@@ -90,7 +90,7 @@ def _substitute_marker_list_placeholders(value, placeholders):
 
 
 def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int, str, int]]:
-    """Crop each DEXA scan page to its embedded silhouette image when possible."""
+    """Extract the largest portrait-oriented embedded silhouette image per DEXA PDF."""
     images = []
     keywords = ("body composition", "color coding", "scan summary", "body silhouette")
     with open("/tmp/dexa_page_images.txt", "w", encoding="utf-8") as report:
@@ -116,35 +116,39 @@ def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int,
                     extracted = document.extract_image(xref)
                     width = extracted.get("width", 0)
                     height = extracted.get("height", 0)
-                    if height <= width:
+                    area = width * height
+                    if height <= width or area < 10000:
                         continue
-                    for rect in page.get_image_rects(xref):
-                        area = rect.width * rect.height
-                        portrait_images.append((area, rect, width, height, xref))
+                    portrait_images.append((area, extracted, xref))
 
                 crop_source = "embedded portrait image"
                 if portrait_images:
-                    _, crop_rect, _, _, xref = max(
+                    _, extracted, xref = max(
                         portrait_images, key=lambda candidate: candidate[0])
-                    crop_rect = crop_rect & page.rect
+                    image_bytes = extracted["image"]
+                    extension = extracted.get("ext", "png")
+                    if extension != "png":
+                        image_bytes = fitz.Pixmap(document, xref).tobytes("png")
+                        extension = "png"
                     report.write(f"file={pdf_path} page={page_number} xref={xref} "
-                                 f"source=embedded rect={crop_rect}\n")
+                                 f"source=embedded width={extracted.get('width')} "
+                                 f"height={extracted.get('height')} ext={extension}\n")
                 else:
                     crop_source = "upper-left fallback"
-                    crop_rect = fitz.Rect(
-                        0, 0, page.rect.width * 0.45, page.rect.height * 0.50)
+                    image_bytes = page.get_pixmap(matrix=fitz.Matrix(3, 3),
+                                                   clip=fitz.Rect(0, 0, page.rect.width * 0.45,
+                                                                  page.rect.height * 0.50),
+                                                   alpha=False).tobytes("png")
                     report.write(f"file={pdf_path} page={page_number} source={crop_source} "
-                                 f"rect={crop_rect}\n")
-
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=crop_rect, alpha=False)
+                                 "reason=no qualifying portrait embedded image\n")
                 png_path = f"/tmp/dexa_scan_page_{len(images) + 1}.png"
-                pixmap.save(png_path)
+                with open(png_path, "wb") as image_file:
+                    image_file.write(image_bytes)
                 file_size = os.path.getsize(png_path)
                 report.write(f"file={pdf_path} page={page_number} png={png_path} "
-                             f"source={crop_source} width={pixmap.width} height={pixmap.height} "
-                             f"size_kb={file_size / 1024:.1f}\n")
+                             f"source={crop_source} size_kb={file_size / 1024:.1f}\n")
                 print(f"DEXA scan page: file={pdf_path} page={page_number} "
-                      f"source={crop_source} width={pixmap.width} height={pixmap.height} "
+                      f"source={crop_source} "
                       f"size_kb={file_size / 1024:.1f}")
                 with open(png_path, "rb") as image_file:
                     encoded = base64.b64encode(image_file.read()).decode("ascii")

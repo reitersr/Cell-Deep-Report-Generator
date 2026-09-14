@@ -193,12 +193,12 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .meta .eyebrow{{font-size:10px; font-weight:700; letter-spacing:0.1em; color:{MUTE}; text-transform:uppercase; margin-bottom:4px;}}
 .meta .pname{{font-family:Georgia,serif; font-size:18px; font-weight:700;}}
 .meta .ddates{{font-size:11px; color:{MUTE}; margin-top:3px;}}
-.sec-title{{font-size:11px; font-weight:700; letter-spacing:0.1em; color:{INK}; text-transform:uppercase; margin:10px 0 6px; display:flex; align-items:center; gap:10px;}}
+.sec-title{{font-size:11px; font-weight:700; letter-spacing:0.1em; color:{INK}; text-transform:uppercase; margin:8px 0 5px; display:flex; align-items:center; gap:8px;}}
 .sec-title::after{{content:""; flex:1; height:2.5px; background:{AQUA};}}
 
-.hero{{border:1.5px solid {AQUA}; border-radius:12px; padding:9px 16px; margin-bottom:5px; box-shadow:0 0 0 1px {AQUA}33 inset;}}
+.hero{{border:1.5px solid {AQUA}; border-radius:12px; padding:8px 14px; margin-bottom:4px; box-shadow:0 0 0 1px {AQUA}33 inset;}}
 .hero-eyebrow{{font-size:10.5px; font-weight:700; letter-spacing:0.08em; color:{AQUA_DK}; margin-bottom:7px;}}
-.bottomline{{background:{CHARCOAL}; color:#F1EEE7; border-radius:9px; padding:4px 16px; margin-bottom:3px;}}
+.bottomline{{background:{CHARCOAL}; color:#F1EEE7; border-radius:9px; padding:4px 14px; margin-bottom:2px;}}
 .bl-eyebrow{{font-size:10px; font-weight:700; letter-spacing:0.08em; color:{AQUA}; text-transform:uppercase; margin-bottom:7px;}}
 .bottomline p{{font-size:11.5px; line-height:1.42; color:#EDEAE2;}}
 .bl-list{{list-style:none; margin:0; padding:0;}}
@@ -221,15 +221,15 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .jstep.going .val{{color:{AQUA_DK};}}
 .jstep .sub{{font-size:10px; color:{MUTE}; margin-top:2px;}}
 
-.dexa-panel{{border-radius:11px; padding:9px 16px; margin-bottom:9px; position:relative; overflow:hidden; color:{INK};
+.dexa-panel{{border-radius:11px; padding:7px 14px; margin-bottom:7px; position:relative; overflow:hidden; color:{INK};
   background:#fff; border:2px solid {AQUA};}}
 .dexa-top{{position:relative; z-index:2; display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;}}
 .dexa-eyebrow{{font-size:10.5px; letter-spacing:0.12em; color:{AQUA_DK}; font-weight:700;}}
 .dexa-title{{font-family:Georgia,serif; font-size:19px; font-weight:700; color:{INK}; margin-top:4px;}}
 .dexa-badge{{width:26px; height:26px; border-radius:50%; background:{GREEN}; display:flex; align-items:center; justify-content:center; border:2.5px solid #fff; box-shadow:0 0 0 1.5px {GREEN};}}
-.dexa-body{{display:flex; align-items:center; gap:16px; position:relative; z-index:2; margin-top:5px;}}
-.dexa-figure{{flex:none;}}
-.dexa-scan-img{{width:190px; max-height:220px; object-fit:contain; border-radius:7px; border:1px solid {LINE};}}
+.dexa-body{{display:flex; align-items:center; gap:14px; position:relative; z-index:2; margin-top:4px;}}
+.dexa-figure{{flex:none; display:flex; justify-content:center; width:220px;}}
+.dexa-scan-img{{width:220px; max-height:220px; object-fit:contain; border-radius:7px; border:1px solid {LINE};}}
 .dexa-history{{margin-top:5px; padding-top:5px; border-top:1px solid {LINE}; position:relative; z-index:2;}}
 .dexa-history-title{{font-size:9px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; color:{MUTE}; margin-bottom:5px;}}
 .dexa-hist-row{{display:flex; gap:10px; font-size:9px; color:{DARKGRAY}; padding:1.5px 0;}}
@@ -249,10 +249,10 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .dexa-quote{{margin-top:4px; padding-top:4px; border-top:1px solid {LINE}; font-size:10px; font-style:italic; color:{AQUA_DK}; position:relative; z-index:2;}}
 .dexa-quote .lbl{{font-style:normal; font-size:9px; color:{MUTE}; text-transform:uppercase; letter-spacing:0.04em;}}
 
-.grid{{margin-bottom:4px;}}
-.grid-row{{display:flex; gap:7px; margin-bottom:7px;}}
+.grid{{margin-bottom:3px;}}
+.grid-row{{display:flex; gap:7px; margin-bottom:5px;}}
 .grid-row .box{{flex:1; min-width:0;}}
-.box{{border:1.5px solid var(--c); border-top:4px solid var(--c); border-radius:9px; padding:9px 14px 10px; background:var(--c-bg); position:relative; overflow:hidden; min-height:80px; break-inside:avoid; page-break-inside:avoid;}}
+.box{{border:1.5px solid var(--c); border-top:4px solid var(--c); border-radius:9px; padding:7px 12px 8px; background:var(--c-bg); position:relative; overflow:hidden; break-inside:avoid; page-break-inside:avoid;}}
 .box-top{{display:flex; align-items:center; gap:9px; position:relative; z-index:2;}}
 .box-icon{{width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex:none; background:#fff; color:var(--c); border:2px solid var(--c);}}
 .box-titles{{flex:1;}}
@@ -269,21 +269,21 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .box-proto{{color:{AQUA_DK}; font-weight:600;}}
 .box-mark{{position:absolute; right:-16px; bottom:-18px; width:76px; height:76px; opacity:0.06; z-index:1;}}
 
-.protocol-block{{border-left:3px solid var(--c); padding-left:10px; margin:5px 0 6px;}}
+.protocol-block{{border-left:3px solid var(--c); padding-left:9px; margin:4px 0 5px;}}
 .protocol-block .pname{{font-size:12.5px; font-weight:700;}}
 .protocol-block .pcadence{{font-size:10px; color:{MUTE}; font-weight:400;}}
 .protocol-block .preason{{font-size:10px; color:#4c4744; margin-top:2px; line-height:1.32;}}
 
-.nonlab-box{{background:{CREAM}55; border:1.5px dashed {MIDGRAY}; border-radius:9px; padding:8px 14px; margin-top:4px;}}
+.nonlab-box{{background:{CREAM}55; border:1.5px dashed {MIDGRAY}; border-radius:9px; padding:7px 12px; margin-top:3px;}}
 .nonlab-box .t{{font-size:9.5px; font-weight:700; letter-spacing:0.05em; color:{MUTE}; text-transform:uppercase; margin-bottom:5px;}}
 .nonlab-item{{font-size:11px; margin-bottom:3px;}}
 .nonlab-item b{{font-weight:700;}}
 .nonlab-item span{{color:#4c4744;}}
 
-.footer-note{{font-size:8.5px; color:{MUTE}; margin-top:6px; max-width:6.9in; line-height:1.4; border-top:1px solid {LINE}; padding-top:6px;}}
+.footer-note{{font-size:8.5px; color:{MUTE}; margin-top:5px; max-width:6.9in; line-height:1.35; border-top:1px solid {LINE}; padding-top:5px;}}
 .legend{{display:flex; gap:16px; font-size:10.5px; color:#4c4744; margin:2px 0 9px;}}
 .legend .sw{{width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px;}}
-.bio-group{{margin-bottom:7px;}}
+.bio-group{{margin-bottom:5px;}}
 .bio-group-title.keepnext{{break-after:avoid; page-break-after:avoid;}}
 .bio-group-title{{font-family:Georgia,serif; font-size:13.5px; font-weight:700; display:flex; align-items:baseline; gap:10px;
   border-bottom:2px solid {INK}; padding-bottom:4px; margin-bottom:3px;}}
