@@ -229,7 +229,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .dexa-badge{{width:26px; height:26px; border-radius:50%; background:{GREEN}; display:flex; align-items:center; justify-content:center; border:2.5px solid #fff; box-shadow:0 0 0 1.5px {GREEN};}}
 .dexa-body{{display:flex; align-items:center; gap:16px; position:relative; z-index:2; margin-top:5px;}}
 .dexa-figure{{flex:none;}}
-.dexa-scan-img{{width:148px; border-radius:7px; border:1px solid {LINE};}}
+.dexa-scan-img{{width:190px; max-height:220px; object-fit:contain; border-radius:7px; border:1px solid {LINE};}}
 .dexa-history{{margin-top:5px; padding-top:5px; border-top:1px solid {LINE}; position:relative; z-index:2;}}
 .dexa-history-title{{font-size:9px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; color:{MUTE}; margin-bottom:5px;}}
 .dexa-hist-row{{display:flex; gap:10px; font-size:9px; color:{DARKGRAY}; padding:1.5px 0;}}

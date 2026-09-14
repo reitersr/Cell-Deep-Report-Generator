@@ -90,7 +90,7 @@ def _substitute_marker_list_placeholders(value, placeholders):
 
 
 def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int, str, int]]:
-    """Rasterize each DEXA PDF's body-composition scan page as a PNG."""
+    """Crop each DEXA scan page to its embedded silhouette image when possible."""
     images = []
     keywords = ("body composition", "color coding", "scan summary", "body silhouette")
     with open("/tmp/dexa_page_images.txt", "w", encoding="utf-8") as report:
@@ -110,14 +110,42 @@ def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int,
                         report.write(f"file={pdf_path} selection=none reason=empty PDF\n")
                         continue
                 page_number, page = selected_page
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                portrait_images = []
+                for image in page.get_images(full=True):
+                    xref = image[0]
+                    extracted = document.extract_image(xref)
+                    width = extracted.get("width", 0)
+                    height = extracted.get("height", 0)
+                    if height <= width:
+                        continue
+                    for rect in page.get_image_rects(xref):
+                        area = rect.width * rect.height
+                        portrait_images.append((area, rect, width, height, xref))
+
+                crop_source = "embedded portrait image"
+                if portrait_images:
+                    _, crop_rect, _, _, xref = max(
+                        portrait_images, key=lambda candidate: candidate[0])
+                    crop_rect = crop_rect & page.rect
+                    report.write(f"file={pdf_path} page={page_number} xref={xref} "
+                                 f"source=embedded rect={crop_rect}\n")
+                else:
+                    crop_source = "upper-left fallback"
+                    crop_rect = fitz.Rect(
+                        0, 0, page.rect.width * 0.45, page.rect.height * 0.50)
+                    report.write(f"file={pdf_path} page={page_number} source={crop_source} "
+                                 f"rect={crop_rect}\n")
+
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=crop_rect, alpha=False)
                 png_path = f"/tmp/dexa_scan_page_{len(images) + 1}.png"
                 pixmap.save(png_path)
                 file_size = os.path.getsize(png_path)
                 report.write(f"file={pdf_path} page={page_number} png={png_path} "
-                             f"width={pixmap.width} height={pixmap.height} size_kb={file_size / 1024:.1f}\n")
+                             f"source={crop_source} width={pixmap.width} height={pixmap.height} "
+                             f"size_kb={file_size / 1024:.1f}\n")
                 print(f"DEXA scan page: file={pdf_path} page={page_number} "
-                      f"png={png_path} size_kb={file_size / 1024:.1f}")
+                      f"source={crop_source} width={pixmap.width} height={pixmap.height} "
+                      f"size_kb={file_size / 1024:.1f}")
                 with open(png_path, "rb") as image_file:
                     encoded = base64.b64encode(image_file.read()).decode("ascii")
                 images.append((encoded, pdf_path, page_number, png_path, file_size))
