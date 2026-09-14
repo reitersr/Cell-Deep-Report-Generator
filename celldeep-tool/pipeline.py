@@ -89,6 +89,28 @@ def _substitute_marker_list_placeholders(value, placeholders):
     return value
 
 
+def _crop_dexa_silhouettes(image_bytes: bytes, extension: str) -> bytes:
+    """Crop the silhouette panel proportionally from an extracted native image."""
+    image_document = fitz.open(stream=image_bytes, filetype=extension)
+    try:
+        image_page = image_document[0]
+        image_width = image_page.rect.width
+        image_height = image_page.rect.height
+        crop = fitz.Rect(
+            image_width * 0.11,
+            image_height * 0.12,
+            image_width * 0.91,
+            image_height * 0.91,
+        )
+        scale = fitz.Matrix(
+            image_width / image_page.rect.width,
+            image_height / image_page.rect.height,
+        )
+        return image_page.get_pixmap(clip=crop, matrix=scale, alpha=False).tobytes("png")
+    finally:
+        image_document.close()
+
+
 def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int, str, int]]:
     """Extract an unambiguous portrait-oriented embedded silhouette image per DEXA PDF."""
     images = []
@@ -141,6 +163,7 @@ def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int,
                 if extension != "png":
                     image_bytes = fitz.Pixmap(document, xref).tobytes("png")
                     extension = "png"
+                image_bytes = _crop_dexa_silhouettes(image_bytes, extension)
                 crop_source = "embedded portrait image"
                 report.write(f"file={pdf_path} page={page_number} xref={xref} "
                              f"source={crop_source} rect={rects[0]} "
