@@ -69,7 +69,7 @@ class DexaReading:
     lean_mass_lb: float
     body_fat_pct: str          # pre-formatted, e.g. "34.4%"
     vat_fat_mass_lb: Optional[float] = None   # None if this visit didn't measure VAT
-    scan_image_b64: Optional[str] = None      # real embedded scan image, if present in the source PDF
+    scan_image_b64: Optional[str] = None      # rendered body-composition scan page, if present in the source PDF
 
 
 @dataclass

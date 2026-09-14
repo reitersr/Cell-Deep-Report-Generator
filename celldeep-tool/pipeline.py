@@ -103,8 +103,12 @@ def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int,
                         selected_page = (page_number, page)
                         break
                 if selected_page is None:
-                    report.write(f"file={pdf_path} selection=none reason=scan page not found\n")
-                    continue
+                    if len(document):
+                        selected_page = (1, document[0])
+                        report.write(f"file={pdf_path} selection=page1 fallback\n")
+                    else:
+                        report.write(f"file={pdf_path} selection=none reason=empty PDF\n")
+                        continue
                 page_number, page = selected_page
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
                 png_path = f"/tmp/dexa_scan_page_{len(images) + 1}.png"
