@@ -296,6 +296,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
   padding:5px 8px 5px 0; border-bottom:1.5px solid {INK};}}
 .bio-table th.th-date{{text-align:center;}}
 .bio-tr{{break-inside:avoid; page-break-inside:avoid;}}
+.footer-glue{{break-inside:avoid; page-break-inside:avoid;}}
 .bio-tr td{{padding:6px 8px 6px 0; border-bottom:1px solid {LINE}; vertical-align:middle;}}
 .bio-tr .td-name{{border-left:3px solid var(--c); padding-left:8px;}}
 .bio-name{{font-size:12.5px; font-weight:700; line-height:1.15;}}
@@ -498,7 +499,7 @@ def bio_row_tr(m, copy, color_override=None):
     return row
 
 
-def bio_group(cat, record, copy, first_draw, latest_draw):
+def bio_group(cat, record, copy, first_draw, latest_draw, footer_html=""):
     rows = [m for m in record.markers if m.category == cat]
     if not rows:
         return ""
@@ -512,11 +513,20 @@ def bio_group(cat, record, copy, first_draw, latest_draw):
             return TIER_COLOR.get(m.now_tier)
         return None
 
-    rows_html = "\n".join(bio_row_tr(m, copy, row_color(m)) for m in rows)
+    rendered_rows = [bio_row_tr(m, copy, row_color(m)) for m in rows]
+    rows_html = "\n".join(rendered_rows)
     narrative = copy.get("group_narratives", {}).get(cat, "")
     narr_html = f'<p style="font-size:9.5px; color:#4c4744; margin:4px 0 8px; font-style:italic;">{fmt(narrative)}</p>' if narrative else ""
     date_headers = f'<th class="th-date">{fmt_date(first_draw)}</th><th class="th-date">{fmt_date(latest_draw)}</th>' if first_draw else f'<th class="th-date">{fmt_date(latest_draw)}</th>'
     tagline_html = f'<div style="font-size:10.5px; color:#4c4744; margin:4px 0 8px;">{fmt(tagline)}</div>' if tagline else ""
+    footer_block = ""
+    if footer_html:
+        last_row = rendered_rows[-1]
+        rows_html = "\n".join(rendered_rows[:-1])
+        footer_table = f'''<table class="bio-table">
+        <tbody>{last_row}</tbody>
+      </table>'''
+        footer_block = f'<div class="footer-glue">{footer_table}{footer_html}</div>'
     return f'''<div class="bio-group">
       <div class="bio-group-title">{cat.upper()} {link}</div>
       {tagline_html}
@@ -526,6 +536,7 @@ def bio_group(cat, record, copy, first_draw, latest_draw):
         <thead><tr><th class="th-name">Marker</th><th class="th-range">Reference Range</th>{date_headers}</tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
+        {footer_block}
     </div>'''
 
 
@@ -578,9 +589,11 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         ["Inflammation", "Lipids", "Metabolic", "Hormones", "Thyroid", "Foundational", "Also Monitored"].index(c)
         if c in ["Inflammation", "Lipids", "Metabolic", "Hormones", "Thyroid", "Foundational", "Also Monitored"]
         else 99))
+    footer_html = '<p class="footer-note">Reference ranges reflect standard laboratory values. Markers vary by which panel was run for this draw; some rounds include a more extensive workup than others, and that is expected, not a gap in your care. This document is generated for CellDeep and replaces the standard lab notebook page in your chart.</p>'
     breakdown_groups = [
-        bio_group(c, record, copy, record.first_draw_date, record.latest_draw_date)
-        for c in data_categories
+        bio_group(c, record, copy, record.first_draw_date, record.latest_draw_date,
+                  footer_html if index == len(data_categories) - 1 else "")
+        for index, c in enumerate(data_categories)
     ]
     first_breakdown = breakdown_groups[0] if breakdown_groups else ""
     remaining_breakdown = "\n".join(breakdown_groups[1:])
@@ -659,7 +672,6 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     </div>
     {first_breakdown}
     {remaining_breakdown}
-  <p class="footer-note">Reference ranges reflect standard laboratory values. Markers vary by which panel was run for this draw; some rounds include a more extensive workup than others, and that is expected, not a gap in your care. This document is generated for CellDeep and replaces the standard lab notebook page in your chart.</p>
 </div>
 </body></html>'''
 
