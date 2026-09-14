@@ -404,6 +404,8 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     structure_now = roll.get("Structure", {}).get("now", "")
     delta = copy.get("dexa_delta", "")
     note = copy.get("box_stories", {}).get("Structure", "")
+    delta_html = f'<div class="dexa-delta">{delta}</div>' if delta else ""
+    note_html = f'<p class="dexa-note">{note}</p>' if note else ""
     return f'''<div class="dexa-panel avoid">
       <div class="dexa-top">
         <div><div class="dexa-eyebrow">STRUCTURE &middot; DEXA BODY COMPOSITION SCAN</div>
@@ -432,12 +434,12 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
           </div>
         </div>
       </div>
-      <div class="dexa-delta">{fmt(delta)}</div>
+    {delta_html}
       <div class="dexa-history">
         <div class="dexa-history-title">Full scan history</div>
         {history_rows}
       </div>
-      <p class="dexa-note">{fmt(note)}</p>
+    {note_html}
       {quote_html}
     </div>'''
 
@@ -450,14 +452,18 @@ def protocol_section(record: PatientRecord, roll, copy):
     for item in lab_visible:
         cats = item.target_categories or ["General"]
         cat_str = ", ".join(cats)
+        cadence = fmt(item.cadence, dash="")
+        protocol_label = (f"{item.name} ({cadence}, targeting {cat_str})" if cadence
+                  else f"{item.name}, targeting {cat_str}")
         color = TIER_COLOR[roll.get(cats[0], {}).get("now_zone", "optimal")] if cats and cats[0] in roll else AQUA_DK
         reason = reasons.get(item.name, item.name)
         blocks.append(f'''<div class="protocol-block avoid" style="--c:{color};">
-          <div class="pname">{item.name} <span class="pcadence">({item.cadence}, targeting {cat_str})</span></div>
+          <div class="pname">{protocol_label}</div>
           <div class="preason">{reason}</div>
         </div>''')
     nonlab = "".join(
-        f'<div class="nonlab-item"><b>{p.name}</b> ({p.cadence}). <span>{reasons.get(p.name, "")}</span></div>'
+            f'<div class="nonlab-item"><b>{p.name}</b>{f" ({fmt(p.cadence)})" if p.cadence else ""}. '
+            f'<span>{reasons.get(p.name, "")}</span></div>'
         for p in not_lab_visible
     )
     nonlab_block = ""

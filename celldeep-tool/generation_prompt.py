@@ -84,7 +84,7 @@ WHAT YOU GENERATE — return a single JSON object with EXACTLY these top-level k
   "category_taglines": {"Inflammation": "one short line, e.g. 'The quiet engine behind energy, drive, and mood, holding steady.'", "Lipids": "...", "Metabolic": "...", "Hormones": "...", "Thyroid": "...", "Foundational": "...", "General Screening": "..."},
   "marker_notes": {"Marker Name": "interpretation sentence, only for markers with something noteworthy"},
   "marker_what": {"Marker Name": "plain-language definition, only for markers with a marker_notes entry"},
-  "protocol_reasons": {"Compound Name": "one sentence tying it to this patient's actual weak markers"},
+  "protocol_reasons": {"Compound Name": "one sentence tying it to 1-3 specific markers in this patient's actual data"},
   "pain_point_maintenance": {"Category": "maintenance clause, only for categories with a real pain point"},
   "dexa_delta": "one sentence, only if dexa_history has 2+ entries, else empty string",
   "structure_score_now": 92,
@@ -96,6 +96,11 @@ MARKER LIST SAFETY:
 - Never type a list of marker names from memory. Use {optimal_markers}, {moderate_markers}, or
   {flagged_markers} wherever a sentence needs multiple marker names. Single-marker explanations may
   continue to use their real marker-name key because that key is validated against the record.
+
+PROTOCOL REASONING SAFETY:
+- Each protocol_reasons sentence must name 1-3 specific markers that the compound targets in this patient's data.
+- Never list nearly every marker in the file. More than 3 marker names means the reasoning is unfocused; rewrite it to identify the 1-3 most relevant markers.
+- Use the exact marker names from the patient record, and do not invent targets that are absent from the record.
 
 PROJECTION-ROW CONTENT LOGIC:
 - NEXT 30 DAYS: name the single most time-sensitive action given the patient's actual moderate/flagged markers and current protocol. Only use a generic "stay the course" message if literally nothing needs attention.
