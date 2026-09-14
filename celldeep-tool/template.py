@@ -291,10 +291,11 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .footer-note{{font-size:8.5px; color:{MUTE}; margin-top:5px; max-width:6.9in; line-height:1.35; border-top:1px solid {LINE}; padding-top:5px;}}
 .legend{{display:flex; gap:16px; font-size:10.5px; color:#4c4744; margin:2px 0 9px;}}
 .legend .sw{{width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px;}}
-.full-panel-intro{{break-inside:avoid; page-break-inside:avoid;}}
-.bio-group{{margin-bottom:5px; break-inside:avoid; page-break-inside:avoid;}}
+.bio-group{{margin-bottom:5px;}}
 .bio-group-title{{font-family:Georgia,serif; font-size:13.5px; font-weight:700; display:flex; align-items:baseline; gap:10px;
-  border-bottom:2px solid {INK}; padding-bottom:4px; margin-bottom:3px;}}
+    border-bottom:2px solid {INK}; padding-bottom:4px; margin-bottom:3px;}}
+.bio-category-start{{break-inside:avoid; page-break-inside:avoid;}}
+.bio-category-start > td{{padding:0;}}
 .bio-group-title .link{{font-size:9.5px; color:{MUTE}; font-weight:400; text-transform:uppercase; letter-spacing:0.03em;}}
 
 .bio-table{{width:100%; border-collapse:collapse; table-layout:fixed;}}
@@ -522,21 +523,20 @@ def bio_group(cat, record, copy, first_draw, latest_draw):
             return TIER_COLOR.get(m.now_tier)
         return None
 
-    rows_html = "\n".join(bio_row_tr(m, copy, row_color(m)) for m in rows)
+    row_html = [bio_row_tr(m, copy, row_color(m)) for m in rows]
     narrative = copy.get("group_narratives", {}).get(cat, "")
     narr_html = f'<p style="font-size:9.5px; color:#4c4744; margin:4px 0 8px; font-style:italic;">{fmt(narrative)}</p>' if narrative else ""
-    date_headers = f'<th class="th-date">{fmt_date(first_draw)}</th><th class="th-date">{fmt_date(latest_draw)}</th>' if first_draw else f'<th class="th-date">{fmt_date(latest_draw)}</th>'
     tagline_html = f'<div style="font-size:10.5px; color:#4c4744; margin:4px 0 8px;">{fmt(tagline)}</div>' if tagline else ""
-    return f'''<div class="bio-group">
-      <div class="bio-group-title">{cat.upper()} {link}</div>
+    first_row = row_html[0]
+    remaining_rows = "\n".join(row_html[1:])
+    return f'''<tr class="bio-category-start"><td colspan="4">
+        <div class="bio-group-title">{cat.upper()} {link}</div>
       {tagline_html}
       {narr_html}
-      <table class="bio-table">
-        <colgroup><col class="c-name"><col class="c-range"><col class="c-date"><col class="c-date"></colgroup>
-        <thead><tr><th class="th-name">Marker</th><th class="th-range">Reference Range</th>{date_headers}</tr></thead>
-        <tbody>{rows_html}</tbody>
+        <table class="bio-table"><tbody>{first_row}</tbody>
       </table>
-    </div>'''
+    </td></tr>
+    {remaining_rows}'''
 
 
 def render(record: PatientRecord, copy: dict, out_path: str,
