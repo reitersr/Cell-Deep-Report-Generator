@@ -178,6 +178,29 @@ def gauge_svg(then_score, now_score, now_zone, w=150, h=86, num_size=30):
 
 # ---- CSS: verbatim from V23. Do not edit values here without going back through calibration. ----
 CSS = f'''
+/* ============================================================
+    CELLDEEP LAYOUT FRAMEWORK — LOCKED RULES
+    These rules govern page flow for ANY patient, regardless of
+    data volume or resulting page count. Do not remove or bypass
+    without updating this comment to reflect the new rule.
+    ============================================================
+    1. Header, hero section, Optimization Summary, and the DEXA/
+        STRUCTURE panel flow together starting on page 1. NO forced
+        break-before on the DEXA panel. It only moves to a new page
+        if it genuinely doesn't fit.
+    2. The six system boxes + "Why You're On What You're On" start
+        together as one group with break-before: page. This is the
+        ONLY intentional forced page break in the document.
+    3. The "FULL PANEL" heading + legend + first marker category
+        are glued together (break-inside: avoid) so the heading can
+        never be orphaned from its content.
+    4. Each marker category block (heading + tagline + all its
+        rows) uses break-inside: avoid, so short categories never
+        strand a lone row onto a near-empty trailing page.
+    5. NO other forced breaks exist anywhere in this document.
+        Page count is determined naturally by content length and
+        varies per patient - this is expected and correct.
+    ============================================================ */
 @page {{ size: Letter; margin: 0.15in 0in 0.15in 0in; }}
 *{{box-sizing:border-box; margin:0; padding:0;}}
 body{{font-family:'Helvetica Neue',Arial,sans-serif; color:{INK}; font-size:14px; line-height:1.55; background:#fff;}}
@@ -408,7 +431,7 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     note = copy.get("box_stories", {}).get("Structure", "")
     delta_html = f'<div class="dexa-delta">{delta}</div>' if delta else ""
     note_html = f'<p class="dexa-note">{note}</p>' if note else ""
-    return f'''<div class="dexa-panel avoid">
+    return f'''<div class="dexa-panel">
       <div class="dexa-top">
         <div><div class="dexa-eyebrow">STRUCTURE &middot; DEXA BODY COMPOSITION SCAN</div>
         <div class="dexa-title">{fmt(copy.get("headlines", {}).get("Structure", ""))}</div></div>

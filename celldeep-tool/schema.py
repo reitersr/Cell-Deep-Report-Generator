@@ -76,6 +76,7 @@ class DexaReading:
 class ProtocolItem:
     """One active compound/therapy. target_categories is the patient-facing system name(s) it addresses —
     may be empty if the item isn't expected to move any lab marker (e.g. a cognitive-support peptide)."""
+    # Protocol item count and reasoning length affect page flow per the locked framework in template.py.
     name: str                          # e.g. "Retatrutide"
     cadence: str                       # e.g. "weekly", "daily", "as directed"
     target_categories: list = field(default_factory=list)   # e.g. ["Fuel"] — empty list is valid and meaningful
