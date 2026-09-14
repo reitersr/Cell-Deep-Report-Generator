@@ -257,6 +257,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .dexa-quote .lbl{{font-style:normal; font-size:9px; color:{MUTE}; text-transform:uppercase; letter-spacing:0.04em;}}
 
 .grid{{margin-bottom:3px;}}
+.systems-flow{{break-inside:avoid; page-break-inside:avoid;}}
 .grid-row{{display:flex; gap:7px; margin-bottom:5px;}}
 .grid-row .box{{flex:1; min-width:0;}}
 .box{{border:1.5px solid var(--c); border-top:4px solid var(--c); border-radius:9px; padding:7px 12px 8px; background:var(--c-bg); position:relative; overflow:hidden; break-inside:avoid; page-break-inside:avoid;}}
@@ -290,7 +291,8 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .footer-note{{font-size:8.5px; color:{MUTE}; margin-top:5px; max-width:6.9in; line-height:1.35; border-top:1px solid {LINE}; padding-top:5px;}}
 .legend{{display:flex; gap:16px; font-size:10.5px; color:#4c4744; margin:2px 0 9px;}}
 .legend .sw{{width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px;}}
-.bio-group{{margin-bottom:5px;}}
+.full-panel-intro{{break-inside:avoid; page-break-inside:avoid;}}
+.bio-group{{margin-bottom:5px; break-inside:avoid; page-break-inside:avoid;}}
 .bio-group-title{{font-family:Georgia,serif; font-size:13.5px; font-weight:700; display:flex; align-items:baseline; gap:10px;
   border-bottom:2px solid {INK}; padding-bottom:4px; margin-bottom:3px;}}
 .bio-group-title .link{{font-size:9.5px; color:{MUTE}; font-weight:400; text-transform:uppercase; letter-spacing:0.03em;}}
@@ -304,7 +306,6 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
   padding:5px 8px 5px 0; border-bottom:1.5px solid {INK};}}
 .bio-table th.th-date{{text-align:center;}}
 .bio-tr{{break-inside:avoid; page-break-inside:avoid;}}
-.footer-glue{{break-inside:avoid; page-break-inside:avoid;}}
 .bio-tr td{{padding:6px 8px 6px 0; border-bottom:1px solid {LINE}; vertical-align:middle;}}
 .bio-tr .td-name{{border-left:3px solid var(--c); padding-left:8px;}}
 .bio-name{{font-size:12.5px; font-weight:700; line-height:1.15;}}
@@ -507,7 +508,7 @@ def bio_row_tr(m, copy, color_override=None):
     return row
 
 
-def bio_group(cat, record, copy, first_draw, latest_draw, footer_html=""):
+def bio_group(cat, record, copy, first_draw, latest_draw):
     rows = [m for m in record.markers if m.category == cat]
     if not rows:
         return ""
@@ -521,20 +522,11 @@ def bio_group(cat, record, copy, first_draw, latest_draw, footer_html=""):
             return TIER_COLOR.get(m.now_tier)
         return None
 
-    rendered_rows = [bio_row_tr(m, copy, row_color(m)) for m in rows]
-    rows_html = "\n".join(rendered_rows)
+    rows_html = "\n".join(bio_row_tr(m, copy, row_color(m)) for m in rows)
     narrative = copy.get("group_narratives", {}).get(cat, "")
     narr_html = f'<p style="font-size:9.5px; color:#4c4744; margin:4px 0 8px; font-style:italic;">{fmt(narrative)}</p>' if narrative else ""
     date_headers = f'<th class="th-date">{fmt_date(first_draw)}</th><th class="th-date">{fmt_date(latest_draw)}</th>' if first_draw else f'<th class="th-date">{fmt_date(latest_draw)}</th>'
     tagline_html = f'<div style="font-size:10.5px; color:#4c4744; margin:4px 0 8px;">{fmt(tagline)}</div>' if tagline else ""
-    footer_block = ""
-    if footer_html:
-        last_row = rendered_rows[-1]
-        rows_html = "\n".join(rendered_rows[:-1])
-        footer_table = f'''<table class="bio-table">
-        <tbody>{last_row}</tbody>
-      </table>'''
-        footer_block = f'<div class="footer-glue">{footer_table}{footer_html}</div>'
     return f'''<div class="bio-group">
       <div class="bio-group-title">{cat.upper()} {link}</div>
       {tagline_html}
@@ -544,7 +536,6 @@ def bio_group(cat, record, copy, first_draw, latest_draw, footer_html=""):
         <thead><tr><th class="th-name">Marker</th><th class="th-range">Reference Range</th>{date_headers}</tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
-        {footer_block}
     </div>'''
 
 
@@ -586,28 +577,35 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     logo = logo_svg(CHARCOAL, resolved_logo_path)
 
     grid_pairs = (("Reserves", "Flow"), ("Fuel", "Repair"), ("Pace", "Drive"))
+    visible_systems = {cat for cat in DATA_TO_PATIENT_CATEGORY.values() if markers_for_category(record, cat)}
     grid_html = "\n".join(
-        f'<div class="grid-row">{"".join(box_html(cat, roll, copy, record, logo_mark) for cat in pair)}</div>'
+        f'<div class="grid-row">{"".join(box_html(cat, roll, copy, record, logo_mark) for cat in pair if cat in visible_systems)}</div>'
         for pair in grid_pairs
+        if any(cat in visible_systems for cat in pair)
     )
     dexa_html = dexa_panel(record, copy, roll, dexa_img_b64) if has_dexa else ""
     protocol_html = protocol_section(record, roll, copy)
     protocol_section_html = f'''<div class="sec-title">Why You're On What You're On</div>
         {protocol_html}''' if protocol_html else ""
+    systems_heading = "YOUR SIX SYSTEMS, ATTENTION NEEDED FIRST" if len(visible_systems) == 6 else "YOUR SYSTEMS, ATTENTION NEEDED FIRST"
+    systems_html = f'''<div class="systems-flow">
+        {f'<div class="sec-title">{systems_heading}</div><div class="grid">{grid_html}</div>' if grid_html else ""}
+        {protocol_section_html}
+        <p class="footer-note">Colors: green indicates optimal, yellow indicates moderate, red indicates flagged. Box position, top to bottom, reflects what needs attention first, not severity of illness. Some markers move as an expected result of your current protocol rather than a concern.</p>
+    </div>''' if grid_html or protocol_html else ""
 
     data_categories = sorted(set(m.category for m in record.markers), key=lambda c: (
         ["Inflammation", "Lipids", "Metabolic", "Hormones", "Thyroid", "Foundational", "Also Monitored"].index(c)
         if c in ["Inflammation", "Lipids", "Metabolic", "Hormones", "Thyroid", "Foundational", "Also Monitored"]
         else 99))
-    footer_html = '<p class="footer-note">Reference ranges reflect standard laboratory values. Markers vary by which panel was run for this draw; some rounds include a more extensive workup than others, and that is expected, not a gap in your care. This document is generated for CellDeep and replaces the standard lab notebook page in your chart.</p>'
     breakdown_groups = [
-        bio_group(c, record, copy, record.first_draw_date, record.latest_draw_date,
-                  footer_html if index == len(data_categories) - 1 else "")
-        for index, c in enumerate(data_categories)
+        bio_group(c, record, copy, record.first_draw_date, record.latest_draw_date)
+        for c in data_categories
     ]
     first_breakdown = breakdown_groups[0] if breakdown_groups else ""
     remaining_breakdown = "\n".join(breakdown_groups[1:])
-    full_panel_html = f'''<div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
+    full_panel_html = f'''<div class="full-panel-intro">
+    <div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
     <h1 style="font-size:17px; margin-bottom:5px;">Your complete record</h1>
     <p style="font-size:11px; color:#4c4744; margin-bottom:12px;">Every marker from this round, grouped exactly as they feed the systems above.</p>
     <div class="legend">
@@ -616,7 +614,10 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         <span><span class="sw" style="background:{RED}"></span>Flagged</span>
     </div>
     {first_breakdown}
+    </div>
     {remaining_breakdown}''' if data_categories else ""
+    if data_categories:
+        full_panel_html += '<p class="footer-note">Reference ranges reflect standard laboratory values. Markers vary by which panel was run for this draw; some rounds include a more extensive workup than others, and that is expected, not a gap in your care. This document is generated for CellDeep and replaces the standard lab notebook page in your chart.</p>'
 
     bullets_html = "".join(f'<li>{fmt(b)}</li>' for b in copy.get("optimization_summary_bullets", []))
 
@@ -639,6 +640,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
 <style>{CSS}</style></head>
 <body>
 <div class="page">
+    <div class="opening-flow">
   <div class="masthead">
     <div class="brand-row">{logo}<span class="brand-name">CELLDEEP</span></div>
     <div class="meta">
@@ -671,15 +673,9 @@ def render(record: PatientRecord, copy: dict, out_path: str,
   </div>
 
   {dexa_html}
-
-    <div class="systems-group">
-        <div class="sec-title">YOUR SIX SYSTEMS, ATTENTION NEEDED FIRST</div>
-        <div class="grid">{grid_html}</div>
-
-        {protocol_section_html}
-
-        <p class="footer-note">Colors: green indicates optimal, yellow indicates moderate, red indicates flagged. Box position, top to bottom, reflects what needs attention first, not severity of illness. Some markers move as an expected result of your current protocol rather than a concern.</p>
     </div>
+
+        {systems_html}
 
     {full_panel_html}
 </div>
