@@ -200,6 +200,12 @@ CSS = f'''
     5. NO other forced breaks exist anywhere in this document.
         Page count is determined naturally by content length and
         varies per patient - this is expected and correct.
+    6. The DEXA/STRUCTURE panel is one indivisible unit
+        (break-inside: avoid) - it never splits its own table from
+        its own narrative text.
+    7. The final marker category and the footer disclaimer text are
+        glued together as one unit, so the footer never lands alone
+        on an otherwise-blank final page.
     ============================================================ */
 @page {{ size: Letter; margin: 0.15in 0in 0.15in 0in; }}
 *{{box-sizing:border-box; margin:0; padding:0;}}
@@ -245,7 +251,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .jstep .sub{{font-size:10px; color:{MUTE}; margin-top:2px;}}
 
 .dexa-panel{{border-radius:11px; padding:7px 14px; margin-bottom:7px; position:relative; overflow:hidden; color:{INK};
-  background:#fff; border:2px solid {AQUA};}}
+    background:#fff; border:2px solid {AQUA}; break-inside:avoid; page-break-inside:avoid;}}
 .dexa-top{{position:relative; z-index:2; display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;}}
 .dexa-eyebrow{{font-size:10.5px; letter-spacing:0.12em; color:{AQUA_DK}; font-weight:700;}}
 .dexa-title{{font-family:Georgia,serif; font-size:19px; font-weight:700; color:{INK}; margin-top:4px;}}
@@ -609,7 +615,22 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         for c in data_categories
     ]
     first_breakdown = breakdown_groups[0] if breakdown_groups else ""
-    remaining_breakdown = "\n".join(breakdown_groups[1:])
+    remaining_breakdown = "\n".join(breakdown_groups[1:-1])
+    final_breakdown = breakdown_groups[-1] if breakdown_groups else ""
+    full_panel_intro_html = f'''<div class="full-panel-intro">
+        <div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
+        <h1 style="font-size:17px; margin-bottom:5px;">Your complete record</h1>
+        <p style="font-size:11px; color:#4c4744; margin-bottom:12px;">Every marker from this round, grouped exactly as they feed the systems above.</p>
+        <div class="legend">
+            <span><span class="sw" style="background:{GREEN}"></span>Optimal</span>
+            <span><span class="sw" style="background:{YELLOW}"></span>Moderate</span>
+            <span><span class="sw" style="background:{RED}"></span>Flagged</span>
+        </div>
+        {first_breakdown}
+    </div>'''
+    if len(breakdown_groups) == 1:
+        final_breakdown = full_panel_intro_html + final_breakdown
+        full_panel_intro_html = ""
 
     bullets_html = "".join(f'<li>{fmt(b)}</li>' for b in copy.get("optimization_summary_bullets", []))
 
@@ -675,19 +696,12 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         <p class="footer-note">Colors: green indicates optimal, yellow indicates moderate, red indicates flagged. Box position, top to bottom, reflects what needs attention first, not severity of illness. Some markers move as an expected result of your current protocol rather than a concern.</p>
     </div>
 
-    <div class="full-panel-intro">
-        <div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
-        <h1 style="font-size:17px; margin-bottom:5px;">Your complete record</h1>
-        <p style="font-size:11px; color:#4c4744; margin-bottom:12px;">Every marker from this round, grouped exactly as they feed the systems above.</p>
-        <div class="legend">
-            <span><span class="sw" style="background:{GREEN}"></span>Optimal</span>
-            <span><span class="sw" style="background:{YELLOW}"></span>Moderate</span>
-            <span><span class="sw" style="background:{RED}"></span>Flagged</span>
-        </div>
-        {first_breakdown}
-  </div>
+    {full_panel_intro_html}
     {remaining_breakdown}
-  <p class="footer-note">Reference ranges reflect standard laboratory values. Markers vary by which panel was run for this draw; some rounds include a more extensive workup than others, and that is expected, not a gap in your care. This document is generated for CellDeep and replaces the standard lab notebook page in your chart.</p>
+    <div class="avoid">
+        {final_breakdown}
+        <p class="footer-note">Reference ranges reflect standard laboratory values. Markers vary by which panel was run for this draw; some rounds include a more extensive workup than others, and that is expected, not a gap in your care. This document is generated for CellDeep and replaces the standard lab notebook page in your chart.</p>
+    </div>
 </div>
 </body></html>'''
 
