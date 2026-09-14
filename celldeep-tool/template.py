@@ -188,7 +188,7 @@ CSS = f'''
     ============================================================ */
 @page {{ size: Letter; margin: 0.15in 0in 0.15in 0in; }}
 *{{box-sizing:border-box; margin:0; padding:0;}}
-body{{font-family:'Helvetica Neue',Arial,sans-serif; color:{INK}; font-size:14px; line-height:1.55; background:#fff;}}
+body{{font-family:'Helvetica Neue',Arial,sans-serif; color:{INK}; font-size:14px; line-height:1.55; background:#fff; zoom:0.96;}}
 .page{{width:8.5in; padding:0 0.6in;}}
 h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .draft-note{{color:{MIDGRAY}; font-size:10px; margin-bottom:14px;}}
@@ -229,7 +229,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .jstep .sub{{font-size:10px; color:{MUTE}; margin-top:2px;}}
 
 .dexa-panel{{border-radius:11px; padding:7px 14px; margin-bottom:7px; position:relative; overflow:hidden; color:{INK};
-    background:#fff; border:2px solid {AQUA}; break-inside:avoid; page-break-inside:avoid;}}
+    background:#fff; border:2px solid {AQUA};}}
 .dexa-top{{position:relative; z-index:2; display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;}}
 .dexa-eyebrow{{font-size:10.5px; letter-spacing:0.12em; color:{AQUA_DK}; font-weight:700;}}
 .dexa-title{{font-family:Georgia,serif; font-size:19px; font-weight:700; color:{INK}; margin-top:4px;}}
@@ -257,10 +257,9 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .dexa-quote .lbl{{font-style:normal; font-size:9px; color:{MUTE}; text-transform:uppercase; letter-spacing:0.04em;}}
 
 .grid{{margin-bottom:3px;}}
-.systems-flow{{break-inside:avoid; page-break-inside:avoid;}}
 .grid-row{{display:flex; gap:7px; margin-bottom:5px;}}
 .grid-row .box{{flex:1; min-width:0;}}
-.box{{border:1.5px solid var(--c); border-top:4px solid var(--c); border-radius:9px; padding:7px 12px 8px; background:var(--c-bg); position:relative; overflow:hidden; break-inside:avoid; page-break-inside:avoid;}}
+.box{{border:1.5px solid var(--c); border-top:4px solid var(--c); border-radius:9px; padding:7px 12px 8px; background:var(--c-bg); position:relative; overflow:hidden;}}
 .box-top{{display:flex; align-items:center; gap:9px; position:relative; z-index:2;}}
 .box-icon{{width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex:none; background:#fff; color:var(--c); border:2px solid var(--c);}}
 .box-titles{{flex:1;}}
@@ -294,7 +293,6 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .bio-group{{margin-bottom:5px;}}
 .bio-group-title{{font-family:Georgia,serif; font-size:13.5px; font-weight:700; display:flex; align-items:baseline; gap:10px;
     border-bottom:2px solid {INK}; padding-bottom:4px; margin-bottom:3px;}}
-.bio-category-start{{break-inside:avoid; page-break-inside:avoid;}}
 .bio-category-start > td{{padding:0;}}
 .bio-group-title .link{{font-size:9.5px; color:{MUTE}; font-weight:400; text-transform:uppercase; letter-spacing:0.03em;}}
 
@@ -306,7 +304,6 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .bio-table th{{text-align:left; font-size:8.5px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:{MUTE};
   padding:5px 8px 5px 0; border-bottom:1.5px solid {INK};}}
 .bio-table th.th-date{{text-align:center;}}
-.bio-tr{{break-inside:avoid; page-break-inside:avoid;}}
 .bio-tr td{{padding:6px 8px 6px 0; border-bottom:1px solid {LINE}; vertical-align:middle;}}
 .bio-tr .td-name{{border-left:3px solid var(--c); padding-left:8px;}}
 .bio-name{{font-size:12.5px; font-weight:700; line-height:1.15;}}
