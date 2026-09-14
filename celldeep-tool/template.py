@@ -250,6 +250,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .dexa-quote .lbl{{font-style:normal; font-size:9px; color:{MUTE}; text-transform:uppercase; letter-spacing:0.04em;}}
 
 .grid{{margin-bottom:3px;}}
+.systems-group{{break-before:page; page-break-before:always;}}
 .grid-row{{display:flex; gap:7px; margin-bottom:5px;}}
 .grid-row .box{{flex:1; min-width:0;}}
 .box{{border:1.5px solid var(--c); border-top:4px solid var(--c); border-radius:9px; padding:7px 12px 8px; background:var(--c-bg); position:relative; overflow:hidden; break-inside:avoid; page-break-inside:avoid;}}
@@ -636,13 +637,15 @@ def render(record: PatientRecord, copy: dict, out_path: str,
 
   {dexa_html}
 
-  <div class="sec-title">YOUR SIX SYSTEMS, ATTENTION NEEDED FIRST</div>
-  <div class="grid">{grid_html}</div>
+    <div class="systems-group">
+        <div class="sec-title">YOUR SIX SYSTEMS, ATTENTION NEEDED FIRST</div>
+        <div class="grid">{grid_html}</div>
 
-  <div class="sec-title">Why You're On What You're On</div>
-  {protocol_html}
+        <div class="sec-title">Why You're On What You're On</div>
+        {protocol_html}
 
-  <p class="footer-note">Colors: green indicates optimal, yellow indicates moderate, red indicates flagged. Box position, top to bottom, reflects what needs attention first, not severity of illness. Some markers move as an expected result of your current protocol rather than a concern.</p>
+        <p class="footer-note">Colors: green indicates optimal, yellow indicates moderate, red indicates flagged. Box position, top to bottom, reflects what needs attention first, not severity of illness. Some markers move as an expected result of your current protocol rather than a concern.</p>
+    </div>
 
   <div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
   <h1 style="font-size:17px; margin-bottom:5px;">Your complete record</h1>
