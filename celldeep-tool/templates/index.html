@@ -22,11 +22,21 @@
     .flash { background: #B75B4E22; border: 1px solid #B75B4E; color: #7a3a30; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; }
     .row { display: flex; gap: 12px; }
     .row > div { flex: 1; }
+    .result { border: 1px solid #6FA287; background: #6FA28718; padding: 16px; border-radius: 6px; margin-bottom: 20px; }
+    .result a { display: block; color: #3E7C93; font-weight: 700; margin-top: 8px; }
   </style>
 </head>
 <body>
   <h1>CellDeep Report Generator</h1>
   <p class="sub">Upload whatever's available for this patient. Fields left blank are simply left out of the report — nothing is required beyond a name.</p>
+
+  {% if result %}
+    <div class="result">
+      <strong>Report generated.</strong>
+      <a href="{{ url_for('download_report', job_id=result.job_id) }}">Download patient report ({{ result.report_name }})</a>
+      <a href="{{ url_for('download_review_notes', job_id=result.job_id) }}">Download internal QA file ({{ result.review_name }})</a>
+    </div>
+  {% endif %}
 
   {% with messages = get_flashed_messages() %}
     {% if messages %}

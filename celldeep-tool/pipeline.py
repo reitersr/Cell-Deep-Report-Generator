@@ -89,14 +89,13 @@ def _substitute_marker_list_placeholders(value, placeholders):
     return value
 
 
-def _extract_dexa_scan_image(dexa_pdfs: list[str]) -> str | None:
-    """Extract a confidently identified portrait-oriented embedded DEXA image."""
+def _extract_dexa_scan_image(dexa_pdfs: list[str]) -> tuple[str | None, str | None, str | None]:
+    """Extract the largest unambiguous portrait-oriented embedded DEXA image."""
     candidates = []
+    candidate_lines = []
     for pdf_path in dexa_pdfs:
         with fitz.open(pdf_path) as document:
             for page_number, page in enumerate(document, start=1):
-                page_heading = page.get_text().lower()
-                heading_match = "body composition" in page_heading or "color coding" in page_heading
                 for image in page.get_images(full=True):
                     xref = image[0]
                     extracted = document.extract_image(xref)
@@ -104,22 +103,49 @@ def _extract_dexa_scan_image(dexa_pdfs: list[str]) -> str | None:
                     height = extracted.get("height", 0)
                     aspect = height / width if width else 0
                     area = width * height
-                    print(f"DEXA image candidate: page={page_number} dimensions={width}x{height} aspect={aspect:.3f}")
-                    if width < 80 or height < 80 or aspect < 1.1 or aspect > 3.5:
-                        continue
-                    candidates.append((heading_match, area, pdf_path, xref))
+                    line = (f"file={pdf_path} page={page_number} xref={xref} "
+                            f"width={width} height={height} aspect={aspect:.3f} area={area}")
+                    candidate_lines.append(line)
+                    print(f"DEXA image candidate: {line}")
+                    if width >= 80 and height >= 80 and aspect > 1 and aspect <= 3.5:
+                        candidates.append((area, pdf_path, page_number, xref, width, height, aspect))
+    with open("/tmp/dexa_image_candidates.txt", "w", encoding="utf-8") as report:
+        report.write("\n".join(candidate_lines) + ("\n" if candidate_lines else ""))
     if not candidates:
-        return None
-    preferred = [candidate for candidate in candidates if candidate[0]] or candidates
-    preferred.sort(key=lambda candidate: candidate[1], reverse=True)
-    if len(preferred) > 1 and preferred[0][1] <= preferred[1][1] * 1.15:
+        status = "no portrait-oriented embedded image found" if candidate_lines else "no embedded images found"
+        with open("/tmp/dexa_image_candidates.txt", "a", encoding="utf-8") as report:
+            report.write(f"selection=none reason={status}\n")
+        return None, None, status
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+    if len(candidates) > 1 and candidates[0][0] <= candidates[1][0] * 1.15:
         print("DEXA image selection: ambiguous portrait candidates, omitting scan image")
-        return None
-    _, _, selected_pdf, xref = preferred[0]
+        with open("/tmp/dexa_image_candidates.txt", "a", encoding="utf-8") as report:
+            report.write("selection=none reason=near-identical portrait candidates\n")
+        return None, None, "near-identical portrait candidates"
+    _, selected_pdf, _, xref, _, _, _ = candidates[0]
+    selected_line = next(
+        line for line in candidate_lines
+        if f"file={selected_pdf} " in line and f"xref={xref} " in line
+    )
+    with open("/tmp/dexa_image_candidates.txt", "a", encoding="utf-8") as report:
+        report.write(f"selection={selected_line}\n")
     with fitz.open(selected_pdf) as document:
         pixmap = fitz.Pixmap(document, xref)
         png_bytes = pixmap.tobytes("png")
-    return base64.b64encode(png_bytes).decode("ascii")
+    return base64.b64encode(png_bytes).decode("ascii"), selected_pdf, None
+
+
+def _review_notes_path(patient_name: str) -> str:
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", patient_name.strip()).strip("._") or "patient"
+    return f"/tmp/{safe_name}_review_notes.txt"
+
+
+def _write_review_notes(patient_name: str, notice: ExtractionReviewNotice) -> str:
+    path = _review_notes_path(patient_name)
+    text = format_review_notice(notice)
+    with open(path, "w", encoding="utf-8") as review_file:
+        review_file.write(text or "No internal QA items were generated.\n")
+    return path
 
 
 def _parse_json_response(text):
@@ -379,17 +405,24 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
     with open("/tmp/post_sanitize_copy.json", "w", encoding="utf-8") as f:
         json.dump(copy, f, indent=2, ensure_ascii=False)
 
-    dexa_img_b64 = _extract_dexa_scan_image(dexa_pdfs)
+    dexa_img_b64, selected_dexa_pdf, dexa_image_status = _extract_dexa_scan_image(dexa_pdfs)
+    if dexa_image_status:
+        notice.other_notes.append(f"DEXA scan image verification: {dexa_image_status}.")
     if dexa_img_b64 and record.dexa_history:
-        record.dexa_history[-1].scan_image_b64 = dexa_img_b64
+        selected_index = dexa_pdfs.index(selected_dexa_pdf) if selected_dexa_pdf in dexa_pdfs else -1
+        reading_index = min(selected_index, len(record.dexa_history) - 1)
+        record.dexa_history[reading_index].scan_image_b64 = dexa_img_b64
 
     print("Rendering PDF...")
-    template.render(record, copy, out_path, dexa_img_b64=dexa_img_b64, review_notice=notice)
+    template.render(record, copy, out_path, dexa_img_b64=dexa_img_b64)
 
+    review_path = _write_review_notes(patient_name, notice)
     review = format_review_notice(notice)
     if review:
         print("\n" + review)
     print(f"\nDone. Report saved to {out_path}")
+    print(f"Internal QA notes saved to {review_path}")
+    return review_path
 
 
 if __name__ == "__main__":
