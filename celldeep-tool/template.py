@@ -284,7 +284,8 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .footer-note{{font-size:8.5px; color:{MUTE}; margin-top:5px; max-width:6.9in; line-height:1.35; border-top:1px solid {LINE}; padding-top:5px;}}
 .legend{{display:flex; gap:16px; font-size:10.5px; color:#4c4744; margin:2px 0 9px;}}
 .legend .sw{{width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px;}}
-.bio-group{{margin-bottom:5px;}}
+.full-panel-intro{{break-inside:avoid; page-break-inside:avoid;}}
+.bio-group{{margin-bottom:5px; break-inside:avoid; page-break-inside:avoid;}}
 .bio-group-title.keepnext{{break-after:avoid; page-break-after:avoid;}}
 .bio-group-title{{font-family:Georgia,serif; font-size:13.5px; font-weight:700; display:flex; align-items:baseline; gap:10px;
   border-bottom:2px solid {INK}; padding-bottom:4px; margin-bottom:3px;}}
@@ -580,8 +581,12 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         ["Inflammation", "Lipids", "Metabolic", "Hormones", "Thyroid", "Foundational", "Also Monitored"].index(c)
         if c in ["Inflammation", "Lipids", "Metabolic", "Hormones", "Thyroid", "Foundational", "Also Monitored"]
         else 99))
-    breakdown_html = "\n".join(
-        bio_group(c, record, copy, record.first_draw_date, record.latest_draw_date) for c in data_categories)
+    breakdown_groups = [
+        bio_group(c, record, copy, record.first_draw_date, record.latest_draw_date)
+        for c in data_categories
+    ]
+    first_breakdown = breakdown_groups[0] if breakdown_groups else ""
+    remaining_breakdown = "\n".join(breakdown_groups[1:])
 
     bullets_html = "".join(f'<li>{fmt(b)}</li>' for b in copy.get("optimization_summary_bullets", []))
 
@@ -647,15 +652,18 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         <p class="footer-note">Colors: green indicates optimal, yellow indicates moderate, red indicates flagged. Box position, top to bottom, reflects what needs attention first, not severity of illness. Some markers move as an expected result of your current protocol rather than a concern.</p>
     </div>
 
-  <div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
-  <h1 style="font-size:17px; margin-bottom:5px;">Your complete record</h1>
-  <p style="font-size:11px; color:#4c4744; margin-bottom:12px;">Every marker from this round, grouped exactly as they feed the systems above.</p>
-  <div class="legend">
-    <span><span class="sw" style="background:{GREEN}"></span>Optimal</span>
-    <span><span class="sw" style="background:{YELLOW}"></span>Moderate</span>
-    <span><span class="sw" style="background:{RED}"></span>Flagged</span>
+    <div class="full-panel-intro">
+        <div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
+        <h1 style="font-size:17px; margin-bottom:5px;">Your complete record</h1>
+        <p style="font-size:11px; color:#4c4744; margin-bottom:12px;">Every marker from this round, grouped exactly as they feed the systems above.</p>
+        <div class="legend">
+            <span><span class="sw" style="background:{GREEN}"></span>Optimal</span>
+            <span><span class="sw" style="background:{YELLOW}"></span>Moderate</span>
+            <span><span class="sw" style="background:{RED}"></span>Flagged</span>
+        </div>
+        {first_breakdown}
   </div>
-  {breakdown_html}
+    {remaining_breakdown}
   <p class="footer-note">Reference ranges reflect standard laboratory values. Markers vary by which panel was run for this draw; some rounds include a more extensive workup than others, and that is expected, not a gap in your care. This document is generated for CellDeep and replaces the standard lab notebook page in your chart.</p>
 </div>
 </body></html>'''
