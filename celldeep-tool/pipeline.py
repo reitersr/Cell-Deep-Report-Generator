@@ -90,7 +90,7 @@ def _substitute_marker_list_placeholders(value, placeholders):
 
 
 def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int, str, int]]:
-    """Extract the largest portrait-oriented embedded silhouette image per DEXA PDF."""
+    """Extract an unambiguous portrait-oriented embedded silhouette image per DEXA PDF."""
     images = []
     keywords = ("body composition", "color coding", "scan summary", "body silhouette")
     with open("/tmp/dexa_page_images.txt", "w", encoding="utf-8") as report:
@@ -103,12 +103,9 @@ def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int,
                         selected_page = (page_number, page)
                         break
                 if selected_page is None:
-                    if len(document):
-                        selected_page = (1, document[0])
-                        report.write(f"file={pdf_path} selection=page1 fallback\n")
-                    else:
-                        report.write(f"file={pdf_path} selection=none reason=empty PDF\n")
-                        continue
+                    report.write(f"file={pdf_path} selection=none "
+                                 "reason=no scan page identified\n")
+                    continue
                 page_number, page = selected_page
                 portrait_images = []
                 for image in page.get_images(full=True):
@@ -119,28 +116,36 @@ def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int,
                     area = width * height
                     if height <= width or area < 10000:
                         continue
-                    portrait_images.append((area, extracted, xref))
+                    rects = page.get_image_rects(xref)
+                    if not rects:
+                        continue
+                    portrait_images.append((area, extracted, xref, rects))
 
-                crop_source = "embedded portrait image"
-                if portrait_images:
-                    _, extracted, xref = max(
-                        portrait_images, key=lambda candidate: candidate[0])
-                    image_bytes = extracted["image"]
-                    extension = extracted.get("ext", "png")
-                    if extension != "png":
-                        image_bytes = fitz.Pixmap(document, xref).tobytes("png")
-                        extension = "png"
-                    report.write(f"file={pdf_path} page={page_number} xref={xref} "
-                                 f"source=embedded width={extracted.get('width')} "
-                                 f"height={extracted.get('height')} ext={extension}\n")
-                else:
-                    crop_source = "upper-left fallback"
-                    image_bytes = page.get_pixmap(matrix=fitz.Matrix(3, 3),
-                                                   clip=fitz.Rect(0, 0, page.rect.width * 0.45,
-                                                                  page.rect.height * 0.50),
-                                                   alpha=False).tobytes("png")
-                    report.write(f"file={pdf_path} page={page_number} source={crop_source} "
+                if not portrait_images:
+                    report.write(f"file={pdf_path} page={page_number} source=none "
                                  "reason=no qualifying portrait embedded image\n")
+                    continue
+
+                portrait_images.sort(key=lambda candidate: candidate[0], reverse=True)
+                largest_area = portrait_images[0][0]
+                comparable = [candidate for candidate in portrait_images
+                              if candidate[0] >= largest_area * 0.85]
+                if len(comparable) != 1:
+                    report.write(f"file={pdf_path} page={page_number} source=none "
+                                 f"reason=ambiguous portrait candidates count={len(comparable)}\n")
+                    continue
+
+                _, extracted, xref, rects = portrait_images[0]
+                image_bytes = extracted["image"]
+                extension = extracted.get("ext", "png")
+                if extension != "png":
+                    image_bytes = fitz.Pixmap(document, xref).tobytes("png")
+                    extension = "png"
+                crop_source = "embedded portrait image"
+                report.write(f"file={pdf_path} page={page_number} xref={xref} "
+                             f"source={crop_source} rect={rects[0]} "
+                             f"width={extracted.get('width')} height={extracted.get('height')} "
+                             f"ext={extension}\n")
                 png_path = f"/tmp/dexa_scan_page_{len(images) + 1}.png"
                 with open(png_path, "wb") as image_file:
                     image_file.write(image_bytes)
