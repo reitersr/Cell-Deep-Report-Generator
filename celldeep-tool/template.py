@@ -297,16 +297,13 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .bio-category-start > td{{padding:0;}}
 .bio-group-title .link{{font-size:9.5px; color:{MUTE}; font-weight:400; text-transform:uppercase; letter-spacing:0.03em;}}
 
-.bio-table{{width:100%; border-collapse:collapse; table-layout:fixed;}}
-.bio-table col.c-name{{width:34%;}}
-.bio-table col.c-range{{width:22%;}}
-.bio-table col.c-date{{width:22%;}}
-.bio-table thead{{display:table-header-group;}}
-.bio-table th{{text-align:left; font-size:8.5px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:{MUTE};
-  padding:5px 8px 5px 0; border-bottom:1.5px solid {INK};}}
-.bio-table th.th-date{{text-align:center;}}
+.bio-table{{width:100%;}}
+.bio-table-row{{display:grid; grid-template-columns:34% 22% 22% 22%;}}
+.bio-table-header{{font-size:8.5px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:{MUTE};
+    padding:5px 8px 5px 0; border-bottom:1.5px solid {INK};}}
+.bio-table-header > div:nth-child(n+3){{text-align:center;}}
 .bio-tr{{break-inside:avoid; page-break-inside:avoid;}}
-.bio-tr td{{padding:6px 8px 6px 0; border-bottom:1px solid {LINE}; vertical-align:middle;}}
+.bio-tr > div{{padding:6px 8px 6px 0; border-bottom:1px solid {LINE}; vertical-align:middle;}}
 .bio-tr .td-name{{border-left:3px solid var(--c); padding-left:8px;}}
 .bio-name{{font-size:12.5px; font-weight:700; line-height:1.15;}}
 .bio-tierchip{{display:inline-block; font-size:8px; font-weight:700; letter-spacing:0.03em; padding:2px 7px; border-radius:10px; vertical-align:middle; margin-left:3px;}}
@@ -505,16 +502,16 @@ def bio_row_tr(m, copy, color_override=None):
     if note:
         what_html = f'<b style="font-style:normal; color:{INK};">What this is:</b> {what}. ' if what else ""
         note_html = f'<div class="bio-note">{what_html}{note}</div>'
-    row = f'''<tr class="bio-tr" style="--c:{color};">
-      <td class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span>{note_html}</td>
-      <td class="td-range">{m.disp_range}</td>
-      <td class="td-then">{then_cell}</td>
-      <td class="td-now">{now_cell}</td>
-    </tr>'''
+    row = f'''<div class="bio-table-row bio-tr" style="--c:{color};">
+      <div class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span>{note_html}</div>
+      <div class="td-range">{m.disp_range}</div>
+      <div class="td-then">{then_cell}</div>
+      <div class="td-now">{now_cell}</div>
+    </div>'''
     return row
 
 
-def bio_group(cat, record, copy, first_draw, latest_draw):
+def bio_group(cat, record, copy, first_draw, latest_draw, show_headers=True):
     rows = [m for m in record.markers if m.category == cat]
     if not rows:
         return ""
@@ -532,16 +529,14 @@ def bio_group(cat, record, copy, first_draw, latest_draw):
     narrative = copy.get("group_narratives", {}).get(cat, "")
     narr_html = f'<p style="font-size:9.5px; color:#4c4744; margin:4px 0 8px; font-style:italic;">{fmt(narrative)}</p>' if narrative else ""
     tagline_html = f'<div style="font-size:10.5px; color:#4c4744; margin:4px 0 8px;">{fmt(tagline)}</div>' if tagline else ""
+    date_headers = (fmt_date(first_draw), fmt_date(latest_draw)) if first_draw else ("", fmt_date(latest_draw))
+    header_html = (f'<div class="bio-table-row bio-table-header"><div>Marker</div><div>Reference Range</div><div>{date_headers[0]}</div><div>{date_headers[1]}</div></div>'
+                   if show_headers else "")
     first_row = row_html[0]
     remaining_rows = "\n".join(row_html[1:])
-    return f'''<tr class="bio-category-start"><td colspan="4">
-        <div class="bio-group-title">{cat.upper()} {link}</div>
-      {tagline_html}
-      {narr_html}
-        <table class="bio-table"><tbody>{first_row}</tbody>
-      </table>
-    </td></tr>
-    {remaining_rows}'''
+    return (f'<div class="bio-group"><div class="bio-category-lead">'
+            f'<div class="bio-group-title">{cat.upper()} {link}</div>{tagline_html}'
+            f'<div class="bio-table">{header_html}{first_row}</div></div>{narr_html}{remaining_rows}</div>')
 
 
 def render(record: PatientRecord, copy: dict, out_path: str,
@@ -603,8 +598,8 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         if c in ["Inflammation", "Lipids", "Metabolic", "Hormones", "Thyroid", "Foundational", "Also Monitored"]
         else 99))
     breakdown_groups = [
-        bio_group(c, record, copy, record.first_draw_date, record.latest_draw_date)
-        for c in data_categories
+        bio_group(c, record, copy, record.first_draw_date, record.latest_draw_date, index == 0)
+        for index, c in enumerate(data_categories)
     ]
     first_breakdown = breakdown_groups[0] if breakdown_groups else ""
     remaining_breakdown = "\n".join(breakdown_groups[1:])
