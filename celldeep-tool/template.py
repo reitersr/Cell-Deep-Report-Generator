@@ -237,7 +237,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .dexa-body{{display:flex; align-items:center; gap:14px; position:relative; z-index:2; margin-top:4px;}}
 .dexa-figure{{flex:none; display:flex; justify-content:center; width:220px;}}
 .dexa-scan-img{{width:220px; max-height:220px; object-fit:contain; border-radius:7px; border:1px solid {LINE};}}
-.dexa-history{{margin-top:5px; padding-top:5px; border-top:1px solid {LINE}; position:relative; z-index:2;}}
+.dexa-history{{margin-top:5px; padding-top:5px; border-top:1px solid {LINE}; position:relative; z-index:2; break-inside:avoid; page-break-inside:avoid;}}
 .dexa-history-title{{font-size:9px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; color:{MUTE}; margin-bottom:5px;}}
 .dexa-hist-row{{display:flex; gap:10px; font-size:9px; color:{DARKGRAY}; padding:1.5px 0;}}
 .dexa-hist-row .d{{flex:0 0 1.0in; font-weight:700; color:{INK}; font-size:10.5px;}}
@@ -276,12 +276,13 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .box-proto{{color:{AQUA_DK}; font-weight:600;}}
 .box-mark{{position:absolute; right:-16px; bottom:-18px; width:76px; height:76px; opacity:0.06; z-index:1;}}
 
-.protocol-block{{border-left:3px solid var(--c); padding-left:9px; margin:4px 0 5px;}}
+.protocol-block{{border-left:3px solid var(--c); padding-left:9px; margin:4px 0 5px; break-inside:avoid; page-break-inside:avoid;}}
+.protocol-heading-unit{{break-inside:avoid; page-break-inside:avoid;}}
 .protocol-block .pname{{font-size:12.5px; font-weight:700;}}
 .protocol-block .pcadence{{font-size:10px; color:{MUTE}; font-weight:400;}}
 .protocol-block .preason{{font-size:10px; color:#4c4744; margin-top:2px; line-height:1.32;}}
 
-.nonlab-box{{background:{CREAM}55; border:1.5px dashed {MIDGRAY}; border-radius:9px; padding:7px 12px; margin-top:3px;}}
+.nonlab-box{{background:{CREAM}55; border:1.5px dashed {MIDGRAY}; border-radius:9px; padding:7px 12px; margin-top:3px; break-inside:avoid; page-break-inside:avoid;}}
 .nonlab-box .t{{font-size:9.5px; font-weight:700; letter-spacing:0.05em; color:{MUTE}; text-transform:uppercase; margin-bottom:5px;}}
 .nonlab-item{{font-size:11px; margin-bottom:3px;}}
 .nonlab-item b{{font-weight:700;}}
@@ -304,6 +305,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .bio-table th{{text-align:left; font-size:8.5px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:{MUTE};
   padding:5px 8px 5px 0; border-bottom:1.5px solid {INK};}}
 .bio-table th.th-date{{text-align:center;}}
+.bio-tr{{break-inside:avoid; page-break-inside:avoid;}}
 .bio-tr td{{padding:6px 8px 6px 0; border-bottom:1px solid {LINE}; vertical-align:middle;}}
 .bio-tr .td-name{{border-left:3px solid var(--c); padding-left:8px;}}
 .bio-name{{font-size:12.5px; font-weight:700; line-height:1.15;}}
@@ -477,7 +479,13 @@ def protocol_section(record: PatientRecord, roll, copy):
           <div class="t">Also in your protocol, not reflected in bloodwork</div>
           {nonlab}
         </div>'''
-    return "".join(blocks) + nonlab_block
+    heading = '<div class="sec-title">Why You\'re On What You\'re On</div>'
+    if blocks:
+        return (f'<div class="protocol-heading-unit">{heading}{blocks[0]}</div>'
+                + "".join(blocks[1:]) + nonlab_block)
+    if nonlab_block:
+        return f'<div class="protocol-heading-unit">{heading}{nonlab_block}</div>'
+    return ""
 
 
 def bio_row_tr(m, copy, color_override=None):
@@ -582,8 +590,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     )
     dexa_html = dexa_panel(record, copy, roll, dexa_img_b64) if has_dexa else ""
     protocol_html = protocol_section(record, roll, copy)
-    protocol_section_html = f'''<div class="sec-title">Why You're On What You're On</div>
-        {protocol_html}''' if protocol_html else ""
+    protocol_section_html = protocol_html
     systems_heading = "YOUR SIX SYSTEMS, ATTENTION NEEDED FIRST" if len(visible_systems) == 6 else "YOUR SYSTEMS, ATTENTION NEEDED FIRST"
     systems_html = f'''<div class="systems-flow">
         {f'<div class="sec-title">{systems_heading}</div><div class="grid">{grid_html}</div>' if grid_html else ""}
