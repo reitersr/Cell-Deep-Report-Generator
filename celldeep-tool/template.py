@@ -178,6 +178,14 @@ def gauge_svg(then_score, now_score, now_zone, w=150, h=86, num_size=30):
 
 # ---- CSS: verbatim from V23. Do not edit values here without going back through calibration. ----
 CSS = f'''
+/* ============================================================
+    CELLDEEP LAYOUT FRAMEWORK — LOCKED RULES
+    8. Any section whose underlying data is absent for a given
+        patient must be fully omitted from output - no empty card,
+        no reserved blank space, no placeholder. Applies to DEXA,
+        pain points, protocol, and any marker category, for any
+        patient regardless of data completeness.
+    ============================================================ */
 @page {{ size: Letter; margin: 0.15in 0in 0.15in 0in; }}
 *{{box-sizing:border-box; margin:0; padding:0;}}
 body{{font-family:'Helvetica Neue',Arial,sans-serif; color:{INK}; font-size:14px; line-height:1.55; background:#fff;}}
@@ -584,6 +592,8 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     )
     dexa_html = dexa_panel(record, copy, roll, dexa_img_b64) if has_dexa else ""
     protocol_html = protocol_section(record, roll, copy)
+    protocol_section_html = f'''<div class="sec-title">Why You're On What You're On</div>
+        {protocol_html}''' if protocol_html else ""
 
     data_categories = sorted(set(m.category for m in record.markers), key=lambda c: (
         ["Inflammation", "Lipids", "Metabolic", "Hormones", "Thyroid", "Foundational", "Also Monitored"].index(c)
@@ -597,6 +607,16 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     ]
     first_breakdown = breakdown_groups[0] if breakdown_groups else ""
     remaining_breakdown = "\n".join(breakdown_groups[1:])
+    full_panel_html = f'''<div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
+    <h1 style="font-size:17px; margin-bottom:5px;">Your complete record</h1>
+    <p style="font-size:11px; color:#4c4744; margin-bottom:12px;">Every marker from this round, grouped exactly as they feed the systems above.</p>
+    <div class="legend">
+        <span><span class="sw" style="background:{GREEN}"></span>Optimal</span>
+        <span><span class="sw" style="background:{YELLOW}"></span>Moderate</span>
+        <span><span class="sw" style="background:{RED}"></span>Flagged</span>
+    </div>
+    {first_breakdown}
+    {remaining_breakdown}''' if data_categories else ""
 
     bullets_html = "".join(f'<li>{fmt(b)}</li>' for b in copy.get("optimization_summary_bullets", []))
 
@@ -656,22 +676,12 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         <div class="sec-title">YOUR SIX SYSTEMS, ATTENTION NEEDED FIRST</div>
         <div class="grid">{grid_html}</div>
 
-        <div class="sec-title">Why You're On What You're On</div>
-        {protocol_html}
+        {protocol_section_html}
 
         <p class="footer-note">Colors: green indicates optimal, yellow indicates moderate, red indicates flagged. Box position, top to bottom, reflects what needs attention first, not severity of illness. Some markers move as an expected result of your current protocol rather than a concern.</p>
     </div>
 
-    <div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
-    <h1 style="font-size:17px; margin-bottom:5px;">Your complete record</h1>
-    <p style="font-size:11px; color:#4c4744; margin-bottom:12px;">Every marker from this round, grouped exactly as they feed the systems above.</p>
-    <div class="legend">
-        <span><span class="sw" style="background:{GREEN}"></span>Optimal</span>
-        <span><span class="sw" style="background:{YELLOW}"></span>Moderate</span>
-        <span><span class="sw" style="background:{RED}"></span>Flagged</span>
-    </div>
-    {first_breakdown}
-    {remaining_breakdown}
+    {full_panel_html}
 </div>
 </body></html>'''
 
