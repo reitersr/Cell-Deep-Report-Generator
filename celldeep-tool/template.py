@@ -178,40 +178,10 @@ def gauge_svg(then_score, now_score, now_zone, w=150, h=86, num_size=30):
 
 # ---- CSS: verbatim from V23. Do not edit values here without going back through calibration. ----
 CSS = f'''
-/* ============================================================
-    CELLDEEP LAYOUT FRAMEWORK — LOCKED RULES
-    These rules govern page flow for ANY patient, regardless of
-    data volume or resulting page count. Do not remove or bypass
-    without updating this comment to reflect the new rule.
-    ============================================================
-    1. Header, hero section, Optimization Summary, and the DEXA/
-        STRUCTURE panel flow together starting on page 1. NO forced
-        break-before on the DEXA panel. It only moves to a new page
-        if it genuinely doesn't fit.
-    2. The six system boxes + "Why You're On What You're On" start
-        together as one group with break-before: page. This is the
-        ONLY intentional forced page break in the document.
-    3. The "FULL PANEL" heading + legend + first marker category
-        are glued together (break-inside: avoid) so the heading can
-        never be orphaned from its content.
-    4. Each marker category block (heading + tagline + all its
-        rows) uses break-inside: avoid, so short categories never
-        strand a lone row onto a near-empty trailing page.
-    5. NO other forced breaks exist anywhere in this document.
-        Page count is determined naturally by content length and
-        varies per patient - this is expected and correct.
-    6. The DEXA/STRUCTURE panel is one indivisible unit
-        (break-inside: avoid) - it never splits its own table from
-        its own narrative text.
-    7. The final marker category and the footer disclaimer text are
-        glued together as one unit, so the footer never lands alone
-        on an otherwise-blank final page.
-    ============================================================ */
 @page {{ size: Letter; margin: 0.15in 0in 0.15in 0in; }}
 *{{box-sizing:border-box; margin:0; padding:0;}}
 body{{font-family:'Helvetica Neue',Arial,sans-serif; color:{INK}; font-size:14px; line-height:1.55; background:#fff;}}
 .page{{width:8.5in; padding:0 0.6in;}}
-.avoid{{page-break-inside:avoid; break-inside:avoid;}}
 h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .draft-note{{color:{MIDGRAY}; font-size:10px; margin-bottom:14px;}}
 .masthead{{display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; border-bottom:2px solid {INK}; padding-bottom:4px;}}
@@ -279,7 +249,6 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .dexa-quote .lbl{{font-style:normal; font-size:9px; color:{MUTE}; text-transform:uppercase; letter-spacing:0.04em;}}
 
 .grid{{margin-bottom:3px;}}
-.systems-group{{break-before:page; page-break-before:always;}}
 .grid-row{{display:flex; gap:7px; margin-bottom:5px;}}
 .grid-row .box{{flex:1; min-width:0;}}
 .box{{border:1.5px solid var(--c); border-top:4px solid var(--c); border-radius:9px; padding:7px 12px 8px; background:var(--c-bg); position:relative; overflow:hidden; break-inside:avoid; page-break-inside:avoid;}}
@@ -313,9 +282,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .footer-note{{font-size:8.5px; color:{MUTE}; margin-top:5px; max-width:6.9in; line-height:1.35; border-top:1px solid {LINE}; padding-top:5px;}}
 .legend{{display:flex; gap:16px; font-size:10.5px; color:#4c4744; margin:2px 0 9px;}}
 .legend .sw{{width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px;}}
-.full-panel-intro{{break-inside:avoid; page-break-inside:avoid;}}
-.bio-group{{margin-bottom:5px; break-inside:avoid; page-break-inside:avoid;}}
-.bio-group-title.keepnext{{break-after:avoid; page-break-after:avoid;}}
+.bio-group{{margin-bottom:5px;}}
 .bio-group-title{{font-family:Georgia,serif; font-size:13.5px; font-weight:700; display:flex; align-items:baseline; gap:10px;
   border-bottom:2px solid {INK}; padding-bottom:4px; margin-bottom:3px;}}
 .bio-group-title .link{{font-size:9.5px; color:{MUTE}; font-weight:400; text-transform:uppercase; letter-spacing:0.03em;}}
@@ -338,7 +305,6 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .bio-pill{{display:inline-block; font-weight:800; font-size:13px; padding:4px 12px; border-radius:20px;}}
 .bio-dash{{color:{MIDGRAY}; font-size:13px;}}
 .bio-unit{{font-size:9px; color:{MUTE}; margin-left:3px; display:block; margin-top:1px;}}
-.bio-note-tr .td-note{{padding:0 8px 8px 11px; border-bottom:1px solid {LINE};}}
 .bio-note{{font-size:9.5px; color:{DARKGRAY}; line-height:1.3; font-style:italic; max-width:6.2in;}}
 '''
 
@@ -519,17 +485,17 @@ def bio_row_tr(m, copy, color_override=None):
     else:
         then_cell = f'<span class="bio-dash">{fmt(m.disp_then)}</span>'
     now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{fmt(m.disp_now)}</span>{unit}'
+    note_html = ""
+    if note:
+        what_html = f'<b style="font-style:normal; color:{INK};">What this is:</b> {what}. ' if what else ""
+        note_html = f'<div class="bio-note">{what_html}{note}</div>'
     row = f'''<tr class="bio-tr" style="--c:{color};">
-      <td class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span></td>
+      <td class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span>{note_html}</td>
       <td class="td-range">{m.disp_range}</td>
       <td class="td-then">{then_cell}</td>
       <td class="td-now">{now_cell}</td>
     </tr>'''
-    note_row = ""
-    if note:
-        what_html = f'<b style="font-style:normal; color:{INK};">What this is:</b> {what}. ' if what else ""
-        note_row = f'<tr class="bio-note-tr"><td colspan="4" class="td-note"><div class="bio-note">{what_html}{note}</div></td></tr>'
-    return row + note_row
+    return row
 
 
 def bio_group(cat, record, copy, first_draw, latest_draw):
@@ -539,18 +505,20 @@ def bio_group(cat, record, copy, first_draw, latest_draw):
     pcat = DATA_TO_PATIENT_CATEGORY.get(cat)
     link = f'<span class="link">&uarr; see {pcat} above</span>' if pcat else '<span class="link">general screening</span>'
     tagline = copy.get("category_taglines", {}).get(cat, "")
+
     def row_color(m):
         override_cat = NARRATIVE_CATEGORY_OVERRIDE.get(m.name)
         if override_cat:
             return TIER_COLOR.get(m.now_tier)
         return None
+
     rows_html = "\n".join(bio_row_tr(m, copy, row_color(m)) for m in rows)
     narrative = copy.get("group_narratives", {}).get(cat, "")
     narr_html = f'<p style="font-size:9.5px; color:#4c4744; margin:4px 0 8px; font-style:italic;">{fmt(narrative)}</p>' if narrative else ""
     date_headers = f'<th class="th-date">{fmt_date(first_draw)}</th><th class="th-date">{fmt_date(latest_draw)}</th>' if first_draw else f'<th class="th-date">{fmt_date(latest_draw)}</th>'
     tagline_html = f'<div style="font-size:10.5px; color:#4c4744; margin:4px 0 8px;">{fmt(tagline)}</div>' if tagline else ""
     return f'''<div class="bio-group">
-      <div class="bio-group-title keepnext">{cat.upper()} {link}</div>
+      <div class="bio-group-title">{cat.upper()} {link}</div>
       {tagline_html}
       {narr_html}
       <table class="bio-table">
@@ -615,22 +583,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         for c in data_categories
     ]
     first_breakdown = breakdown_groups[0] if breakdown_groups else ""
-    remaining_breakdown = "\n".join(breakdown_groups[1:-1])
-    final_breakdown = breakdown_groups[-1] if breakdown_groups else ""
-    full_panel_intro_html = f'''<div class="full-panel-intro">
-        <div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
-        <h1 style="font-size:17px; margin-bottom:5px;">Your complete record</h1>
-        <p style="font-size:11px; color:#4c4744; margin-bottom:12px;">Every marker from this round, grouped exactly as they feed the systems above.</p>
-        <div class="legend">
-            <span><span class="sw" style="background:{GREEN}"></span>Optimal</span>
-            <span><span class="sw" style="background:{YELLOW}"></span>Moderate</span>
-            <span><span class="sw" style="background:{RED}"></span>Flagged</span>
-        </div>
-        {first_breakdown}
-    </div>'''
-    if len(breakdown_groups) == 1:
-        final_breakdown = full_panel_intro_html + final_breakdown
-        full_panel_intro_html = ""
+    remaining_breakdown = "\n".join(breakdown_groups[1:])
 
     bullets_html = "".join(f'<li>{fmt(b)}</li>' for b in copy.get("optimization_summary_bullets", []))
 
@@ -661,7 +614,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
       <div class="ddates">{fmt(date_range)}</div>
     </div>
   </div>
-  <div class="hero avoid">
+    <div class="hero">
     <div class="hero-eyebrow">{f"AGE {record.age} &nbsp;&rarr;&nbsp; " if record.age else ""}{fmt(copy.get("hero_target_line", ""))}</div>
     <div class="hero-top">
       <div class="big">{fmt(copy.get("hero_question", ""))}</div>
@@ -679,7 +632,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     </div>
   </div>
 
-  <div class="bottomline avoid">
+    <div class="bottomline">
     <div class="bl-eyebrow">OPTIMIZATION SUMMARY</div>
     <ul class="bl-list">{bullets_html}</ul>
   </div>
@@ -696,12 +649,17 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         <p class="footer-note">Colors: green indicates optimal, yellow indicates moderate, red indicates flagged. Box position, top to bottom, reflects what needs attention first, not severity of illness. Some markers move as an expected result of your current protocol rather than a concern.</p>
     </div>
 
-    {full_panel_intro_html}
-    {remaining_breakdown}
-    <div class="avoid">
-        {final_breakdown}
-        <p class="footer-note">Reference ranges reflect standard laboratory values. Markers vary by which panel was run for this draw; some rounds include a more extensive workup than others, and that is expected, not a gap in your care. This document is generated for CellDeep and replaces the standard lab notebook page in your chart.</p>
+    <div class="sec-title" style="margin-top:22px;">Full Panel, Connected to Your Systems Above</div>
+    <h1 style="font-size:17px; margin-bottom:5px;">Your complete record</h1>
+    <p style="font-size:11px; color:#4c4744; margin-bottom:12px;">Every marker from this round, grouped exactly as they feed the systems above.</p>
+    <div class="legend">
+        <span><span class="sw" style="background:{GREEN}"></span>Optimal</span>
+        <span><span class="sw" style="background:{YELLOW}"></span>Moderate</span>
+        <span><span class="sw" style="background:{RED}"></span>Flagged</span>
     </div>
+    {first_breakdown}
+    {remaining_breakdown}
+  <p class="footer-note">Reference ranges reflect standard laboratory values. Markers vary by which panel was run for this draw; some rounds include a more extensive workup than others, and that is expected, not a gap in your care. This document is generated for CellDeep and replaces the standard lab notebook page in your chart.</p>
 </div>
 </body></html>'''
 
