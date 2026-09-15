@@ -40,6 +40,8 @@ def normalize_dexa_body_fat(dexa_data: dict) -> dict:
 
 
 def score_bounded(value: float, direction: str, optimal: float, moderate: float):
+    if optimal is None or moderate is None:
+        return None, "unscored"
     if direction == "lower":
         if value <= optimal:
             frac = 0 if optimal == 0 else value / optimal
@@ -104,7 +106,7 @@ def attach_scores(m: Marker, sex: str | None = None) -> None:
         print(f"SCORING: marker={m.name!r} sex={sex!r} optimal={m.optimal!r} moderate={m.moderate!r}")  # TEMP DEBUG
         now_pct, now_tier = score_bounded(m.now, m.direction, m.optimal, m.moderate)
         then_pct, then_tier = (score_bounded(m.then, m.direction, m.optimal, m.moderate)
-                                if m.then is not None else (None, None))
+                                if m.then is not None and now_tier != "unscored" else (None, None))
     elif m.kind == "range":
         now_pct, now_tier = score_range(m.now, m.lo, m.hi)
         then_pct, then_tier = (score_range(m.then, m.lo, m.hi) if m.then is not None else (None, None))

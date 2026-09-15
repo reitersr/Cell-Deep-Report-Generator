@@ -362,6 +362,13 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 full_history=raw.get("full_history", []),
             )
         scoring.attach_scores(m, sex=patient_sex)   # computes now_tier/then_tier/pct in place — pure math, no AI
+        if m.now_tier == "unscored":
+            # Defense-in-depth: should already be caught by has_missing_thresholds() above, but
+            # never let a None threshold that slips through crash the report - skip it instead.
+            skip_line = f"MARKER SKIPPED - missing threshold data: {canonical}"
+            scoring_log_lines.append(skip_line)
+            notice.other_notes.append(skip_line)
+            continue
         markers.append(m)
 
     dexa_history = [DexaReading(**scoring.normalize_dexa_body_fat(d))
