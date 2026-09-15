@@ -90,41 +90,34 @@ def _substitute_marker_list_placeholders(value, placeholders):
 
 
 def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int, str, int]]:
-    """Render the page with the largest total embedded image area per DEXA PDF."""
+    """Render page 1 of the first DEXA PDF as the scan image."""
     images = []
     with open("/tmp/dexa_page_images.txt", "w", encoding="utf-8") as report:
-        for pdf_path in dexa_pdfs:
-            with fitz.open(pdf_path) as document:
-                page_areas = []
-                for page_number, page in enumerate(document, start=1):
-                    total_area = 0
-                    for image in page.get_images(full=True):
-                        extracted = document.extract_image(image[0])
-                        total_area += extracted.get("width", 0) * extracted.get("height", 0)
-                    page_areas.append((total_area, page_number, page))
+        if not dexa_pdfs:
+            return images
 
-                if not page_areas:
-                    report.write(f"file={pdf_path} selection=none reason=empty-document\n")
-                    continue
+        pdf_path = dexa_pdfs[0]
+        with fitz.open(pdf_path) as document:
+            if not document:
+                report.write(f"file={pdf_path} selection=none reason=empty-document\n")
+                return images
 
-                total_area, page_number, page = max(page_areas, key=lambda candidate: candidate[0])
-                pixmap = page.get_pixmap()
-                image_bytes = pixmap.tobytes("png")
-                crop_source = "full rendered page"
-                report.write(f"file={pdf_path} page={page_number} "
-                             f"embedded_image_area={total_area} source={crop_source}\n")
-                png_path = f"/tmp/dexa_scan_page_{len(images) + 1}.png"
-                with open(png_path, "wb") as image_file:
-                    image_file.write(image_bytes)
-                file_size = os.path.getsize(png_path)
-                report.write(f"file={pdf_path} page={page_number} png={png_path} "
-                             f"source={crop_source} size_kb={file_size / 1024:.1f}\n")
-                print(f"DEXA scan page: file={pdf_path} page={page_number} "
-                      f"source={crop_source} "
-                      f"size_kb={file_size / 1024:.1f}")
-                with open(png_path, "rb") as image_file:
-                    encoded = base64.b64encode(image_file.read()).decode("ascii")
-                images.append((encoded, pdf_path, page_number, png_path, file_size))
+            page_number = 1
+            page = document[0]
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            image_bytes = pixmap.tobytes("png")
+            crop_source = "full rendered page 1"
+            report.write(f"file={pdf_path} page={page_number} source={crop_source}\n")
+            png_path = "/tmp/dexa_scan_page_1.png"
+            with open(png_path, "wb") as image_file:
+                image_file.write(image_bytes)
+            file_size = os.path.getsize(png_path)
+            report.write(f"file={pdf_path} page={page_number} png={png_path} "
+                         f"source={crop_source} size_kb={file_size / 1024:.1f}\n")
+            print(f"DEXA scan page: file={pdf_path} page={page_number} "
+                  f"source={crop_source} size_kb={file_size / 1024:.1f}")
+            encoded = base64.b64encode(image_bytes).decode("ascii")
+            images.append((encoded, pdf_path, page_number, png_path, file_size))
     return images
 
 
@@ -399,13 +392,10 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
         json.dump(copy, f, indent=2, ensure_ascii=False)
 
     dexa_images = _extract_dexa_scan_images(dexa_pdfs)
-    for image in dexa_images:
-        pdf_index = dexa_pdfs.index(image[1])
-        if pdf_index < len(record.dexa_history):
-            record.dexa_history[pdf_index].scan_image_b64 = image[0]
-    latest_image = next((image for image in dexa_images if image[1] == dexa_pdfs[-1]), None) if dexa_pdfs else None
-    dexa_img_b64 = (latest_image or (dexa_images[-1] if dexa_images else None))
-    dexa_img_b64 = dexa_img_b64[0] if dexa_img_b64 else None
+    first_image = dexa_images[0] if dexa_images else None
+    if first_image and record.dexa_history:
+        record.dexa_history[0].scan_image_b64 = first_image[0]
+    dexa_img_b64 = first_image[0] if first_image else None
 
     print("Rendering PDF...")
     template.render(record, copy, out_path, dexa_img_b64=dexa_img_b64)
