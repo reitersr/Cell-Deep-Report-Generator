@@ -31,7 +31,8 @@ from json_repair import repair_json
 import fitz
 
 from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint
-from markers_reference import MARKER_LIBRARY, DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE, resolve_marker_config
+from markers_reference import (MARKER_LIBRARY, DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE,
+                                resolve_marker_config, has_missing_thresholds)
 from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
 from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
 from extraction_prompt import EXTRACTION_SYSTEM_PROMPT, build_extraction_user_message
@@ -294,11 +295,15 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
 
     Per-patient provider-note overrides (extraction-only, see extraction_prompt.py) take
     precedence over the sex-based default for that one marker, and are logged to the existing
-    extraction_completeness_log.txt so the override is auditable, not silent."""
+    extraction_completeness_log.txt so the override is auditable, not silent.
+
+    Safeguard: if a marker's resolved config is missing a required threshold for its kind (a
+    data error in the library, or an unresolved sex lookup), that ONE marker is excluded from
+    scoring and logged - it never crashes the whole report."""
     notice = ExtractionReviewNotice()
     markers = []
     patient_sex = extracted.get("sex")
-    override_log_lines = []
+    scoring_log_lines = []
 
     overrides_by_marker = {}
     for raw_override in extracted.get("marker_overrides", []):
@@ -322,6 +327,14 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         canonical, cfg = match
         cfg = resolve_marker_config(canonical, cfg, patient_sex)
         override = overrides_by_marker.get(canonical)
+        if override is None and has_missing_thresholds(cfg):
+            # Data error in the reference library (or a bad sex resolution) - exclude just this
+            # one marker rather than letting a None optimal/moderate crash the whole report.
+            error_line = (f"ERROR: missing threshold for {canonical} / {patient_sex or 'unknown'} "
+                          "- marker excluded from scoring")
+            scoring_log_lines.append(error_line)
+            notice.other_notes.append(error_line)
+            continue
         if override is not None:
             lo, hi = override
             # Provider-note override always scores as a "range" band around the stated optimal
@@ -336,7 +349,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
                 full_history=raw.get("full_history", []),
             )
-            override_log_lines.append(f"OVERRIDE APPLIED: {canonical} range set to {lo}-{hi} per provider note")
+            scoring_log_lines.append(f"OVERRIDE APPLIED: {canonical} range set to {lo}-{hi} per provider note")
         else:
             m = Marker(
                 name=canonical, category=cfg["category"], unit=cfg["unit"], kind=cfg["kind"],
@@ -370,9 +383,9 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     pain_points = [PainPoint(text=p["text"], categories=p.get("categories", []))
                    for p in extracted.get("pain_points", [])]
 
-    if override_log_lines:
+    if scoring_log_lines:
         with open("/tmp/extraction_completeness_log.txt", "a", encoding="utf-8") as log:
-            log.write("\n".join(override_log_lines) + "\n")
+            log.write("\n".join(scoring_log_lines) + "\n")
 
     record = PatientRecord(
         name=extracted["name"], age=extracted.get("age"), sex=extracted.get("sex"),

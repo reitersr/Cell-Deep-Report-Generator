@@ -190,6 +190,11 @@ def lookup_marker(raw_name: str):
     return None
 
 
+# Sex values seen in practice from extraction/CLI/form input - normalizes case and common
+# single-letter abbreviations before comparing against sex_variants keys ("male"/"female").
+_SEX_ALIASES = {"male": "male", "m": "male", "female": "female", "f": "female"}
+
+
 def resolve_marker_config(canonical: str, cfg: dict, sex: str | None) -> dict:
     """Resolve a marker's threshold config for a specific patient's sex.
 
@@ -201,12 +206,25 @@ def resolve_marker_config(canonical: str, cfg: dict, sex: str | None) -> dict:
     variants = cfg.get("sex_variants")
     if not variants:
         return cfg
-    key = sex.strip().lower() if isinstance(sex, str) else None
+    key = _SEX_ALIASES.get(sex.strip().lower()) if isinstance(sex, str) else None
     if key not in variants:
         key = cfg.get("default_sex", next(iter(variants)))
     resolved = dict(cfg)
     resolved.update(variants[key])
     return resolved
+
+
+def has_missing_thresholds(cfg: dict) -> bool:
+    """True if a marker's resolved config lacks a required numeric threshold for its kind.
+    Used as a last-line data-integrity check so a bad/incomplete library entry excludes just
+    that one marker from scoring instead of crashing the whole report (see pipeline.py)."""
+    kind = cfg.get("kind")
+    if kind == "bounded":
+        return cfg.get("optimal") is None or cfg.get("moderate") is None or cfg.get("direction") is None
+    if kind == "range":
+        return cfg.get("lo") is None or cfg.get("hi") is None
+    return False
+
 
 
 # ---- Sex-conditional audit (per request) ----

@@ -71,11 +71,51 @@ def test_vague_mention_no_override():
     print("PASS: vague note mention produces no override; default male range applies")
 
 
+def test_sex_abbreviation_resolves_to_male():
+    # Real source material sometimes states sex as a single letter ("M") rather than "male".
+    extracted = {
+        "name": "Abbreviated Sex Patient", "sex": "M",
+        "markers": [{"name": "Testosterone, Total", "now": 650, "disp_now": "650"}],
+    }
+    record, _ = score_and_build_record(extracted)
+    marker = _testosterone_marker(record)
+    assert (marker.lo, marker.hi) == (500, 900)
+    print("PASS: sex abbreviation 'M' resolves to the male default range")
+
+
+def test_missing_threshold_excludes_marker_without_crashing():
+    log_path = Path("/tmp/extraction_completeness_log.txt")
+    log_path.unlink(missing_ok=True)
+    from markers_reference import MARKER_LIBRARY
+    broken_name = "__Broken Test Marker__"
+    MARKER_LIBRARY[broken_name] = dict(category="Hormones", unit="ng/dL", kind="bounded",
+        direction="lower", optimal=None, moderate=100, disp_range="broken", aliases=["broken test marker"])
+    try:
+        extracted = {
+            "name": "Broken Marker Patient", "sex": "male",
+            "markers": [
+                {"name": broken_name, "now": 50, "disp_now": "50"},
+                {"name": "Testosterone, Total", "now": 650, "disp_now": "650"},
+            ],
+        }
+        record, notice = score_and_build_record(extracted)  # must not raise
+        assert all(m.name != broken_name for m in record.markers)
+        assert _testosterone_marker(record) is not None
+        log = log_path.read_text(encoding="utf-8")
+        assert f"ERROR: missing threshold for {broken_name} / male - marker excluded from scoring" in log
+        assert any("missing threshold" in note for note in notice.other_notes)
+        print("PASS: marker with a missing threshold is excluded and logged, report still completes")
+    finally:
+        del MARKER_LIBRARY[broken_name]
+
+
 def main():
     test_male_default_range()
     test_female_default_range_unchanged()
     test_explicit_override_used_and_logged()
     test_vague_mention_no_override()
+    test_sex_abbreviation_resolves_to_male()
+    test_missing_threshold_excludes_marker_without_crashing()
 
 
 if __name__ == "__main__":
