@@ -40,7 +40,7 @@ def normalize_dexa_body_fat(dexa_data: dict) -> dict:
 
 
 def score_bounded(value: float, direction: str, optimal: float, moderate: float):
-    if optimal is None or moderate is None:
+    if value is None or optimal is None or moderate is None:
         return None, "unscored"
     if direction == "lower":
         if value <= optimal:
@@ -99,11 +99,10 @@ def attach_scores(m: Marker, sex: str | None = None) -> None:
     should access them via getattr with a safe default, or this can be extended into the
     dataclass directly — kept this way so schema.py stays a pure data contract.)
 
-    "sex" is passed in only for the TEMP DEBUG line below (not used for scoring here - the
-    resolved optimal/moderate/lo/hi already reflect the patient's sex by the time they reach
-    this function, per markers_reference.resolve_marker_config)."""
+    "sex" is accepted but not used for scoring here - the resolved optimal/moderate/lo/hi
+    already reflect the patient's sex by the time they reach this function, per
+    markers_reference.resolve_marker_config."""
     if m.kind == "bounded":
-        print(f"SCORING: marker={m.name!r} sex={sex!r} optimal={m.optimal!r} moderate={m.moderate!r}")  # TEMP DEBUG
         now_pct, now_tier = score_bounded(m.now, m.direction, m.optimal, m.moderate)
         then_pct, then_tier = (score_bounded(m.then, m.direction, m.optimal, m.moderate)
                                 if m.then is not None and now_tier != "unscored" else (None, None))
