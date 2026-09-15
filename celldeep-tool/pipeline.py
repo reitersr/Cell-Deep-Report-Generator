@@ -31,7 +31,7 @@ from json_repair import repair_json
 import fitz
 
 from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint
-from markers_reference import MARKER_LIBRARY, DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
+from markers_reference import MARKER_LIBRARY, DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE, resolve_marker_config
 from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
 from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
 from extraction_prompt import EXTRACTION_SYSTEM_PROMPT, build_extraction_user_message
@@ -287,9 +287,29 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     """Step 2: deterministic. No AI. Takes extraction's structured output, matches markers against
     the reference library, computes tiers/percentages via scoring.py (the same math as data.py),
     and assembles the final PatientRecord. This is where 'never infer' is enforced in code, not
-    just in a prompt — an unmatched marker CANNOT reach the record with a guessed threshold."""
+    just in a prompt — an unmatched marker CANNOT reach the record with a guessed threshold.
+
+    Sex-conditional defaults (e.g. Testosterone, Total) are resolved here via
+    markers_reference.resolve_marker_config, using the patient's own sex - never guessed.
+
+    Per-patient provider-note overrides (extraction-only, see extraction_prompt.py) take
+    precedence over the sex-based default for that one marker, and are logged to the existing
+    extraction_completeness_log.txt so the override is auditable, not silent."""
     notice = ExtractionReviewNotice()
     markers = []
+    patient_sex = extracted.get("sex")
+    override_log_lines = []
+
+    overrides_by_marker = {}
+    for raw_override in extracted.get("marker_overrides", []):
+        match = markers_reference_lookup(raw_override.get("marker", ""))
+        if match is None:
+            continue
+        canonical, _ = match
+        lo, hi = raw_override.get("lo"), raw_override.get("hi")
+        if lo is None or hi is None:
+            continue
+        overrides_by_marker[canonical] = (lo, hi)
 
     for raw in extracted.get("markers", []):
         match = markers_reference_lookup(raw["name"])
@@ -300,16 +320,34 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             ))
             continue
         canonical, cfg = match
-        m = Marker(
-            name=canonical, category=cfg["category"], unit=cfg["unit"], kind=cfg["kind"],
-            disp_range=cfg["disp_range"],
-            optimal=cfg.get("optimal"), moderate=cfg.get("moderate"), direction=cfg.get("direction"),
-            lo=cfg.get("lo"), hi=cfg.get("hi"),
-            then=raw.get("then"), now=raw.get("now"),
-            disp_then=raw.get("disp_then"), disp_now=raw.get("disp_now"),
-            is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
-            full_history=raw.get("full_history", []),
-        )
+        cfg = resolve_marker_config(canonical, cfg, patient_sex)
+        override = overrides_by_marker.get(canonical)
+        if override is not None:
+            lo, hi = override
+            # Provider-note override always scores as a "range" band around the stated optimal
+            # window, regardless of the marker's normal scoring kind - it replaces the default
+            # threshold for this one patient/marker only, never the library default itself.
+            m = Marker(
+                name=canonical, category=cfg["category"], unit=cfg["unit"], kind="range",
+                disp_range=f"{lo}\u2013{hi} (provider override)",
+                lo=lo, hi=hi,
+                then=raw.get("then"), now=raw.get("now"),
+                disp_then=raw.get("disp_then"), disp_now=raw.get("disp_now"),
+                is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
+                full_history=raw.get("full_history", []),
+            )
+            override_log_lines.append(f"OVERRIDE APPLIED: {canonical} range set to {lo}-{hi} per provider note")
+        else:
+            m = Marker(
+                name=canonical, category=cfg["category"], unit=cfg["unit"], kind=cfg["kind"],
+                disp_range=cfg["disp_range"],
+                optimal=cfg.get("optimal"), moderate=cfg.get("moderate"), direction=cfg.get("direction"),
+                lo=cfg.get("lo"), hi=cfg.get("hi"),
+                then=raw.get("then"), now=raw.get("now"),
+                disp_then=raw.get("disp_then"), disp_now=raw.get("disp_now"),
+                is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
+                full_history=raw.get("full_history", []),
+            )
         scoring.attach_scores(m)   # computes now_tier/then_tier/pct in place — pure math, no AI
         markers.append(m)
 
@@ -331,6 +369,10 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
 
     pain_points = [PainPoint(text=p["text"], categories=p.get("categories", []))
                    for p in extracted.get("pain_points", [])]
+
+    if override_log_lines:
+        with open("/tmp/extraction_completeness_log.txt", "a", encoding="utf-8") as log:
+            log.write("\n".join(override_log_lines) + "\n")
 
     record = PatientRecord(
         name=extracted["name"], age=extracted.get("age"), sex=extracted.get("sex"),

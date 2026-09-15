@@ -45,6 +45,22 @@ library provided to you, still use the reference library's scoring configuration
 reviewed standard this pipeline runs on) — but note the discrepancy in "other_notes" so a human can review it \
 if it's meaningful, rather than silently overriding either source.
 
+EXTRACTING PER-PATIENT PROVIDER-NOTE RANGE OVERRIDES — this requires the same never-infer discipline as \
+everything else, applied strictly:
+- If, and only if, the provider's note states an EXPLICIT, unambiguous numeric range clearly tied to one \
+named marker from the recognized list (e.g. "target testosterone 400-600", "optimal range for this patient's \
+TSH: 1.0-2.0"), include it in "marker_overrides" as {"marker": "<exact recognized marker name>", "lo": 400, \
+"hi": 600}. This overrides the library's default threshold for this one patient's one marker only — it never \
+changes the library default for any other patient.
+- A vague or general mention ("keep an eye on his testosterone", "watch her thyroid levels") is NOT an \
+override. It must NOT produce a marker_overrides entry, no matter how clinically suggestive it sounds.
+- If you are not fully confident the note states an actual explicit numeric range for a specific recognized \
+marker, leave it out of "marker_overrides" entirely and let the library default apply. An omitted override is \
+the normal, safe, expected outcome — it is never a failure. A wrongly invented override is a failure, even if \
+it turns out to be clinically reasonable.
+- Never infer an override from a lab-reported reference range on the source PDF itself — only the provider's \
+note, stated as this patient's individually intended target, qualifies.
+
 EXTRACTING DEXA:
 - Extract every distinct scan date found, with total mass, fat mass, lean mass, and body fat percentage for \
 each. If a given scan includes a visceral fat (VAT) reading, include it for that date specifically — if a \
@@ -103,6 +119,7 @@ OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
     "pain_points": [
         {"text": "plain synthesized statement, no quotation marks", "categories": ["Structure", "Fuel"]}
     ],
+    "marker_overrides": [],
     "unrecognized_markers": [],
     "other_notes": []
 }
@@ -112,6 +129,7 @@ CRITICAL RULES, apply to every patient this runs on, not just the current one:
 - If TWO DEXA PDFs are provided, they must both be read, and dexa_history must contain every distinct scan date found across BOTH documents, not just the first one. A DEXA PDF may itself contain multiple historical scan dates in a table — extract every row, not just the most recent.
 - Read the ENTIRE provider's note for both protocol items and pain points — do not stop after the first paragraph. Every compound the note names goes into "protocol". Any patient-stated concern or goal, anywhere in the note, produces a "pain_points" entry.
 - "then", "vat_fat_mass_lb", "first_draw_date" are the only fields that should ever be null — every other field must be filled from the actual source material when that material was provided.
+- "marker_overrides" should be an empty list in the ordinary case — it is only ever populated when the provider's note states an explicit, unambiguous numeric range tied to a specific recognized marker (see rules above). Do not populate it from a vague mention or from the lab's own printed reference range.
 - If a whole section has genuinely no source material at all (e.g. no DEXA PDF provided), return that key as an empty list — never omit the key, and never partially fill it from only some of the available source material.
 - Numbers must be actual JSON numbers (170.5), not strings ("170.5").
 - This schema and these rules apply identically to every patient's data run through this pipeline — never adjust field names or structure based on what a specific patient's documents contain.

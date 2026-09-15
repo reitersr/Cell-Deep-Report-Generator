@@ -105,8 +105,17 @@ MARKER_LIBRARY = {
     "Estradiol": dict(category="Hormones", unit="pg/mL", kind="range",
         lo=15, hi=350, disp_range="phase-dependent",
         aliases=["estradiol", "e2"]),
+    # Sex-conditional default range. Male default (500-900 ng/dL) sourced from a functional-medicine
+    # reference range via web research, NOT confirmed against CellDeep's own clinical protocol -
+    # this is a placeholder pending clinical staff review, not a finalized threshold.
+    # Female default (2-45) is the pre-existing, already-calibrated value - left unchanged.
     "Testosterone, Total": dict(category="Hormones", unit="ng/dL", kind="range",
-        lo=2, hi=45, disp_range="2\u201345",
+        disp_range="sex-specific default (see sex_variants)",
+        default_sex="female",  # fallback used only if sex is missing/unrecognized - preserves prior behavior
+        sex_variants={
+            "male": dict(lo=500, hi=900, disp_range="500\u2013900"),
+            "female": dict(lo=2, hi=45, disp_range="2\u201345"),
+        },
         aliases=["testosterone", "testosterone, total", "total testosterone"]),
 
     # ---- Thyroid ----
@@ -179,3 +188,42 @@ def lookup_marker(raw_name: str):
         if q in [a.lower() for a in cfg.get("aliases", [])]:
             return canonical, cfg
     return None
+
+
+def resolve_marker_config(canonical: str, cfg: dict, sex: str | None) -> dict:
+    """Resolve a marker's threshold config for a specific patient's sex.
+
+    Only markers with a "sex_variants" entry (currently: Testosterone, Total) branch on sex —
+    every other marker is returned unchanged. If sex is missing/unrecognized, falls back to the
+    marker's "default_sex" variant rather than guessing which sex to apply - this preserves the
+    pipeline's pre-existing single-range behavior instead of inferring a sex that wasn't provided.
+    """
+    variants = cfg.get("sex_variants")
+    if not variants:
+        return cfg
+    key = sex.strip().lower() if isinstance(sex, str) else None
+    if key not in variants:
+        key = cfg.get("default_sex", next(iter(variants)))
+    resolved = dict(cfg)
+    resolved.update(variants[key])
+    return resolved
+
+
+# ---- Sex-conditional audit (per request) ----
+# Full library reviewed for other markers that, like Testosterone, show signs of being
+# single-range/female-oriented rather than genuinely sex-neutral:
+#   - Estradiol (lo=15, hi=350, disp_range="phase-dependent"): this range and its explicit
+#     "phase-dependent" label describe the female menstrual cycle: it is not a male reference
+#     range. Male estradiol reference ranges are meaningfully different/narrower. Flagged for a
+#     future sex_variants split, but NOT implemented here - no researched male default was
+#     provided for this task, and inventing one would violate the same never-infer discipline
+#     this fix is meant to enforce. Needs a clinically-sourced male value before implementing.
+#   - DHEA-S (lo=60.9, hi=337.0): reference ranges for DHEA-S differ by sex (and meaningfully by
+#     age). Current single range looks adult-female-oriented. Same as above: flagged, not
+#     implemented, pending a clinically-sourced male default.
+#   - Ferritin (lo=15, hi=150): commonly given as a lower range for menstruating women than for
+#     men (men often reference up to ~300-400). Flagged, not implemented, pending a
+#     clinically-sourced male default.
+# None of these three were changed in this pass. They are documented here so clinical staff can
+# decide whether/what sex-specific defaults to add, the same way Testosterone's male default
+# still needs their sign-off before being treated as final.
