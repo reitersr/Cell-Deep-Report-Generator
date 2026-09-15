@@ -361,7 +361,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
                 full_history=raw.get("full_history", []),
             )
-        scoring.attach_scores(m)   # computes now_tier/then_tier/pct in place — pure math, no AI
+        scoring.attach_scores(m, sex=patient_sex)   # computes now_tier/then_tier/pct in place — pure math, no AI
         markers.append(m)
 
     dexa_history = [DexaReading(**scoring.normalize_dexa_body_fat(d))
