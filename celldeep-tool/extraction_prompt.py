@@ -83,6 +83,11 @@ plan — the correct output is an empty pain_points list. This is a normal, vali
 failure. Do not manufacture a plausible-sounding concern to fill the gap.
 - Extract protocol items exactly as named, with whatever cadence is stated. If cadence isn't stated for a \
 given item, leave it null rather than guessing "daily" by default.
+- A compound merely named as a candidate, goal, or consideration - even if listed immediately above or near a \
+sentence like 'elected to start with the following' - must NOT be extracted as an active protocol item unless the \
+note explicitly states that specific compound is what's being started. Example: if a note reads \
+'Testosterone (long-term goal). Patient elected to start with the following peptide and SERM,' only the peptide and \
+SERM are active protocol items - Testosterone is not, because it was never explicitly named as what's being started.
 
 OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
 
