@@ -259,7 +259,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .grid{{margin-bottom:3px;}}
 .grid-row{{display:flex; gap:7px; margin-bottom:5px;}}
 .grid-row .box{{flex:1; min-width:0;}}
-.box{{border:1.5px solid var(--c); border-top:4px solid var(--c); border-radius:9px; padding:7px 12px 8px; background:var(--c-bg); position:relative; overflow:hidden;}}
+.box{{border:1.5px solid var(--c); border-top:4px solid var(--c); border-radius:9px; padding:7px 12px 8px; background:var(--c-bg); position:relative; overflow:hidden; break-inside:avoid; page-break-inside:avoid;}}
 .box-top{{display:flex; align-items:center; gap:9px; position:relative; z-index:2;}}
 .box-icon{{width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex:none; background:#fff; color:var(--c); border:2px solid var(--c);}}
 .box-titles{{flex:1;}}
