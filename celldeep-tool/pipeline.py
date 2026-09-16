@@ -135,7 +135,7 @@ def _write_review_notes(patient_name: str, notice: ExtractionReviewNotice) -> st
     return path
 
 
-def _parse_json_response(text):
+def _parse_json_response(text, patient_name=None):
     text = text.strip()
     if text.startswith("```"):
         text = text.split("```")[1]
@@ -147,8 +147,17 @@ def _parse_json_response(text):
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        repaired = repair_json(text)
-        return json.loads(repaired)
+        try:
+            repaired = repair_json(text)
+            return json.loads(repaired)
+        except ValueError:
+            # json.JSONDecodeError is itself a ValueError, so this also covers a
+            # failed re-parse of the "repaired" text, not just repair_json() itself.
+            log_line = (f"ERROR: JSON parse failure for patient={patient_name or 'unknown'} "
+                        f"raw_length={len(text)} first_200={text[:200]!r}")
+            with open("/tmp/extraction_completeness_log.txt", "a", encoding="utf-8") as log:
+                log.write(log_line + "\n")
+            raise ValueError("Extraction produced unparseable output - please retry") from None
 
 
 def _pdf_content_block(path: str) -> dict:
@@ -259,7 +268,8 @@ def _protocol_library_summary() -> str:
     return "\n".join(lines)
 
 
-def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None) -> dict:
+def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
+            patient_name: str | None = None) -> dict:
     """Step 1: raw material in, structured (but not yet scored or written) JSON out."""
     content = []
     if labs_pdf:
@@ -281,7 +291,7 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
     raw_text = "".join(text_blocks)
     with open("/tmp/last_extraction_raw.txt", "w") as f:
         f.write(raw_text)
-    return _parse_json_response(raw_text)
+    return _parse_json_response(raw_text, patient_name=patient_name)
 
 
 def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionReviewNotice]:
@@ -425,7 +435,7 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> dict:
     raw_text = "".join(text_blocks)
     with open("/tmp/pre_sanitize_copy.json", "w", encoding="utf-8") as f:
         f.write(raw_text)
-    return _parse_json_response(raw_text)
+    return _parse_json_response(raw_text, patient_name=record.name)
 
 
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
@@ -434,7 +444,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
     raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
 
     print("Step 1/3: extracting raw material...")
-    extracted = extract(client, labs_pdf, dexa_pdfs, note_text)
+    extracted = extract(client, labs_pdf, dexa_pdfs, note_text, patient_name=patient_name)
     extracted.setdefault("name", patient_name)
     extracted.setdefault("age", age)
     extracted.setdefault("sex", sex)
