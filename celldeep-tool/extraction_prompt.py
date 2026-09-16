@@ -89,6 +89,20 @@ note explicitly states that specific compound is what's being started. Example: 
 'Testosterone (long-term goal). Patient elected to start with the following peptide and SERM,' only the peptide and \
 SERM are active protocol items - Testosterone is not, because it was never explicitly named as what's being started.
 
+HANDLING RAW, MESSY REAL-WORLD FORMATTING — provider notes are frequently pasted directly from a pharmacy or \
+EHR export, not cleaned up first. Malformed formatting is expected and normal; treat it calmly, per NEVER \
+INFER, rather than crashing or guessing:
+- If two dates appear concatenated with no separator between them (e.g. "09/11/2610/11/26"), do not attempt \
+to guess where one date ends and the next begins. Treat that date field as unavailable/null for that item — \
+this is the same NEVER INFER rule as everywhere else, just called out explicitly for this specific pattern.
+- If a field contains only a placeholder such as "[See Sig]", "[See attached]", or similar bracketed \
+placeholder text with no actual value behind it, treat that field as null. Do not include the placeholder \
+text itself as if it were real data.
+- Pharmacy/EHR dosing shorthand (extra pipe "|" characters used as separators, mixed capitalization, cadence \
+abbreviations like "QD", "QOD", "BID", cycle notation like "X8" or "x 8 weeks") is normal real-world \
+formatting, not an error to reject. Extract the protocol name and whatever dosing/cadence information is \
+actually present as accurately as possible despite this surrounding noise.
+
 OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
 
 {
