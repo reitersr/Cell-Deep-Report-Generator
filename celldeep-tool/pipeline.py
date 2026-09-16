@@ -35,7 +35,7 @@ from markers_reference import (MARKER_LIBRARY, DATA_TO_PATIENT_CATEGORY, NARRATI
                                 resolve_marker_config, has_missing_thresholds)
 from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
 from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
-from extraction_prompt import EXTRACTION_SYSTEM_PROMPT, build_extraction_user_message
+from extraction_prompt import EXTRACTION_SYSTEM_PROMPT, EXTRACTION_OUTPUT_SCHEMA, build_extraction_user_message
 from generation_prompt import GENERATION_SYSTEM_PROMPT
 import scoring
 import template
@@ -144,6 +144,13 @@ def _parse_json_response(text, patient_name=None):
         text = text.strip()
     if not text:
         return {}
+    if not text.startswith("{"):
+        # Model prefaced the JSON with reasoning/prose despite instructions not to - salvage the
+        # actual object rather than feeding the whole prose blob to the parser/repair library.
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start:end + 1]
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -286,6 +293,7 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         max_tokens=16000,
         system=EXTRACTION_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": content}],
+        output_config={"format": {"type": "json_schema", "schema": EXTRACTION_OUTPUT_SCHEMA}},
     )
     text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
     raw_text = "".join(text_blocks)

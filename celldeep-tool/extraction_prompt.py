@@ -19,6 +19,11 @@ material, the correct output is leaving that field empty or null — never a bes
 never filling a gap because it seems likely. A missing value is an honest, expected, and completely normal \
 result. An invented value is a failure, even if it turns out to be correct by luck.
 
+Do not write any reasoning, explanation, or commentary before or after the JSON object. Output ONLY the \
+JSON object itself, starting with { and ending with }. Any reasoning about how to map draws, reconcile \
+multiple lab sources, or handle ambiguous values must happen silently — it must never appear as text in the \
+response.
+
 You will be given:
 1. A list of RECOGNIZED MARKER NAMES (with common aliases) — the clinical reference library this pipeline \
 already knows how to score. Match whatever the lab PDF actually calls a marker against this list, \
@@ -39,6 +44,14 @@ EXTRACTING BLOODWORK:
 chronological order if multiple draws exist. If only one draw exists for a given marker, that's a normal, \
 expected "first reading" case — do not treat it as missing data, and never invent a "then" value to pair \
 with it.
+- A patient may have any number of draws (not just one or two) and may have labs from more than one lab \
+source (e.g. Cleveland HeartLab and Quest Diagnostics for the same patient). This is normal, not a special \
+case requiring extra reasoning. Regardless of how many draws or sources exist for a marker: "then" is always \
+the earliest available reading, "now" is always the most recent available reading, and every reading in \
+between (if any) goes into that marker's "full_history" list, in chronological order, as \
+{"date_display": ..., "value": ..., "disp_value": ...} objects — never omitted, never merged, never \
+averaged across sources. If a marker only has the then/now pair with nothing in between, "full_history" is \
+simply an empty list; that is the normal case.
 - Extract dates exactly as printed on the source document. Do not reformat, estimate, or round a date.
 - If a marker's reference range is stated differently on this specific lab report than in the reference \
 library provided to you, still use the reference library's scoring configuration (it is the clinically \
@@ -119,7 +132,8 @@ OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
             "disp_then": "3.1",
             "disp_now": "0.7",
             "is_good_then": null,
-            "is_good_now": null
+            "is_good_now": null,
+            "full_history": []
         }
     ],
     "dexa_history": [
@@ -155,6 +169,131 @@ CRITICAL RULES, apply to every patient this runs on, not just the current one:
 
 Return ONLY this JSON object. No markdown fences, no prose before or after, no explanation.
 """
+
+# Enforced via the API's structured-output (output_config.format) feature in pipeline.py, so the
+# model literally cannot emit prose before/after the JSON — a belt-and-suspenders backstop to the
+# "no reasoning" instruction above, not a replacement for it.
+_NULLABLE_STRING = {"type": ["string", "null"]}
+_NULLABLE_NUMBER = {"type": ["number", "null"]}
+_NULLABLE_BOOL = {"type": ["boolean", "null"]}
+
+EXTRACTION_OUTPUT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "name": _NULLABLE_STRING,
+        "age": {"type": ["integer", "null"]},
+        "sex": _NULLABLE_STRING,
+        "first_draw_date": _NULLABLE_STRING,
+        "latest_draw_date": _NULLABLE_STRING,
+        "markers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string"},
+                    "then": _NULLABLE_NUMBER,
+                    "now": {"type": "number"},
+                    "disp_then": _NULLABLE_STRING,
+                    "disp_now": {"type": "string"},
+                    "is_good_then": _NULLABLE_BOOL,
+                    "is_good_now": _NULLABLE_BOOL,
+                    "full_history": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "date_display": {"type": "string"},
+                                "value": {"type": "number"},
+                                "disp_value": {"type": "string"},
+                            },
+                            "required": ["date_display", "value", "disp_value"],
+                        },
+                    },
+                },
+                "required": ["name", "then", "now", "disp_then", "disp_now",
+                             "is_good_then", "is_good_now", "full_history"],
+            },
+        },
+        "dexa_history": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "date_display": {"type": "string"},
+                    "total_mass_lb": {"type": "number"},
+                    "fat_mass_lb": {"type": "number"},
+                    "lean_mass_lb": {"type": "number"},
+                    "body_fat_pct": {"type": "string"},
+                    "vat_fat_mass_lb": _NULLABLE_NUMBER,
+                },
+                "required": ["date_display", "total_mass_lb", "fat_mass_lb", "lean_mass_lb",
+                             "body_fat_pct", "vat_fat_mass_lb"],
+            },
+        },
+        "protocol": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string"},
+                    "cadence": _NULLABLE_STRING,
+                    "target_categories": {"type": "array", "items": {"type": "string"}},
+                    "lab_visible": {"type": "boolean"},
+                },
+                "required": ["name", "cadence", "target_categories", "lab_visible"],
+            },
+        },
+        "pain_points": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "text": {"type": "string"},
+                    "categories": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["text", "categories"],
+            },
+        },
+        "marker_overrides": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "marker": {"type": "string"},
+                    "lo": {"type": "number"},
+                    "hi": {"type": "number"},
+                },
+                "required": ["marker", "lo", "hi"],
+            },
+        },
+        "unrecognized_markers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "raw_name": {"type": "string"},
+                    "raw_value": {"type": "string"},
+                    "raw_unit": _NULLABLE_STRING,
+                    "raw_range": _NULLABLE_STRING,
+                    "source_context": _NULLABLE_STRING,
+                },
+                "required": ["raw_name", "raw_value", "raw_unit", "raw_range", "source_context"],
+            },
+        },
+        "other_notes": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["name", "age", "sex", "first_draw_date", "latest_draw_date", "markers",
+                 "dexa_history", "protocol", "pain_points", "marker_overrides",
+                 "unrecognized_markers", "other_notes"],
+}
 
 
 def build_extraction_user_message(marker_library_summary: str, protocol_library_summary: str,
