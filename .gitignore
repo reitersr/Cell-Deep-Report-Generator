@@ -1,2 +1,4 @@
 __pycache__/
 *.pyc
+celldeep-tool/synthetic_fixtures/*.pdf
+celldeep-tool/synthetic_fixtures/out/

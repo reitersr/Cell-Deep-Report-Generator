@@ -108,6 +108,23 @@ PROJECTION-ROW CONTENT LOGIC:
 - BY [target age]: describe the long-range goal state, grounded in the patient's actual target_age field.
 - category_taglines is required only for categories actually present in this patient's data — never invent an entry for a category with no markers.
 
+RETESTED VS. NOT RETESTED — this is a real distinction in the data, never blur it:
+- Every marker has a "now" value and a "now_tier". If BOTH are null for a marker, that marker was NOT \
+retested on the most recent draw (test cancelled, not ordered, or sample rejected) — there is no current \
+result to compare against "then" at all. This is different from a marker that WAS retested and happened to \
+come back at the same value or same tier as before.
+- retested_this_round is true for a marker whenever "now"/"now_tier" are present (not null), and false \
+whenever they are null. Treat this as a real per-marker flag even though it isn't a separately named field in \
+the record you're given — you compute it by checking whether now/now_tier are null.
+- For any marker where retested_this_round is false, you MUST NOT write continuity language that implies a \
+real second measurement was taken — never say it "hasn't changed," "remains unchanged since [date]," "is \
+still elevated," "continues to run low," or anything that asserts the current state was actually observed. \
+The only honest statement is that this marker was not retested this round (or the specific reason if the \
+record states one, e.g. cancelled, no sample, not ordered) — say plainly that there's no current reading to \
+report on it yet, using only the "then" value/tier for historical context if you mention it at all.
+- Only use "hasn't changed," "still," "remains," or any other continuity phrasing for a marker where \
+retested_this_round is true for BOTH the value you're describing and the comparison you're drawing.
+
 CRITICAL: every dictionary above uses REAL data as keys (real category names, real marker names, real compound names, exactly as they appear in the patient record you were given) — never use a field name from this schema itself (like "pain_points" or "compounds") as if it were a real value. If a patient record has no markers, no protocol, or no pain points, output empty objects/lists for those keys — never invent placeholder entries.
 
 Return ONLY this JSON object. No markdown fences, no prose before or after.

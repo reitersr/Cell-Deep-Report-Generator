@@ -41,17 +41,28 @@ compound with no explicit category in the note gets an empty target_categories l
 
 EXTRACTING BLOODWORK:
 - For each marker you can match to the reference list, extract every value found in the source, in \
-chronological order if multiple draws exist. If only one draw exists for a given marker, that's a normal, \
-expected "first reading" case — do not treat it as missing data, and never invent a "then" value to pair \
-with it.
+chronological order if multiple draws exist. If a patient has only ever had ONE draw total (no earlier draw \
+exists at all), a marker result from that single draw is a normal, expected "first reading" case — do not \
+treat it as missing data, and never invent a "then" value to pair with it.
 - A patient may have any number of draws (not just one or two) and may have labs from more than one lab \
 source (e.g. Cleveland HeartLab and Quest Diagnostics for the same patient). This is normal, not a special \
-case requiring extra reasoning. Regardless of how many draws or sources exist for a marker: "then" is always \
-the earliest available reading, "now" is always the most recent available reading, and every reading in \
-between (if any) goes into that marker's "full_history" list, in chronological order, as \
-{"date_display": ..., "value": ..., "disp_value": ...} objects — never omitted, never merged, never \
-averaged across sources. If a marker only has the then/now pair with nothing in between, "full_history" is \
-simply an empty list; that is the normal case.
+case requiring extra reasoning. "then" and "now" must always be anchored to actual DRAWS/DATES, not just to \
+whichever readings happen to exist for a marker: "then" is the reading from the patient's EARLIEST draw \
+date, and "now" is the reading from the patient's LATEST/most recent draw date specifically — never simply \
+"whichever reading exists." Every reading from any draw in between goes into that marker's "full_history" \
+list, in chronological order, as {"date_display": ..., "value": ..., "disp_value": ...} objects — never \
+omitted, never merged, never averaged across sources. If a marker only has the then/now pair with nothing in \
+between, "full_history" is simply an empty list; that is the normal case.
+- CRITICAL — DO NOT COLLAPSE A MISSING LATEST-DRAW RESULT INTO "now": if a marker was tested on an earlier \
+draw but the source material shows that marker was NOT run on the most recent draw (cancelled, not ordered, \
+no sample received, degenerated sample, or the marker's section is simply absent from that draw's results, \
+even though other markers from that same draw ARE present and were run), the correct output is "now": null \
+(and "disp_now": "" — an empty string, the closest this field can express to null) with "then" holding the \
+earlier value — never repeat, copy, or carry the earlier \
+value forward into "now" just because it is the only value available. A missing result on the latest draw is \
+an honest null, not a reason to shift an older reading into the "now" slot. This applies per-marker: it is \
+normal and expected for some markers on a given draw to have results while others on that exact same draw do \
+not.
 - Extract dates exactly as printed on the source document. Do not reformat, estimate, or round a date.
 - If a marker's reference range is stated differently on this specific lab report than in the reference \
 library provided to you, still use the reference library's scoring configuration (it is the clinically \
@@ -161,7 +172,8 @@ CRITICAL RULES, apply to every patient this runs on, not just the current one:
 - Include one entry in "markers" for EVERY marker found in the lab PDF that matches a name on the recognized list, even if it only has a "now" value and no "then". Do not skip markers. Do not summarize or sample — every match goes in.
 - If TWO DEXA PDFs are provided, they must both be read, and dexa_history must contain every distinct scan date found across BOTH documents, not just the first one. A DEXA PDF may itself contain multiple historical scan dates in a table — extract every row, not just the most recent.
 - Read the ENTIRE provider's note for both protocol items and pain points — do not stop after the first paragraph. Every compound the note names goes into "protocol". Any patient-stated concern or goal, anywhere in the note, produces a "pain_points" entry.
-- "then", "vat_fat_mass_lb", "first_draw_date" are the only fields that should ever be null — every other field must be filled from the actual source material when that material was provided.
+- "then", "now", "disp_then", "vat_fat_mass_lb", "first_draw_date" are the only marker/dexa fields that may be JSON null, and each is null exactly when that specific draw genuinely has no result for that marker (or, for "then"/"first_draw_date", when no earlier draw exists at all) — never fill one from the other, and every other field must be filled from the actual source material when that material was provided.
+- "disp_now" cannot be JSON null (a schema constraint, not a data one): when "now" is null, set "disp_now" to an empty string "" rather than null or a fabricated display value. An empty "disp_now" means exactly the same thing as a null "now" — no result for this marker on the latest draw — never put any text there in that case.
 - "marker_overrides" should be an empty list in the ordinary case — it is only ever populated when the provider's note states an explicit, unambiguous numeric range tied to a specific recognized marker (see rules above). Do not populate it from a vague mention or from the lab's own printed reference range.
 - If a whole section has genuinely no source material at all (e.g. no DEXA PDF provided), return that key as an empty list — never omit the key, and never partially fill it from only some of the available source material.
 - Numbers must be actual JSON numbers (170.5), not strings ("170.5").
@@ -194,8 +206,13 @@ EXTRACTION_OUTPUT_SCHEMA = {
                 "properties": {
                     "name": {"type": "string"},
                     "then": _NULLABLE_NUMBER,
-                    "now": {"type": "number"},
+                    "now": _NULLABLE_NUMBER,
                     "disp_then": _NULLABLE_STRING,
+                    # Not _NULLABLE_STRING here on purpose: the API's strict structured-output
+                    # grammar compiler rejects this schema as "too large" once both now and
+                    # disp_now are nullable unions. now (the real signal scoring/rendering use)
+                    # stays nullable; disp_now stays a plain required string and the prompt
+                    # instructs the model to use "" (not a fabricated value) when now is null.
                     "disp_now": {"type": "string"},
                     "is_good_then": _NULLABLE_BOOL,
                     "is_good_now": _NULLABLE_BOOL,

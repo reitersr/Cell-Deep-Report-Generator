@@ -40,8 +40,10 @@ def normalize_dexa_body_fat(dexa_data: dict) -> dict:
 
 
 def score_bounded(value: float, direction: str, optimal: float, moderate: float):
-    if value is None or optimal is None or moderate is None:
-        return None, "unscored"
+    if optimal is None or moderate is None:
+        return None, "unscored"  # data error: reference library config is incomplete
+    if value is None:
+        return None, None  # normal: this draw simply has no result for this marker
     if direction == "lower":
         if value <= optimal:
             frac = 0 if optimal == 0 else value / optimal
@@ -74,6 +76,10 @@ def score_bounded(value: float, direction: str, optimal: float, moderate: float)
 def score_range(value: float, lo: float, hi: float):
     """Corrected during calibration: previously always returned 'normal' (the source of the
     'no gray ever' bug). Now buckets by distance from center, same as every other marker."""
+    if lo is None or hi is None:
+        return None, "unscored"  # data error: reference library config is incomplete
+    if value is None:
+        return None, None  # normal: this draw simply has no result for this marker
     mid = (lo + hi) / 2
     half = (hi - lo) / 2
     if half <= 0:
@@ -89,7 +95,9 @@ def score_range(value: float, lo: float, hi: float):
     return round(pct), tier
 
 
-def score_categorical(is_good: bool):
+def score_categorical(is_good: bool | None):
+    if is_good is None:
+        return None, None  # normal: this draw simply has no result for this marker
     return (96, "optimal") if is_good else (55, "moderate")
 
 
@@ -110,8 +118,8 @@ def attach_scores(m: Marker, sex: str | None = None) -> None:
         now_pct, now_tier = score_range(m.now, m.lo, m.hi)
         then_pct, then_tier = (score_range(m.then, m.lo, m.hi) if m.then is not None else (None, None))
     else:  # categorical
-        now_pct, now_tier = score_categorical(bool(m.is_good_now))
-        then_pct, then_tier = (score_categorical(bool(m.is_good_then))
+        now_pct, now_tier = score_categorical(m.is_good_now)
+        then_pct, then_tier = (score_categorical(m.is_good_then)
                                 if m.is_good_then is not None else (None, None))
 
     m.now_pct, m.now_tier = now_pct, now_tier
@@ -122,7 +130,7 @@ def category_rollup(markers_for_category: list[Marker]) -> dict:
     """Averages now_pct/then_pct across a patient-facing category's markers to get the
     box-level score, then buckets that average into optimal/moderate/flag using the same
     thresholds the box color logic uses (band: >=88 optimal, >=50 moderate, else flag)."""
-    now_vals = [m.now_pct for m in markers_for_category]
+    now_vals = [m.now_pct for m in markers_for_category if m.now_pct is not None]
     then_vals = [m.then_pct for m in markers_for_category if m.then_pct is not None]
     now_score = round(sum(now_vals) / len(now_vals)) if now_vals else 50
     then_score = round(sum(then_vals) / len(then_vals)) if then_vals else None

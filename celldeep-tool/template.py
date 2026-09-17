@@ -486,12 +486,17 @@ def protocol_section(record: PatientRecord, roll, copy):
 
 
 def bio_row_tr(m, copy, color_override=None):
-    color = color_override or TIER_COLOR.get(m.now_tier, MUTE)
+    not_retested = m.now_tier is None  # no result for this marker on the latest draw, not a real comparison
+    if not_retested:
+        color = MUTE
+        tier_word = "Not retested"
+    else:
+        color = color_override or TIER_COLOR.get(m.now_tier, MUTE)
+        tier_word = {"optimal": "Optimal", "moderate": "Moderate", "flag": "Flagged"}[m.now_tier]
     bg = f"{color}22"
     unit = f' <span class="bio-unit">{m.unit}</span>' if m.unit else ""
     note = copy.get("marker_notes", {}).get(m.name)
     what = copy.get("marker_what", {}).get(m.name)
-    tier_word = {"optimal": "Optimal", "moderate": "Moderate", "flag": "Flagged"}.get(m.now_tier, "Optimal")
     if m.then is not None:
         then_color = TIER_COLOR.get(m.then_tier, YELLOW)
         then_cell = f'<span class="bio-pill" style="background:{then_color}22; color:{then_color};">{fmt(m.disp_then)}</span>'
