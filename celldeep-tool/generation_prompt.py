@@ -107,6 +107,10 @@ PROJECTION-ROW CONTENT LOGIC:
 - NEXT 90 DAYS: name which specific system is expected to change tier and why, grounded in real trend direction already in the data. Never invent a specific re-test date the source data doesn't support — describe the expected change without a date if no date is known.
 - BY [target age]: describe the long-range goal state, grounded in the patient's actual target_age field.
 - category_taglines is required only for categories actually present in this patient's data — never invent an entry for a category with no markers.
+- box_stories/box_forward/headlines must have an entry for all seven category keys even when a category has \
+zero markers this round — write it as a short, plain statement that there's nothing to report for that \
+system yet (e.g. "No markers in this category this round."). Never output JSON null or omit the key for a \
+category with no markers.
 
 RETESTED VS. NOT RETESTED — this is a real distinction in the data, never blur it:
 - Every marker has a "now" value and a "now_tier". If BOTH are null for a marker, that marker was NOT \

@@ -363,14 +363,18 @@ def box_html(patient_cat, roll, copy, record, logo_mark):
     color = TIER_COLOR[display_zone]
     badge = f'<div class="box-badge">{CHECK}</div>' if r["improved"] else ""
     tier_word = "FLAGGED" if display_zone == "flag" else ("MODERATE" if display_zone == "moderate" else "ON TRACK")
-    story = copy.get("box_stories", {}).get(patient_cat, "")
+    # generation step may emit JSON null (not a missing key) for an empty category - .get(key) or ""
+    # catches that, since a plain default only covers the key-missing case
+    story = copy.get("box_stories", {}).get(patient_cat) or ""
+    if not story and r.get("count", 1) == 0:
+        story = "No markers in this category this round."
     why_lines = f'<span class="box-tierword" style="color:{color}">{tier_word}.</span> {story}'
-    forward = copy.get("box_forward", {}).get(patient_cat, "")
-    headline = copy.get("headlines", {}).get(patient_cat, "")
+    forward = copy.get("box_forward", {}).get(patient_cat) or ""
+    headline = copy.get("headlines", {}).get(patient_cat) or ""
     pain = next((p for p in record.pain_points if patient_cat in p.categories), None)
     quote_html = ""
     if pain:
-        maint = copy.get("pain_point_maintenance", {}).get(patient_cat, "")
+        maint = copy.get("pain_point_maintenance", {}).get(patient_cat) or ""
         quote_html = f'<div class="box-quote"><span class="box-quote-lbl">At first visit:</span> {pain.text} {maint}</div>'
     return f'''<div class="box avoid" style="--c:{color}; --c-bg:{color}14;">
       <div class="box-top">

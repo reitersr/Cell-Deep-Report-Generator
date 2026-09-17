@@ -159,7 +159,7 @@ def category_rollup(markers_for_category: list[Marker]) -> dict:
         display_zone = now_zone
 
     return dict(now=now_score, then=then_score, now_zone=display_zone, then_zone=then_zone,
-                improved=improved, weak=weak)
+                improved=improved, weak=weak, count=len(markers_for_category))
 
 
 def _tier_rank(tier: str) -> int:
