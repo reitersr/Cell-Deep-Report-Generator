@@ -21,9 +21,9 @@ def test_male_default_range():
     }
     record, _ = score_and_build_record(extracted)
     marker = _testosterone_marker(record)
-    assert (marker.lo, marker.hi) == (500, 900)
+    assert (marker.lo, marker.hi) == (600, 900)
     assert marker.now_tier == "optimal"
-    print("PASS: male default range (500-900) applied")
+    print("PASS: male default range (600-900) applied")
 
 
 def test_female_default_range_unchanged():
@@ -65,7 +65,7 @@ def test_vague_mention_no_override():
     }
     record, _ = score_and_build_record(extracted)
     marker = _testosterone_marker(record)
-    assert (marker.lo, marker.hi) == (500, 900)
+    assert (marker.lo, marker.hi) == (600, 900)
     log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
     assert "OVERRIDE APPLIED" not in log
     print("PASS: vague note mention produces no override; default male range applies")
@@ -79,7 +79,7 @@ def test_sex_abbreviation_resolves_to_male():
     }
     record, _ = score_and_build_record(extracted)
     marker = _testosterone_marker(record)
-    assert (marker.lo, marker.hi) == (500, 900)
+    assert (marker.lo, marker.hi) == (600, 900)
     print("PASS: sex abbreviation 'M' resolves to the male default range")
 
 
@@ -99,12 +99,15 @@ def test_missing_threshold_excludes_marker_without_crashing():
             ],
         }
         record, notice = score_and_build_record(extracted)  # must not raise
-        assert all(m.name != broken_name for m in record.markers)
+        broken_marker = next(m for m in record.markers if m.name == broken_name)
+        assert broken_marker.now == 50
+        assert broken_marker.now_tier == "unscored"
+        assert broken_marker.unscored_reason == "missing_threshold"
         assert _testosterone_marker(record) is not None
         log = log_path.read_text(encoding="utf-8")
-        assert f"ERROR: missing threshold for {broken_name} / male - marker excluded from scoring" in log
+        assert f"ERROR: missing threshold for {broken_name} / male - marker retained as unscored" in log
         assert any("missing threshold" in note for note in notice.other_notes)
-        print("PASS: marker with a missing threshold is excluded and logged, report still completes")
+        print("PASS: marker with a missing threshold is retained and logged as unscored")
     finally:
         del MARKER_LIBRARY[broken_name]
 
