@@ -20,7 +20,7 @@ import os
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
-from schema import PatientRecord
+from schema import PatientRecord, DexaReading
 import scoring
 from markers_reference import DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
 
@@ -407,11 +407,29 @@ def _default_structure_headline(record: PatientRecord) -> str:
     return "Body composition tracked across your DEXA scan history."
 
 
+def _is_complete_dexa_reading(d: DexaReading) -> bool:
+    """A partial scan (e.g. a VAT-only follow-up, see scoring.normalize_dexa_body_fat) has real
+    None for total/fat/lean mass - it belongs in the full scan history, never as the snapshot
+    "current"/"when you came in" reading, which needs actual body-composition numbers to show."""
+    return d.total_mass_lb is not None and d.fat_mass_lb is not None and d.lean_mass_lb is not None
+
+
+def _first_complete_dexa_reading(dexa_history: list[DexaReading]) -> DexaReading:
+    return next((d for d in dexa_history if _is_complete_dexa_reading(d)), dexa_history[0])
+
+
+def _latest_complete_dexa_reading(dexa_history: list[DexaReading]) -> DexaReading:
+    return next((d for d in reversed(dexa_history) if _is_complete_dexa_reading(d)), dexa_history[-1])
+
+
 def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     if not record.dexa_history:
         return ""
     color = TIER_COLOR["optimal"]
-    first, latest = record.dexa_history[0], record.dexa_history[-1]
+    # chronologically last is not necessarily "current" - a corrupted/partial scan (no total/fat/
+    # lean mass) that happens to sort last must never be picked over an earlier complete scan
+    first = _first_complete_dexa_reading(record.dexa_history)
+    latest = _latest_complete_dexa_reading(record.dexa_history)
     pain = next((p for p in record.pain_points if "Structure" in p.categories), None)
     quote_html = ""
     if pain:

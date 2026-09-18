@@ -298,6 +298,56 @@ def test_structure_headline_uses_real_generated_text_when_present():
 
 
 # ---------------------------------------------------------------------------
+# Issue C: DEXA "current scan" selection picked a corrupted/partial trailing scan instead of the
+# real most recent complete one. Distinct from Issue 2 (a partial scan rendering fabricated
+# zeros) - this is about WHICH scan the snapshot ("Where you are now") panel uses at all.
+# ---------------------------------------------------------------------------
+
+def _evan_walker_dexa_history():
+    # Real dates/VAT values from Evan Walker's actual 7-scan history (established earlier in this
+    # conversation): three trailing VAT-only follow-ups (Jan 27, Feb 18, Feb 27, 2026) sort last
+    # chronologically but have no real body-composition data, and May 28, 2026 - a later, complete
+    # scan - is the true most recent usable reading.
+    return [
+        DexaReading(date_display="Jan 1, 2026", total_mass_lb=170.0, fat_mass_lb=56.0,
+                    lean_mass_lb=110.0, body_fat_pct="33.0%", vat_fat_mass_lb=2.0),
+        DexaReading(**scoring.normalize_dexa_body_fat({
+            "date_display": "Jan 27, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
+            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 1.23,
+        })),
+        DexaReading(**scoring.normalize_dexa_body_fat({
+            "date_display": "Feb 18, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
+            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 0.82,
+        })),
+        DexaReading(**scoring.normalize_dexa_body_fat({
+            "date_display": "Feb 27, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
+            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 0.72,
+        })),
+        DexaReading(date_display="May 28, 2026", total_mass_lb=158.0, fat_mass_lb=42.0,
+                    lean_mass_lb=113.0, body_fat_pct="26.6%", vat_fat_mass_lb=0.6),
+    ]
+
+
+def test_current_dexa_scan_skips_trailing_partial_scans_for_a_real_complete_one():
+    record = PatientRecord(name="Evan Walker DEXA Selection", dexa_history=_evan_walker_dexa_history())
+    latest = template._latest_complete_dexa_reading(record.dexa_history)
+    assert latest.date_display == "May 28, 2026"
+    assert latest.total_mass_lb == 158.0
+
+
+def test_dexa_panel_snapshot_uses_the_real_latest_complete_scan_not_the_last_list_entry():
+    record = PatientRecord(name="Evan Walker DEXA Selection", dexa_history=_evan_walker_dexa_history())
+    roll = {"Structure": {"now": 90}}
+    html = template.dexa_panel(record, _copy_for_render(headlines={"Structure": "Real headline."}), roll, None)
+    assert "Where you are now" in html
+    now_idx = html.find("Where you are now")
+    now_section = html[now_idx:now_idx + 600]
+    assert "May 28, 2026" in now_section
+    assert "42.0" in now_section  # fat mass, lb - real May 28 value, never the trailing partial scan
+    assert "Feb 27, 2026" not in now_section
+
+
+# ---------------------------------------------------------------------------
 # Issue 4: generated copy text losing spacing mid-document
 # ---------------------------------------------------------------------------
 
