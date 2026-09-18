@@ -162,6 +162,14 @@ def _review_notes_path(patient_name: str) -> str:
     return f"/tmp/{safe_name}_review_notes.txt"
 
 
+def _diagnostic_path_prefix(patient_name: str | None) -> str:
+    """A concurrent-request-safe filename stem: the gthread worker config runs multiple requests
+    in the same process at once, and the previous fixed '/tmp/generate_copy_...' filenames could
+    be overwritten mid-request by a second, unrelated report generating at the same time."""
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", (patient_name or "").strip()).strip("._") or "patient"
+    return f"/tmp/{safe_name}"
+
+
 def _write_review_notes(patient_name: str, notice: ExtractionReviewNotice) -> str:
     path = _review_notes_path(patient_name)
     text = format_review_notice(notice)
@@ -656,6 +664,7 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> tuple[dict, list[
                          default=str, indent=2)
     warnings = []
     parsed = {}
+    diag_prefix = _diagnostic_path_prefix(record.name)
     for attempt in range(2):
         resp = client.messages.create(
             model=MODEL,
@@ -668,16 +677,28 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> tuple[dict, list[
         raw_text = "".join(text_blocks)
         with open("/tmp/pre_sanitize_copy.json", "w", encoding="utf-8") as f:
             f.write(raw_text)
-        # per-attempt, never overwritten - the exact raw API response text, untouched by parsing
-        # or detection, so a real-data corruption case can be inspected after the fact instead of
-        # reconstructed from a guess
-        with open(f"/tmp/generate_copy_attempt{attempt}_raw.txt", "w", encoding="utf-8") as f:
+        # per-attempt, per-patient, never overwritten by a concurrent request for a different
+        # patient - the exact raw API response text, untouched by parsing or detection, so a
+        # real-data corruption case can be inspected after the fact instead of reconstructed
+        with open(f"{diag_prefix}_generate_copy_attempt{attempt}_raw.txt", "w", encoding="utf-8") as f:
             f.write(raw_text)
         parsed = _parse_json_response(raw_text, patient_name=record.name)
         corrupted_paths = _find_corrupted_text_paths(parsed)
-        with open("/tmp/generate_copy_detection_log.txt", "a", encoding="utf-8") as log:
-            log.write(f"attempt={attempt} corrupted_paths={corrupted_paths!r}\n")
+        # printed (not just written to /tmp, which is ephemeral per-dyno and not user-visible on
+        # Render) so this shows up in the live service's actual log stream for every real request,
+        # and stop_reason is included since a truncated response (hit max_tokens mid-generation)
+        # is a distinct, rule-out-able cause of malformed text that isn't a spacing bug at all
+        detection_line = (f"COPY-CORRUPTION-DETECTION patient={record.name!r} attempt={attempt} "
+                           f"stop_reason={getattr(resp, 'stop_reason', None)!r} "
+                           f"response_chars={len(raw_text)} corrupted_paths={corrupted_paths!r}")
+        print(detection_line)
+        with open(f"{diag_prefix}_generate_copy_detection_log.txt", "a", encoding="utf-8") as log:
+            log.write(detection_line + "\n")
         if not corrupted_paths:
+            # deliberately NOT added to `warnings`/other_notes: that drives the "a few items need
+            # review" banner in the downloadable notes, and a clean detection pass is not an item
+            # needing review - the stdout/print line above is the trace for this case, visible in
+            # Render's log stream, without turning every ordinary clean report into a false flag
             return parsed, warnings
         if attempt == 0:
             continue  # one resample is usually enough to clear a stochastic formatting glitch
