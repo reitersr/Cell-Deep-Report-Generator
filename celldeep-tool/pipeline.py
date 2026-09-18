@@ -51,6 +51,29 @@ if os.path.exists(".env"):
 MODEL = "claude-sonnet-4-6"
 
 
+def parse_provider_statuses(note_text: str | None) -> tuple[bool | None, bool | None]:
+    """Extract only explicitly stated BHRT and TRT statuses from provider notes."""
+    text = (note_text or "").lower()
+    if not text:
+        return None, None
+
+    postmenopausal = re.search(r"\bpost[- ]?menopausal\b", text)
+    bhrt = re.search(r"\b(?:bhrt|bioidentical hormone replacement|hormone replacement therapy|hormone replacement)\b", text)
+    negative_postmenopausal = re.search(r"\b(?:not|never|pre)[- ]?post[- ]?menopausal\b", text)
+    negative_bhrt = re.search(r"\b(?:not|never)\s+(?:on\s+)?(?:bhrt|hormone replacement(?: therapy)?)\b", text)
+    bhrt_status = True if postmenopausal and bhrt and not negative_postmenopausal and not negative_bhrt else None
+
+    trt = re.search(
+        r"\b(?:on|start(?:ing|ed)?|begin(?:ning)?|active(?:ly on)?)\s+(?:testosterone\s+)?(?:trt|replacement therapy)\b"
+        r"|\btestosterone\s+(?:replacement therapy|injections?|therapy)\s+(?:is\s+)?(?:active|current|started|ongoing)\b"
+        r"|\bon\s+testosterone\s+injections?\b",
+        text,
+    )
+    negative_trt = re.search(r"\b(?:not|never|no longer)\s+(?:on\s+)?(?:trt|testosterone(?: replacement therapy| injections?| therapy))\b", text)
+    on_trt = True if trt and not negative_trt else None
+    return bhrt_status, on_trt
+
+
 def sanitize_text(s: str) -> str:
     s = s.replace(" — ", "; ")
     s = s.replace("—", ", ")
@@ -321,6 +344,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     notice = ExtractionReviewNotice()
     markers = []
     patient_sex = extracted.get("sex")
+    postmenopausal_bhrt, on_trt = parse_provider_statuses(extracted.get("provider_note_raw"))
     scoring_log_lines = []
 
     overrides_by_marker = {}
@@ -343,7 +367,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             ))
             continue
         canonical, cfg = match
-        cfg = resolve_marker_config(canonical, cfg, patient_sex)
+        cfg = resolve_marker_config(canonical, cfg, patient_sex, postmenopausal_bhrt=postmenopausal_bhrt)
         override = overrides_by_marker.get(canonical)
         if override is None and has_missing_thresholds(cfg):
             # Data error in the reference library (or a bad sex resolution) - exclude just this
@@ -379,7 +403,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
                 full_history=raw.get("full_history", []),
             )
-        scoring.attach_scores(m, sex=patient_sex)   # computes now_tier/then_tier/pct in place — pure math, no AI
+        scoring.attach_scores(m, sex=patient_sex, on_trt=on_trt)   # computes now_tier/then_tier/pct in place — pure math, no AI
         if m.now_tier == "unscored":
             # Defense-in-depth: should already be caught by has_missing_thresholds() above, but
             # never let a None threshold that slips through crash the report - skip it instead.
@@ -414,6 +438,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
 
     record = PatientRecord(
         name=extracted["name"], age=extracted.get("age"), sex=extracted.get("sex"),
+        postmenopausal_bhrt=postmenopausal_bhrt, on_trt=on_trt,
         first_draw_date=extracted.get("first_draw_date"), latest_draw_date=extracted.get("latest_draw_date"),
         markers=markers, dexa_history=dexa_history, protocol=protocol, pain_points=pain_points,
         cns_domains=extracted.get("cns_domains"), provider_note_raw=extracted.get("provider_note_raw"),
@@ -456,6 +481,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
     extracted.setdefault("name", patient_name)
     extracted.setdefault("age", age)
     extracted.setdefault("sex", sex)
+    extracted["provider_note_raw"] = note_text
     completeness_notice = verify_extraction_completeness(
         extracted, provider_note_text=note_text or extracted.get("provider_note_raw", ""),
         lab_text=raw_lab_text, dexa_text=raw_dexa_text,

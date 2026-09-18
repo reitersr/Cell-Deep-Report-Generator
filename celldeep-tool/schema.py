@@ -98,6 +98,8 @@ class PatientRecord:
     name: str
     age: Optional[int] = None
     sex: Optional[Literal["male", "female"]] = None
+    postmenopausal_bhrt: Optional[bool] = None  # true only when both conditions are explicit in the note
+    on_trt: Optional[bool] = None               # true only when TRT is explicit in the note
 
     # bloodwork draw dates — may be a single date (first consult) or two (then/now)
     first_draw_date: Optional[str] = None   # None if this IS the first draw

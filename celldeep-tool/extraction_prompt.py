@@ -85,6 +85,14 @@ it turns out to be clinically reasonable.
 - Never infer an override from a lab-reported reference range on the source PDF itself — only the provider's \
 note, stated as this patient's individually intended target, qualifies.
 
+EXTRACTING PROVIDER-NOTE STATUS FLAGS — explicit language only:
+- Set "postmenopausal_bhrt" to true only when the provider note explicitly states BOTH that the patient is \
+postmenopausal and that the patient is on, starting, or receiving BHRT/hormone replacement. Otherwise set it \
+to null. Never infer either condition from age, labs, protocol items, or one condition alone.
+- Set "on_trt" to true only when the provider note explicitly states testosterone replacement therapy, TRT, \
+active testosterone therapy, or testosterone injections as current/starting. Otherwise set it to null. A \
+testosterone mention in a protocol list or as a future goal is not sufficient.
+
 EXTRACTING DEXA:
 - Extract every distinct scan date found, with total mass, fat mass, lean mass, and body fat percentage for \
 each. If a given scan includes a visceral fat (VAT) reading, include it for that date specifically — if a \
@@ -133,6 +141,8 @@ OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
     "name": "patient's full name as found, or null if not stated",
     "age": 38,
     "sex": "female",
+    "postmenopausal_bhrt": null,
+    "on_trt": null,
     "first_draw_date": "exact date as printed on the earliest lab draw, or null if only one draw exists",
     "latest_draw_date": "exact date as printed on the most recent lab draw",
     "markers": [
@@ -196,6 +206,8 @@ EXTRACTION_OUTPUT_SCHEMA = {
         "name": _NULLABLE_STRING,
         "age": {"type": ["integer", "null"]},
         "sex": _NULLABLE_STRING,
+        "postmenopausal_bhrt": _NULLABLE_BOOL,
+        "on_trt": _NULLABLE_BOOL,
         "first_draw_date": _NULLABLE_STRING,
         "latest_draw_date": _NULLABLE_STRING,
         "markers": {
@@ -307,7 +319,7 @@ EXTRACTION_OUTPUT_SCHEMA = {
         },
         "other_notes": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["name", "age", "sex", "first_draw_date", "latest_draw_date", "markers",
+    "required": ["name", "age", "sex", "postmenopausal_bhrt", "on_trt", "first_draw_date", "latest_draw_date", "markers",
                  "dexa_history", "protocol", "pain_points", "marker_overrides",
                  "unrecognized_markers", "other_notes"],
 }

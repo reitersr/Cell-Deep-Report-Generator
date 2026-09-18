@@ -101,7 +101,7 @@ def score_categorical(is_good: bool | None):
     return (96, "optimal") if is_good else (55, "moderate")
 
 
-def attach_scores(m: Marker, sex: str | None = None) -> None:
+def attach_scores(m: Marker, sex: str | None = None, on_trt: bool | None = None) -> None:
     """Mutates a Marker in place: sets now_tier/now_pct/then_tier/then_pct as attributes.
     (Marker is a dataclass without these fields declared, so the template/generation code
     should access them via getattr with a safe default, or this can be extended into the

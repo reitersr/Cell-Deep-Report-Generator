@@ -112,7 +112,14 @@ MARKER_LIBRARY = {
         lo=60.9, hi=337.0, disp_range="60.9\u2013337.0",
         aliases=["dhea-s", "dhea sulfate"]),
     "Estradiol": dict(category="Hormones", unit="pg/mL", kind="range",
-        lo=15, hi=350, disp_range="phase-dependent",
+        disp_range="sex-specific default (female phase-dependent; male 20\u201345)",
+        default_sex="female",
+        sex_variants={
+            # The female default remains phase-dependent; the structured provider-note BHRT
+            # status selects the separate 80-120 target in resolve_marker_config().
+            "female": dict(lo=15, hi=350, disp_range="phase-dependent"),
+            "male": dict(lo=20, hi=45, disp_range="20\u201345"),
+        },
         aliases=["estradiol", "e2"]),
     # Sex-conditional default range. Male default (600-900 ng/dL) sourced from a functional-medicine
     # reference range via web research, NOT confirmed against CellDeep's own clinical protocol -
@@ -273,22 +280,28 @@ def lookup_marker(raw_name: str):
 _SEX_ALIASES = {"male": "male", "m": "male", "female": "female", "f": "female"}
 
 
-def resolve_marker_config(canonical: str, cfg: dict, sex: str | None) -> dict:
+def resolve_marker_config(canonical: str, cfg: dict, sex: str | None,
+                          postmenopausal_bhrt: bool | None = None) -> dict:
     """Resolve a marker's threshold config for a specific patient's sex.
 
-    Only markers with a "sex_variants" entry (currently: Testosterone, Total) branch on sex —
-    every other marker is returned unchanged. If sex is missing/unrecognized, falls back to the
+    Markers with a "sex_variants" entry branch on sex. If sex is missing/unrecognized, falls back to the
     marker's "default_sex" variant rather than guessing which sex to apply - this preserves the
     pipeline's pre-existing single-range behavior instead of inferring a sex that wasn't provided.
     """
     variants = cfg.get("sex_variants")
     if not variants:
-        return cfg
+        if canonical != "Estradiol" or postmenopausal_bhrt is not True:
+            return cfg
+        resolved = dict(cfg)
+        resolved.update(lo=80, hi=120, disp_range="80\u2013120 (postmenopausal BHRT target)")
+        return resolved
     key = _SEX_ALIASES.get(sex.strip().lower()) if isinstance(sex, str) else None
     if key not in variants:
         key = cfg.get("default_sex", next(iter(variants)))
     resolved = dict(cfg)
     resolved.update(variants[key])
+    if canonical == "Estradiol" and postmenopausal_bhrt is True:
+        resolved.update(lo=80, hi=120, disp_range="80\u2013120 (postmenopausal BHRT target)")
     return resolved
 
 
