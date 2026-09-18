@@ -74,25 +74,27 @@ def score_bounded(value: float, direction: str, optimal: float, moderate: float)
 
 
 def score_range(value: float, lo: float, hi: float):
-    """Corrected during calibration: previously always returned 'normal' (the source of the
-    'no gray ever' bug). Now buckets by distance from center, same as every other marker."""
+    """Score an inclusive optimal range with symmetric outside-range bands.
+
+    Values inside lo..hi are optimal. Values up to one range width beyond either
+    edge are moderate; values farther out are flagged.
+    """
     if lo is None or hi is None:
         return None, "unscored"  # data error: reference library config is incomplete
     if value is None:
         return None, None  # normal: this draw simply has no result for this marker
-    mid = (lo + hi) / 2
-    half = (hi - lo) / 2
-    if half <= 0:
-        return 90, "optimal"
-    dist = abs(value - mid) / half
-    pct = max(58, 100 - dist * 34)
-    if dist <= 0.5:
-        tier = "optimal"
-    elif dist <= 1.0:
-        tier = "moderate"
-    else:
-        tier = "flag"
-    return round(pct), tier
+    if lo <= value <= hi:
+        return 96, "optimal"
+    interval = hi - lo
+    if interval <= 0:
+        return 8, "flag"
+    distance = lo - value if value < lo else value - hi
+    outside_ratio = distance / interval
+    if outside_ratio <= 1:
+        pct = 88 - outside_ratio * 38
+        return round(pct), "moderate"
+    pct = max(8, 50 - (outside_ratio - 1) * 90)
+    return round(pct), "flag"
 
 
 def score_lab_range(value: float, lo: float, hi: float):
