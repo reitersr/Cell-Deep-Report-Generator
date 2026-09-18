@@ -351,7 +351,13 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
     raw_text = "".join(text_blocks)
     with open("/tmp/last_extraction_raw.txt", "w") as f:
         f.write(raw_text)
-    return _parse_json_response(raw_text, patient_name=patient_name)
+    parsed = _parse_json_response(raw_text, patient_name=patient_name)
+    # exactly what the model returned for every marker, before dedup/merge ever runs - the
+    # ground truth needed to confirm (not assume) how a marker like Cortisol was actually
+    # extracted, instead of reconstructing it from a guess
+    with open("/tmp/last_extraction_markers_raw.json", "w", encoding="utf-8") as f:
+        json.dump(parsed.get("markers", []), f, indent=2, ensure_ascii=False)
+    return parsed
 
 
 _LAB_RANGE_TRIOS = [
@@ -462,9 +468,15 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             continue
         overrides_by_marker[canonical] = (lo, hi)
 
+    # dump immediately before dedup/merge runs, so a regression can be diagnosed against what
+    # the model actually returned instead of what the dedup logic assumed it returned
+    with open("/tmp/pre_dedup_markers_raw.json", "w", encoding="utf-8") as f:
+        json.dump(extracted.get("markers", []), f, indent=2, ensure_ascii=False)
     deduped_markers, dedupe_notes = _dedupe_extracted_markers(extracted.get("markers", []))
     notice.other_notes.extend(dedupe_notes)
     scoring_log_lines.extend(dedupe_notes)
+    with open("/tmp/post_dedup_markers.json", "w", encoding="utf-8") as f:
+        json.dump(deduped_markers, f, indent=2, ensure_ascii=False)
 
     for raw in deduped_markers:
         match = markers_reference_lookup(raw["name"])
@@ -656,8 +668,15 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> tuple[dict, list[
         raw_text = "".join(text_blocks)
         with open("/tmp/pre_sanitize_copy.json", "w", encoding="utf-8") as f:
             f.write(raw_text)
+        # per-attempt, never overwritten - the exact raw API response text, untouched by parsing
+        # or detection, so a real-data corruption case can be inspected after the fact instead of
+        # reconstructed from a guess
+        with open(f"/tmp/generate_copy_attempt{attempt}_raw.txt", "w", encoding="utf-8") as f:
+            f.write(raw_text)
         parsed = _parse_json_response(raw_text, patient_name=record.name)
         corrupted_paths = _find_corrupted_text_paths(parsed)
+        with open("/tmp/generate_copy_detection_log.txt", "a", encoding="utf-8") as log:
+            log.write(f"attempt={attempt} corrupted_paths={corrupted_paths!r}\n")
         if not corrupted_paths:
             return parsed, warnings
         if attempt == 0:
