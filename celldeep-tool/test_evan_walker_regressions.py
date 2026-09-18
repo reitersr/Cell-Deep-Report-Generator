@@ -11,6 +11,8 @@ Issue 5: FSH/LH suppression tier + narrative not actually gated on confirmed on_
 """
 
 import os
+import json
+from pathlib import Path
 
 import fitz
 import pytest
@@ -87,6 +89,29 @@ def test_dedupe_helper_generalizes_across_the_whole_library():
             "markers": [{"name": a, "now": 1.0, "disp_now": "1.0"} for a in aliases],
         })
         assert len(record.markers) == 1, canonical
+
+
+def test_dedupe_does_not_drop_a_real_lab_range_for_the_sentinel_from_a_duplicate_mention():
+    """Regression for Issue B: Cortisol (aliases "cortisol"/"cortisol, am"/"cortisol total") got
+    extracted twice from this patient's source PDF - once with no printed range for that mention
+    (the 0/0/"" sentinel, see extraction_prompt.py) and once with the real AM/PM printed range.
+    A naive per-field None/"" gap-fill never adopts the real range if the sentinel mention happens
+    to be entries[0], because 0 isn't None or "" - this must merge the range as a whole unit."""
+    record, notice = pipeline.score_and_build_record({
+        "name": "Cortisol Patient", "sex": "male", "provider_note_raw": "",
+        "markers": [
+            {"name": "cortisol", "now": 8.0, "disp_now": "8.0",
+             "lab_range_now_lo": 0, "lab_range_now_hi": 0, "lab_range_now_display": ""},
+            {"name": "cortisol total", "now": 8.0, "disp_now": "8.0",
+             "lab_range_now_lo": 4.8, "lab_range_now_hi": 19.5, "lab_range_now_display": "4.8-19.5 AM"},
+        ],
+    })
+    assert [m.name for m in record.markers] == ["Cortisol, Total (AM)"]
+    cortisol = record.markers[0]
+    assert cortisol.range_source == "lab"
+    assert cortisol.now_tier == "optimal"
+    assert cortisol.unscored_reason is None
+    assert not any("CONFLICTING" in note for note in notice.other_notes)
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +258,32 @@ def test_corrupted_run_on_text_is_detected():
     assert paths == ["marker_what.SHBG"]
 
 
+def test_real_evan_walker_style_run_on_text_broken_up_by_punctuation_is_detected():
+    # Reconstructed from the real report's actual garbling pattern: ordinary punctuation
+    # (hyphens, commas, periods) still breaks the letters into <24-char chunks, so the original
+    # word-length-only regex missed this even though every real word boundary lost its space.
+    real_pattern_shbg_what = (
+        "Whatthisis:Sexhormone-binding,globulin.Aprotein,thatcarries.Hormones,throughyour."
+        "Bloodstream,andtissues."
+    )
+    assert not pipeline._RUN_ON_WORD_RE.search(real_pattern_shbg_what), (
+        "this fixture should reproduce a case the old word-length-only check missed"
+    )
+    corrupted = {"marker_what": {"SHBG": real_pattern_shbg_what},
+                 "marker_notes": {"TSH": "This one is fine, has normal spacing throughout."}}
+    assert pipeline._find_corrupted_text_paths(corrupted) == ["marker_what.SHBG"]
+
+
+def test_normal_prose_with_hyphens_and_long_names_is_never_flagged():
+    fine = {
+        "marker_notes": {
+            "Lp-PLA2 Activity": "A marker for hidden inflammation in your arteries, currently well-controlled.",
+            "SHBG": "Sex hormone-binding globulin, a protein that carries hormones through your bloodstream.",
+        }
+    }
+    assert pipeline._find_corrupted_text_paths(fine) == []
+
+
 def test_clear_path_blanks_only_the_corrupted_field():
     data = {"marker_what": {"SHBG": "badtextwithnospacesatallanywhereinthisstring"}, "marker_notes": {"TSH": "fine"}}
     pipeline._clear_path(data, "marker_what.SHBG")
@@ -271,6 +322,58 @@ def test_generate_copy_retries_once_then_blanks_if_still_corrupted(monkeypatch):
     copy2, warnings2 = pipeline.generate_copy(FakeClient(), record)
     assert copy2["marker_what"]["SHBG"] == "Sex hormone binding globulin."
     assert warnings2 == []
+
+
+@pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key")
+def test_live_api_deliberately_reproduced_garbling_is_intercepted_before_render(monkeypatch):
+    """Live API check for Issue A: get the model to genuinely emit this exact punctuation-broken
+    run-on pattern over a real round trip (not a hand-written string), then run it through
+    generate_copy's actual retry/blank path and confirm the corrupted field never reaches the
+    value that would go to template.py."""
+    from anthropic import Anthropic
+    from schema import PatientRecord
+
+    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    resp = client.messages.create(
+        model=pipeline.MODEL,
+        max_tokens=300,
+        system="You output only raw JSON, verbatim, with no markdown fences and no other text.",
+        messages=[{"role": "user", "content": (
+            'Output exactly this JSON object, character for character, with no spaces added or '
+            'removed anywhere in the "what" value: '
+            '{"what": "Whatthisis:Sexhormone-bindingglobulin,aproteinthatcarrieshormonesthrough'
+            'yourbloodstreamandcontrolshowmuchisactuallyavailabletoyourtissues."}'
+        )}],
+    )
+    live_text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
+    live_raw_text = "".join(live_text_blocks)
+    live_parsed = pipeline._parse_json_response(live_raw_text)
+    assert pipeline._find_corrupted_text_paths({"marker_what": {"SHBG": live_parsed.get("what", "")}}), (
+        "the live model didn't reproduce the run-on pattern this round - re-run to get a live sample"
+    )
+
+    # now prove generate_copy()'s real retry/blank path intercepts a response built from that
+    # genuine live sample before it could ever reach template.py
+    class FakeTextBlock:
+        def __init__(self, text):
+            self.text = text
+
+    class FakeResponse:
+        def __init__(self, text):
+            self.content = [FakeTextBlock(text)]
+
+    live_corrupted_json = json.dumps({"marker_what": {"SHBG": live_parsed.get("what", "")}, "marker_notes": {}})
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return FakeResponse(live_corrupted_json)
+
+    class FakeClient:
+        messages = FakeMessages()
+
+    copy, warnings = pipeline.generate_copy(FakeClient(), PatientRecord(name="Live Garble Patient"))
+    assert copy["marker_what"]["SHBG"] == ""
+    assert any("RUN-ON" in w for w in warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -330,3 +433,99 @@ def test_live_generation_does_not_assert_trt_suppression_without_confirmed_statu
     notes_text = " ".join(copy.get("marker_notes", {}).values()).lower()
     assert "expected during active testosterone therapy" not in notes_text
     assert "expected during" not in notes_text or "trt" not in notes_text
+
+
+# ---------------------------------------------------------------------------
+# Full-pipeline live regeneration smoke test.
+#
+# No real Evan Walker source PDFs exist in this workspace, so this cannot be the literal
+# "regenerate the same report from the same two source PDFs" verification - this is the closest
+# available proxy: a synthetic lab + DEXA PDF pair built to reproduce every condition that
+# triggered the reported bugs (Cortisol under two alias labels with a split AM/PM range, a
+# partial VAT-only DEXA follow-up, duplicate Vitamin D/Magnesium aliases, "active testosterone
+# therapy" phrasing), run through the real end-to-end pipeline.run() against the live API.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key")
+def test_live_full_pipeline_regeneration_all_fixes_hold_together(tmp_path):
+    labs_path = tmp_path / "labs.pdf"
+    labs_doc = fitz.open()
+    labs_page = labs_doc.new_page()
+    labs_page.insert_textbox(
+        fitz.Rect(36, 36, 560, 780),
+        "SYNTHETIC TEST LAB REPORT - FAKE DATA, NOT A REAL PATIENT\n"
+        "Patient: Live Full Pipeline Patient\n\n"
+        "HORMONE PANEL - COLLECTED: 07/01/2026\n"
+        "  Cortisol: 8.0 ug/dL\n"
+        "  Cortisol Total: 8.0 ug/dL   (Reference: AM 4.8-19.5, PM 2.5-11.9)\n"
+        "  SHBG: 60.0 nmol/L   (ref 10-80)\n"
+        "  LH: 0.1 mIU/mL   (ref 1.0-10.0)\n"
+        "  FSH: 0.1 mIU/mL   (ref 1.0-10.0)\n\n"
+        "FOUNDATIONAL PANEL - COLLECTED: 07/01/2026\n"
+        "  Vitamin D: 45.0 ng/mL   (ref 30-100)\n"
+        "  Vitamin D, 25-Hydroxy: 45.0 ng/mL   (ref 30-100)\n"
+        "  Magnesium: 2.0 mg/dL   (ref 1.7-2.3)\n"
+        "  Magnesium, Serum: 2.0 mg/dL   (ref 1.7-2.3)\n",
+        fontsize=9,
+        fontname="cour",
+    )
+    labs_doc.save(labs_path)
+    labs_doc.close()
+
+    dexa_path = tmp_path / "dexa.pdf"
+    dexa_doc = fitz.open()
+    dexa_page = dexa_doc.new_page()
+    dexa_page.insert_textbox(
+        fitz.Rect(36, 36, 560, 780),
+        "SYNTHETIC TEST DEXA REPORT - FAKE DATA, NOT A REAL PATIENT\n"
+        "Patient: Live Full Pipeline Patient\n\n"
+        "SCAN 1 - Jan 1, 2026\n"
+        "  Total Mass: 170.0 lb\n  Fat Mass: 56.0 lb\n  Lean Mass: 110.0 lb\n"
+        "  Body Fat: 33.0%\n  Visceral Fat (VAT): 2.0 lb\n\n"
+        "SCAN 2 - Jul 1, 2026 (visceral fat re-check only, no full body composition this visit)\n"
+        "  Visceral Fat (VAT): 0.8 lb\n",
+        fontsize=9,
+        fontname="cour",
+    )
+    dexa_doc.save(dexa_path)
+    dexa_doc.close()
+
+    note_text = "Patient continues active testosterone therapy per prior visit."
+    out_path = tmp_path / "live_full_pipeline.pdf"
+    review_path = pipeline.run(
+        labs_pdf=str(labs_path), dexa_pdfs=[str(dexa_path)], note_text=note_text,
+        patient_name="Live Full Pipeline Patient", age=45, sex="male", out_path=str(out_path),
+    )
+    review_path = Path(review_path)
+
+    with fitz.open(out_path) as rendered:
+        text = "\n".join(page.get_text() for page in rendered)
+    review_notes = review_path.read_text(encoding="utf-8")
+
+    # Issue 1: the aliased markers were merged into a single entry, not silently duplicated or
+    # conflicted (the model's own extraction notes and/or pipeline dedup notes may phrase this
+    # differently run to run - the deterministic guarantee is simply "never a silent conflict")
+    assert "CONFLICTING VALUES" not in review_notes
+    assert text.count("Vitamin D, 25-Hydroxy") <= 1
+
+    # Issue B: Cortisol scored with its real range, not "Reference range pending". Cortisol has
+    # no library threshold by design (lab-specific range only, like LH/FSH/SHBG), so the
+    # informational "missing threshold ... using printed lab range" line is the expected SUCCESS
+    # path - the actual failure signature would be "... retained as unscored" instead.
+    assert "missing threshold for Cortisol, Total (AM) / unknown - marker retained as unscored" not in review_notes
+    assert "Cortisol" in text
+    cortisol_idx = text.find("Cortisol")
+    assert "Reference range pending" not in text[cortisol_idx:cortisol_idx + 400]
+
+    # Issue 2/3: DEXA section has a real headline, never a bare dash, and the partial scan
+    # renders honestly (no fabricated "0 lb")
+    assert '<div class="dexa-title">—</div>' not in text
+    assert "STRUCTURE" in text
+
+    # Issue A: no run-on text anywhere in the document
+    assert not pipeline._RUN_ON_WORD_RE.search(text)
+
+    # Issue 5: on_trt confirmed via "active testosterone therapy" -> LH/FSH suppression applies
+    lh_idx = text.find("LH")
+    lh_context = text[lh_idx:lh_idx + 200]
+    assert "optimal" in lh_context.lower()

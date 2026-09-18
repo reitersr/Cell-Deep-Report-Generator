@@ -354,6 +354,13 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
     return _parse_json_response(raw_text, patient_name=patient_name)
 
 
+_LAB_RANGE_TRIOS = [
+    ("lab_range_then_lo", "lab_range_then_hi", "lab_range_then_display"),
+    ("lab_range_now_lo", "lab_range_now_hi", "lab_range_now_display"),
+]
+_LAB_RANGE_FIELDS = {field for trio in _LAB_RANGE_TRIOS for field in trio}
+
+
 def _dedupe_extracted_markers(raw_markers: list[dict]) -> tuple[list[dict], list[str]]:
     """Collapse multiple extracted mentions of the same canonical marker into exactly one entry.
 
@@ -403,8 +410,21 @@ def _dedupe_extracted_markers(raw_markers: list[dict]) -> tuple[list[dict], list
         merged = dict(entries[0])
         for other in entries[1:]:
             for field_name, value in other.items():
+                if field_name in _LAB_RANGE_FIELDS:
+                    continue  # handled as a whole lo/hi/display trio below, not field-by-field
                 if merged.get(field_name) in (None, "") and value not in (None, ""):
                     merged[field_name] = value
+            # lab_range_{then,now}_lo/hi/display is a sentinel unit, not independently-nullable
+            # fields: "no printed range" is encoded as lo=0, hi=0, display="" (see
+            # extraction_prompt.py), so a per-field None/"" gap-fill would never adopt a real
+            # range from another duplicate mention whenever the first mention's lo/hi happen to
+            # already be the 0 sentinel - exactly what silently dropped Cortisol's printed range
+            # after it was extracted twice (once per alias) with the range on only one mention.
+            for lo_field, hi_field, display_field in _LAB_RANGE_TRIOS:
+                if not merged.get(display_field) and other.get(display_field):
+                    merged[lo_field] = other.get(lo_field)
+                    merged[hi_field] = other.get(hi_field)
+                    merged[display_field] = other.get(display_field)
         deduped.append(merged)
     return deduped, conflict_notes
 
@@ -557,12 +577,31 @@ def markers_reference_lookup(raw_name: str):
 # legitimate long marker/compound names.
 _RUN_ON_WORD_RE = re.compile(r"[A-Za-z]{24,}")
 
+# A single glued-together word is only the easy case: real corrupted text (see the actual Evan
+# Walker report) is often broken back up into <24-char chunks by ordinary punctuation the text
+# still contains ("hormone-binding", "globulin, a protein"), so a run-on passage can dodge the
+# word-length check entirely while still having no spaces between its actual words. Real English
+# prose runs roughly one space per 5-6 letters; anything this sparse over a long-enough sample is
+# corrupted regardless of where the letter-runs happen to be broken by punctuation.
+_MIN_SAMPLE_LETTERS = 40
+_MAX_LETTERS_PER_SPACE = 12
+
+
+def _is_run_on_text(text: str) -> bool:
+    if _RUN_ON_WORD_RE.search(text):
+        return True
+    letters = sum(1 for c in text if c.isalpha())
+    if letters < _MIN_SAMPLE_LETTERS:
+        return False
+    spaces = text.count(" ")
+    return spaces == 0 or (letters / spaces) > _MAX_LETTERS_PER_SPACE
+
 
 def _find_corrupted_text_paths(value, path: str = "") -> list[str]:
     """Recursively find generated string fields that look like they lost their spacing."""
     found = []
     if isinstance(value, str):
-        if _RUN_ON_WORD_RE.search(value):
+        if _is_run_on_text(value):
             found.append(path)
     elif isinstance(value, dict):
         for key, item in value.items():
