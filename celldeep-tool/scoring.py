@@ -12,11 +12,21 @@ from schema import Marker
 
 
 def _clear_zero_sentinel_partial_scan(dexa_data: dict) -> None:
-    """Safety net for a partial DEXA scan (e.g. a VAT-only follow-up) that got recorded with 0
-    for the metrics it didn't actually measure, instead of null. A real "0 lb" total/fat/lean
-    mass alongside a real, nonzero VAT reading is not a plausible scan result — it's a partial
-    record that must render honestly (a dash), never as a fabricated zero measurement."""
+    """Extraction's schema can't make total/fat/lean mass true JSON nulls (see extraction_prompt.py
+    - the strict structured-output grammar compiler rejects the schema past a nullable-field
+    limit), so a partial scan (e.g. a VAT-only follow-up) is expected to use the sentinel -1 for
+    those fields and "" for body_fat_pct instead. Convert those sentinels back to a real None here,
+    at the one deterministic boundary, so the rest of the pipeline never has to know about the
+    sentinel encoding. Also treat an all-zero reading alongside a real, nonzero VAT reading as the
+    same partial-scan case defensively, in case a sentinel was missed - that combination is not a
+    plausible real scan result either way."""
     core_fields = ("total_mass_lb", "fat_mass_lb", "lean_mass_lb")
+    for field in core_fields:
+        if dexa_data.get(field) == -1:
+            dexa_data[field] = None
+    if dexa_data.get("body_fat_pct") == "":
+        dexa_data["body_fat_pct"] = None
+
     all_zero = all(dexa_data.get(field) in (0, 0.0) for field in core_fields)
     vat = dexa_data.get("vat_fat_mass_lb")
     has_real_vat = vat not in (None, "", 0, 0.0)

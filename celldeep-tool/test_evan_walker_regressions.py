@@ -93,7 +93,23 @@ def test_dedupe_helper_generalizes_across_the_whole_library():
 # Issue 2: corrupted partial DEXA scans (fabricated 0s alongside a real VAT value)
 # ---------------------------------------------------------------------------
 
+def test_extraction_sentinel_partial_scan_becomes_null_not_fabricated():
+    # -1 / "" is the real extraction-schema encoding for "not measured" (see extraction_prompt.py -
+    # these fields can't be true JSON null without exceeding the API's nullable-field limit)
+    normalized = scoring.normalize_dexa_body_fat({
+        "date_display": "Jan 27, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
+        "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 1.23,
+    })
+    assert normalized["total_mass_lb"] is None
+    assert normalized["fat_mass_lb"] is None
+    assert normalized["lean_mass_lb"] is None
+    assert normalized["body_fat_pct"] is None
+    assert normalized["vat_fat_mass_lb"] == 1.23
+
+
 def test_zero_sentinel_partial_scan_becomes_null_not_fabricated():
+    # defense-in-depth: even if a sentinel is missed and 0 slips through instead, an all-zero
+    # reading alongside a real, nonzero VAT reading is still treated as a partial scan
     normalized = scoring.normalize_dexa_body_fat({
         "date_display": "Jan 27, 2026", "total_mass_lb": 0, "fat_mass_lb": 0,
         "lean_mass_lb": 0, "body_fat_pct": None, "vat_fat_mass_lb": 1.23,
@@ -121,8 +137,8 @@ def test_partial_scan_renders_dashes_not_zero_in_history_table(tmp_path):
             DexaReading(date_display="Jan 1, 2026", total_mass_lb=170.0, fat_mass_lb=56.0,
                         lean_mass_lb=110.0, body_fat_pct="33.0%", vat_fat_mass_lb=2.0),
             DexaReading(**scoring.normalize_dexa_body_fat({
-                "date_display": "Jan 27, 2026", "total_mass_lb": 0, "fat_mass_lb": 0,
-                "lean_mass_lb": 0, "body_fat_pct": None, "vat_fat_mass_lb": 1.23,
+                "date_display": "Jan 27, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
+                "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 1.23,
             })),
         ],
     )
@@ -139,6 +155,38 @@ def test_partial_scan_renders_dashes_not_zero_in_history_table(tmp_path):
     assert "— lb total" in text
     assert "— lb fat" in text
     assert "— lb lean" in text
+
+
+@pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key")
+def test_live_extraction_call_survives_dexa_schema_with_partial_scan(tmp_path):
+    """Live API check for the recurring 'compiled grammar too large' / strict-tools failure:
+    this exact extraction call (a DEXA history with a partial, VAT-only scan) is what pushed the
+    schema's nullable-field count from 7 to 11 earlier, so this must succeed against the real API,
+    not just parse locally."""
+    from anthropic import Anthropic
+
+    source = tmp_path / "live_schema_check_dexa.pdf"
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_textbox(
+        fitz.Rect(36, 36, 560, 780),
+        "SYNTHETIC TEST DEXA REPORT - FAKE DATA, NOT A REAL PATIENT\n"
+        "Patient: Live Schema Check\n\n"
+        "SCAN 1 - Jan 1, 2026\n"
+        "  Total Mass: 170.0 lb\n  Fat Mass: 56.0 lb\n  Lean Mass: 110.0 lb\n"
+        "  Body Fat: 33.0%\n  Visceral Fat (VAT): 2.0 lb\n\n"
+        "SCAN 2 - Jan 27, 2026 (visceral fat re-check only, no full body composition this visit)\n"
+        "  Visceral Fat (VAT): 1.23 lb\n",
+        fontsize=10,
+        fontname="cour",
+    )
+    document.save(source)
+    document.close()
+
+    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    extracted = pipeline.extract(client, labs_pdf=None, dexa_pdfs=[str(source)],
+                                  note_text=None, patient_name="Live Schema Check")
+    assert extracted.get("dexa_history")
 
 
 # ---------------------------------------------------------------------------

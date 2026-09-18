@@ -109,11 +109,14 @@ each. If a given scan includes a visceral fat (VAT) reading, include it for that
 scan does NOT include VAT (many follow-up scans skip it), leave that field null for that date. Never carry a \
 VAT number forward from an earlier scan to a later one that didn't measure it.
 - Some scans are themselves partial: a follow-up visit's DEXA report may print ONLY a subset of metrics (for \
-example, only a visceral-fat re-check, with no total/fat/lean mass reported for that same visit). When a \
-metric genuinely is not printed for a given scan date, leave that specific field null for that date — never \
-fill it with 0. A 0 in this schema means the source document literally printed a zero value, not "not \
-measured this visit." This applies per-field, independently: a scan can have a real VAT number and null \
-total/fat/lean mass at the same time, and that is a normal, expected partial-scan result, not an error.
+example, only a visceral-fat re-check, with no total/fat/lean mass reported for that same visit). "total_mass_lb", \
+"fat_mass_lb", and "lean_mass_lb" cannot be JSON null (a schema constraint, not a data one, exactly like \
+"disp_now" elsewhere in this schema) — when one of those genuinely was not printed for a given scan date, use \
+the sentinel value -1 for it instead of guessing or repeating an earlier scan's number. Likewise use "" (an \
+empty string) for "body_fat_pct" when it wasn't printed. NEVER use 0 as this placeholder: 0 is a real, valid \
+literal measurement and must be preserved as one if that is genuinely what the source printed. This applies \
+per-field, independently: a scan can have a real VAT number and a -1 sentinel for total/fat/lean mass at the \
+same time, and that is a normal, expected partial-scan result, not an error.
 
 EXTRACTING THE PROVIDER'S NOTE — this is the step that most requires discipline, read carefully:
 - Real provider notes are written in third-person clinical language, not first-person patient quotes. Your \
@@ -204,7 +207,8 @@ CRITICAL RULES, apply to every patient this runs on, not just the current one:
 - Include one entry in "markers" for EVERY marker found in the lab PDF that matches a name on the recognized list, even if it only has a "now" value and no "then". Do not skip markers. Do not summarize or sample — every match goes in.
 - If TWO DEXA PDFs are provided, they must both be read, and dexa_history must contain every distinct scan date found across BOTH documents, not just the first one. A DEXA PDF may itself contain multiple historical scan dates in a table — extract every row, not just the most recent.
 - Read the ENTIRE provider's note for both protocol items and pain points — do not stop after the first paragraph. Every compound the note names goes into "protocol". Any patient-stated concern or goal, anywhere in the note, produces a "pain_points" entry.
-- "then", "now", "disp_then", "vat_fat_mass_lb", "first_draw_date", "total_mass_lb", "fat_mass_lb", "lean_mass_lb", "body_fat_pct" are the only marker/dexa fields that may be JSON null, and each is null exactly when that specific draw/scan genuinely has no result for that field (or, for "then"/"first_draw_date", when no earlier draw exists at all) — never fill one from the other, and every other field must be filled from the actual source material when that material was provided.
+- "then", "now", "disp_then", "vat_fat_mass_lb", "first_draw_date" are the only marker/dexa fields that may be JSON null, and each is null exactly when that specific draw/scan genuinely has no result for that field (or, for "then"/"first_draw_date", when no earlier draw exists at all) — never fill one from the other, and every other field must be filled from the actual source material when that material was provided.
+- "total_mass_lb", "fat_mass_lb", and "lean_mass_lb" use the sentinel -1 (never 0, never null) when a partial scan genuinely didn't report that metric; "body_fat_pct" uses "" the same way. This is the same required-field-with-sentinel pattern as "disp_now" — it exists because the API's strict structured-output grammar compiler rejects this schema once too many fields are nullable unions, so real nullability is reserved only for fields in this list.
 - "disp_now" cannot be JSON null (a schema constraint, not a data one): when "now" is null, set "disp_now" to an empty string "" rather than null or a fabricated display value. An empty "disp_now" means exactly the same thing as a null "now" — no result for this marker on the latest draw — never put any text there in that case. A missing lab range uses the same empty-display sentinel with its two numeric range fields set to 0.
 - "marker_overrides" should be an empty list in the ordinary case — it is only ever populated when the provider's note states an explicit, unambiguous numeric range tied to a specific recognized marker (see rules above). Do not populate it from a vague mention or from the lab's own printed reference range.
 - If a whole section has genuinely no source material at all (e.g. no DEXA PDF provided), return that key as an empty list — never omit the key, and never partially fill it from only some of the available source material.
@@ -283,10 +287,14 @@ EXTRACTION_OUTPUT_SCHEMA = {
                 "additionalProperties": False,
                 "properties": {
                     "date_display": {"type": "string"},
-                    "total_mass_lb": _NULLABLE_NUMBER,
-                    "fat_mass_lb": _NULLABLE_NUMBER,
-                    "lean_mass_lb": _NULLABLE_NUMBER,
-                    "body_fat_pct": _NULLABLE_STRING,
+                    # Not _NULLABLE_NUMBER/_NULLABLE_STRING here on purpose - see the CRITICAL RULES
+                    # note above. These four are required, sentinel-valued fields (-1 / "") so this
+                    # schema doesn't cross the strict structured-output grammar's nullable-field limit
+                    # (see markers.then/now above for the same constraint already in place).
+                    "total_mass_lb": {"type": "number"},
+                    "fat_mass_lb": {"type": "number"},
+                    "lean_mass_lb": {"type": "number"},
+                    "body_fat_pct": {"type": "string"},
                     "vat_fat_mass_lb": _NULLABLE_NUMBER,
                 },
                 "required": ["date_display", "total_mass_lb", "fat_mass_lb", "lean_mass_lb",
