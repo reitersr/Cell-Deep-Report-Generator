@@ -80,7 +80,7 @@ MARKER_LIBRARY = {
 
     # ---- Metabolic ----
     "Glucose (fasting)": dict(category="Metabolic", unit="mg/dL", kind="range",
-        lo=65, hi=99, disp_range="65\u201399",
+        lo=70, hi=90, disp_range="70\u201390",
         aliases=["glucose", "glucose, fasting", "fasting glucose"]),
     "HbA1c": dict(category="Metabolic", unit="%", kind="bounded",
         direction="lower", optimal=5.7, moderate=6.4, disp_range="optimal <5.7%",
@@ -92,7 +92,7 @@ MARKER_LIBRARY = {
         direction="lower", optimal=33, moderate=66, disp_range="sensitive <33",
         aliases=["insulin resistance score", "ir score"]),
     "Fasting Insulin": dict(category="Metabolic", unit="\u00b5IU/mL", kind="range",
-        lo=2, hi=20, disp_range="reference <20",
+        lo=2, hi=10, disp_range="2\u201310",
         aliases=["fasting insulin", "insulin, fasting"]),
 
     # ---- Hormones ----
@@ -105,7 +105,7 @@ MARKER_LIBRARY = {
     "Estradiol": dict(category="Hormones", unit="pg/mL", kind="range",
         lo=15, hi=350, disp_range="phase-dependent",
         aliases=["estradiol", "e2"]),
-    # Sex-conditional default range. Male default (500-900 ng/dL) sourced from a functional-medicine
+    # Sex-conditional default range. Male default (600-900 ng/dL) sourced from a functional-medicine
     # reference range via web research, NOT confirmed against CellDeep's own clinical protocol -
     # this is a placeholder pending clinical staff review, not a finalized threshold.
     # Female default (2-45) is the pre-existing, already-calibrated value - left unchanged.
@@ -113,14 +113,14 @@ MARKER_LIBRARY = {
         disp_range="sex-specific default (see sex_variants)",
         default_sex="female",  # fallback used only if sex is missing/unrecognized - preserves prior behavior
         sex_variants={
-            "male": dict(lo=500, hi=900, disp_range="500\u2013900"),
+            "male": dict(lo=600, hi=900, disp_range="600\u2013900"),
             "female": dict(lo=2, hi=45, disp_range="2\u201345"),
         },
         aliases=["testosterone", "testosterone, total", "total testosterone"]),
 
     # ---- Thyroid ----
     "TSH": dict(category="Thyroid", unit="\u00b5IU/mL", kind="range",
-        lo=0.40, hi=4.50, disp_range="0.40\u20134.50",
+        lo=0.40, hi=5.50, disp_range="0.40\u20135.50",
         aliases=["tsh", "thyroid stimulating hormone"]),
     "Free T4": dict(category="Thyroid", unit="ng/dL", kind="range",
         lo=0.8, hi=1.8, disp_range="0.8\u20131.8",
@@ -134,16 +134,20 @@ MARKER_LIBRARY = {
 
     # ---- Foundational ----
     "Vitamin D": dict(category="Foundational", unit="ng/mL", kind="bounded",
-        direction="higher", optimal=30, moderate=20, disp_range="optimal \u226530",
+        direction="higher", optimal=90, moderate=60, disp_range="optimal 60\u201390",
         aliases=["vitamin d", "25-oh vitamin d", "vitamin d, 25-hydroxy"]),
     "Vitamin B12": dict(category="Foundational", unit="pg/mL", kind="range",
-        lo=200, hi=1100, disp_range="200\u20131100",
+        lo=600, hi=1000, disp_range="600\u20131000",
         aliases=["vitamin b12", "b12", "cobalamin"]),
     "Omega-3 Index": dict(category="Foundational", unit="%", kind="bounded",
         direction="higher", optimal=5.5, moderate=3.8, disp_range="optimal \u22655.5",
         aliases=["omega-3 index", "omega 3 index"]),
     "Ferritin": dict(category="Foundational", unit="ng/mL", kind="range",
-        lo=15, hi=150, disp_range="15\u2013150",
+        disp_range="sex-specific default (see sex_variants)", default_sex="female",
+        sex_variants={
+            "female": dict(lo=9, hi=150, disp_range="9\u2013150"),
+            "male": dict(lo=18, hi=300, disp_range="18\u2013300"),
+        },
         aliases=["ferritin"]),
 
     # ---- Also Monitored ----
@@ -228,7 +232,7 @@ def has_missing_thresholds(cfg: dict) -> bool:
 
 
 # ---- Sex-conditional audit (per request) ----
-# Full library reviewed for other markers that, like Testosterone, show signs of being
+# Full library reviewed for other markers that, like sex-conditional markers, show signs of being
 # single-range/female-oriented rather than genuinely sex-neutral:
 #   - Estradiol (lo=15, hi=350, disp_range="phase-dependent"): this range and its explicit
 #     "phase-dependent" label describe the female menstrual cycle: it is not a male reference
