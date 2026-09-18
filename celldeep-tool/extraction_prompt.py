@@ -30,7 +30,9 @@ already knows how to score. Match whatever the lab PDF actually calls a marker a
 case-insensitively, allowing for the alias variations given. If a marker in the source material does not \
 match anything on this list, do NOT invent a scoring configuration for it — instead, include it in the \
 "unrecognized_markers" list with its raw name, raw value, raw unit, and raw reference range exactly as \
-printed on the source document. A human will add it to the reference library later; you never guess a \
+printed on the source document. If its unit, reference range, or source context is not printed or cannot be \
+read confidently, use "" (an empty string) for that field rather than null. A human will add it to the \
+reference library later; you never guess a \
 threshold yourself.
 
 2. A list of RECOGNIZED PROTOCOL COMPOUNDS — CellDeep's known prescribing list, each with typical target \
@@ -65,11 +67,12 @@ normal and expected for some markers on a given draw to have results while other
 not.
 - Extract dates exactly as printed on the source document. Do not reformat, estimate, or round a date.
 - For EVERY recognized marker, also extract the literal reference range printed on the same lab report row
-    for each draw. Put the earliest-draw range in "lab_range_then" and the latest-draw range in
-    "lab_range_now", each as {"lo": <number>, "hi": <number>, "display": "exact printed text"}. If the
-    marker has only one draw, use "lab_range_now". Preserve the report's exact display text and numeric
-    endpoints; never infer a range from a general medical reference, another marker, or another draw. If no
-    range is printed or it cannot be read confidently, set that range object to null.
+    for each draw. Put the earliest-draw range in "lab_range_then_lo", "lab_range_then_hi", and
+    "lab_range_then_display", and the latest-draw range in "lab_range_now_lo", "lab_range_now_hi", and
+    "lab_range_now_display". Preserve the report's exact display text and numeric endpoints; never infer a
+    range from a general medical reference, another marker, or another draw. If a range is not printed or
+    cannot be read confidently, set its display field to "" and both numeric fields to 0. If the marker has
+    only one draw, use that same empty-display/zero sentinel for all three earliest-draw fields.
 - If a marker's reference range is stated differently on this specific lab report than in the reference \
 library provided to you, still use the reference library's scoring configuration (it is the clinically \
 reviewed standard this pipeline runs on) — but note the discrepancy in "other_notes" so a human can review it \
@@ -94,9 +97,10 @@ note, stated as this patient's individually intended target, qualifies.
 EXTRACTING PROVIDER-NOTE STATUS FLAGS — explicit language only:
 - Set "postmenopausal_bhrt" to true only when the provider note explicitly states BOTH that the patient is \
 postmenopausal and that the patient is on, starting, or receiving BHRT/hormone replacement. Otherwise set it \
-to null. Never infer either condition from age, labs, protocol items, or one condition alone.
+to false. False means "not explicitly confirmed," not a clinical conclusion. Never infer either condition from \
+age, labs, protocol items, or one condition alone.
 - Set "on_trt" to true only when the provider note explicitly states testosterone replacement therapy, TRT, \
-active testosterone therapy, or testosterone injections as current/starting. Otherwise set it to null. A \
+active testosterone therapy, or testosterone injections as current/starting. Otherwise set it to false. A \
 testosterone mention in a protocol list or as a future goal is not sufficient.
 
 EXTRACTING DEXA:
@@ -144,13 +148,13 @@ actually present as accurately as possible despite this surrounding noise.
 OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
 
 {
-    "name": "patient's full name as found, or null if not stated",
+    "name": "patient's full name as found, or empty string if not stated",
     "age": 38,
     "sex": "female",
-    "postmenopausal_bhrt": null,
-    "on_trt": null,
-    "first_draw_date": "exact date as printed on the earliest lab draw, or null if only one draw exists",
-    "latest_draw_date": "exact date as printed on the most recent lab draw",
+    "postmenopausal_bhrt": false,
+    "on_trt": false,
+    "first_draw_date": "exact date as printed on the earliest lab draw, or empty string if only one draw exists",
+    "latest_draw_date": "exact date as printed on the most recent lab draw, or empty string if unavailable",
     "markers": [
         {
             "name": "MUST exactly match a name from the recognized marker list provided above",
@@ -158,8 +162,12 @@ OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
             "now": 0.7,
             "disp_then": "3.1",
             "disp_now": "0.7",
-            "lab_range_then": null,
-            "lab_range_now": {"lo": 0.0, "hi": 1.0, "display": "0.0-1.0"},
+            "lab_range_then_lo": 0,
+            "lab_range_then_hi": 0,
+            "lab_range_then_display": "",
+            "lab_range_now_lo": 0.0,
+            "lab_range_now_hi": 1.0,
+            "lab_range_now_display": "0.0-1.0",
             "is_good_then": null,
             "is_good_now": null,
             "full_history": []
@@ -191,7 +199,7 @@ CRITICAL RULES, apply to every patient this runs on, not just the current one:
 - If TWO DEXA PDFs are provided, they must both be read, and dexa_history must contain every distinct scan date found across BOTH documents, not just the first one. A DEXA PDF may itself contain multiple historical scan dates in a table — extract every row, not just the most recent.
 - Read the ENTIRE provider's note for both protocol items and pain points — do not stop after the first paragraph. Every compound the note names goes into "protocol". Any patient-stated concern or goal, anywhere in the note, produces a "pain_points" entry.
 - "then", "now", "disp_then", "vat_fat_mass_lb", "first_draw_date" are the only marker/dexa fields that may be JSON null, and each is null exactly when that specific draw genuinely has no result for that marker (or, for "then"/"first_draw_date", when no earlier draw exists at all) — never fill one from the other, and every other field must be filled from the actual source material when that material was provided.
-- "disp_now" cannot be JSON null (a schema constraint, not a data one): when "now" is null, set "disp_now" to an empty string "" rather than null or a fabricated display value. An empty "disp_now" means exactly the same thing as a null "now" — no result for this marker on the latest draw — never put any text there in that case.
+- "disp_now" cannot be JSON null (a schema constraint, not a data one): when "now" is null, set "disp_now" to an empty string "" rather than null or a fabricated display value. An empty "disp_now" means exactly the same thing as a null "now" — no result for this marker on the latest draw — never put any text there in that case. A missing lab range uses the same empty-display sentinel with its two numeric range fields set to 0.
 - "marker_overrides" should be an empty list in the ordinary case — it is only ever populated when the provider's note states an explicit, unambiguous numeric range tied to a specific recognized marker (see rules above). Do not populate it from a vague mention or from the lab's own printed reference range.
 - If a whole section has genuinely no source material at all (e.g. no DEXA PDF provided), return that key as an empty list — never omit the key, and never partially fill it from only some of the available source material.
 - Numbers must be actual JSON numbers (170.5), not strings ("170.5").
@@ -211,13 +219,13 @@ EXTRACTION_OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "name": _NULLABLE_STRING,
-        "age": {"type": ["integer", "null"]},
-        "sex": _NULLABLE_STRING,
-        "postmenopausal_bhrt": _NULLABLE_BOOL,
-        "on_trt": _NULLABLE_BOOL,
-        "first_draw_date": _NULLABLE_STRING,
-        "latest_draw_date": _NULLABLE_STRING,
+        "name": {"type": "string"},
+        "age": {"type": "integer"},
+        "sex": {"type": "string"},
+        "postmenopausal_bhrt": {"type": "boolean"},
+        "on_trt": {"type": "boolean"},
+        "first_draw_date": {"type": "string"},
+        "latest_draw_date": {"type": "string"},
         "markers": {
             "type": "array",
             "items": {
@@ -234,18 +242,12 @@ EXTRACTION_OUTPUT_SCHEMA = {
                     # stays nullable; disp_now stays a plain required string and the prompt
                     # instructs the model to use "" (not a fabricated value) when now is null.
                     "disp_now": {"type": "string"},
-                    "lab_range_then": {
-                        "type": ["object", "null"],
-                        "additionalProperties": False,
-                        "properties": {"lo": {"type": "number"}, "hi": {"type": "number"}, "display": {"type": "string"}},
-                        "required": ["lo", "hi", "display"],
-                    },
-                    "lab_range_now": {
-                        "type": ["object", "null"],
-                        "additionalProperties": False,
-                        "properties": {"lo": {"type": "number"}, "hi": {"type": "number"}, "display": {"type": "string"}},
-                        "required": ["lo", "hi", "display"],
-                    },
+                    "lab_range_then_lo": {"type": "number"},
+                    "lab_range_then_hi": {"type": "number"},
+                    "lab_range_then_display": {"type": "string"},
+                    "lab_range_now_lo": {"type": "number"},
+                    "lab_range_now_hi": {"type": "number"},
+                    "lab_range_now_display": {"type": "string"},
                     "is_good_then": _NULLABLE_BOOL,
                     "is_good_now": _NULLABLE_BOOL,
                     "full_history": {
@@ -262,7 +264,9 @@ EXTRACTION_OUTPUT_SCHEMA = {
                         },
                     },
                 },
-                "required": ["name", "then", "now", "disp_then", "disp_now", "lab_range_then", "lab_range_now",
+                "required": ["name", "then", "now", "disp_then", "disp_now",
+                             "lab_range_then_lo", "lab_range_then_hi", "lab_range_then_display",
+                             "lab_range_now_lo", "lab_range_now_hi", "lab_range_now_display",
                              "is_good_then", "is_good_now", "full_history"],
             },
         },
@@ -330,9 +334,9 @@ EXTRACTION_OUTPUT_SCHEMA = {
                 "properties": {
                     "raw_name": {"type": "string"},
                     "raw_value": {"type": "string"},
-                    "raw_unit": _NULLABLE_STRING,
-                    "raw_range": _NULLABLE_STRING,
-                    "source_context": _NULLABLE_STRING,
+                    "raw_unit": {"type": "string"},
+                    "raw_range": {"type": "string"},
+                    "source_context": {"type": "string"},
                 },
                 "required": ["raw_name", "raw_value", "raw_unit", "raw_range", "source_context"],
             },

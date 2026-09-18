@@ -65,6 +65,18 @@ def _copy_for_render():
     }
 
 
+def test_top_level_schema_sentinels_normalize_at_record_boundary():
+    record, _ = pipeline.score_and_build_record({
+        "name": "", "age": 0, "sex": "", "first_draw_date": "", "latest_draw_date": "",
+        "provider_note_raw": "",
+    })
+    assert record.name is None
+    assert record.age is None
+    assert record.sex is None
+    assert record.first_draw_date is None
+    assert record.latest_draw_date is None
+
+
 def test_all_new_markers_alias_score_category_and_render(tmp_path):
     source = tmp_path / "celldeep_aliases.pdf"
     document = fitz.open()
@@ -201,8 +213,8 @@ def test_lab_printed_range_fallback_for_lh_fsh(tmp_path):
             continue
         extracted_markers.append({
             "name": parts[0], "now": float(parts[1]), "disp_now": parts[1],
-            "lab_range_now": {"lo": float(parts[-3]), "hi": float(parts[-1]),
-                               "display": f"{parts[-3]} - {parts[-1]}"},
+            "lab_range_now_lo": float(parts[-3]), "lab_range_now_hi": float(parts[-1]),
+            "lab_range_now_display": f"{parts[-3]} - {parts[-1]}",
         })
 
     extracted = {
@@ -237,8 +249,8 @@ def test_lab_printed_range_fallback_for_lh_fsh(tmp_path):
         "name": "Per Draw Range Patient", "sex": "male", "provider_note_raw": "",
         "markers": [{
             "name": "LH", "then": 5.0, "disp_then": "5.0", "now": 0.1, "disp_now": "0.1",
-            "lab_range_then": {"lo": 4.0, "hi": 6.0, "display": "4.0 - 6.0"},
-            "lab_range_now": {"lo": 1.0, "hi": 10.0, "display": "1.0 - 10.0"},
+            "lab_range_then_lo": 4.0, "lab_range_then_hi": 6.0, "lab_range_then_display": "4.0 - 6.0",
+            "lab_range_now_lo": 1.0, "lab_range_now_hi": 10.0, "lab_range_now_display": "1.0 - 10.0",
         }],
     })
     assert multi_draw.markers[0].then_tier == "optimal"
@@ -247,7 +259,8 @@ def test_lab_printed_range_fallback_for_lh_fsh(tmp_path):
     configured, _ = pipeline.score_and_build_record({
         "name": "Configured Threshold Patient", "sex": "female", "provider_note_raw": "",
         "markers": [{"name": "TSH", "now": 2.0, "disp_now": "2.0",
-                      "lab_range_now": {"lo": 100.0, "hi": 200.0, "display": "100 - 200"}}],
+                      "lab_range_now_lo": 100.0, "lab_range_now_hi": 200.0,
+                      "lab_range_now_display": "100 - 200"}],
     })
     assert configured.markers[0].range_source == "celldeep"
     assert configured.markers[0].now_tier == "optimal"

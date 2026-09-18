@@ -74,14 +74,13 @@ def parse_provider_statuses(note_text: str | None) -> tuple[bool | None, bool | 
     return bhrt_status, on_trt
 
 
-def _valid_lab_range(raw: dict, key: str) -> dict | None:
-    value = raw.get(key)
-    if not isinstance(value, dict):
-        return None
-    lo, hi, display = value.get("lo"), value.get("hi"), value.get("display")
+def _valid_lab_range(raw: dict, draw: str) -> dict | None:
+    lo = raw.get(f"lab_range_{draw}_lo")
+    hi = raw.get(f"lab_range_{draw}_hi")
+    display = raw.get(f"lab_range_{draw}_display")
     if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)) or not isinstance(display, str):
         return None
-    if lo > hi:
+    if not display or lo > hi:
         return None
     return {"lo": lo, "hi": hi, "display": display}
 
@@ -355,7 +354,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     scoring and logged - it never crashes the whole report."""
     notice = ExtractionReviewNotice()
     markers = []
-    patient_sex = extracted.get("sex")
+    patient_sex = extracted.get("sex") or None
     postmenopausal_bhrt, on_trt = parse_provider_statuses(extracted.get("provider_note_raw"))
     scoring_log_lines = []
 
@@ -381,8 +380,8 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         canonical, cfg = match
         cfg = resolve_marker_config(canonical, cfg, patient_sex, postmenopausal_bhrt=postmenopausal_bhrt)
         override = overrides_by_marker.get(canonical)
-        lab_range_then = _valid_lab_range(raw, "lab_range_then")
-        lab_range = _valid_lab_range(raw, "lab_range_now")
+        lab_range_then = _valid_lab_range(raw, "then")
+        lab_range = _valid_lab_range(raw, "now")
         active_lab_range = lab_range or lab_range_then
         missing_threshold = override is None and has_missing_thresholds(cfg)
         lab_range_fallback = missing_threshold and active_lab_range is not None
@@ -456,9 +455,12 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             log.write("\n".join(scoring_log_lines) + "\n")
 
     record = PatientRecord(
-        name=extracted["name"], age=extracted.get("age"), sex=extracted.get("sex"),
+        name=extracted.get("name") or None,
+        age=extracted.get("age") or None,
+        sex=patient_sex,
         postmenopausal_bhrt=postmenopausal_bhrt, on_trt=on_trt,
-        first_draw_date=extracted.get("first_draw_date"), latest_draw_date=extracted.get("latest_draw_date"),
+        first_draw_date=extracted.get("first_draw_date") or None,
+        latest_draw_date=extracted.get("latest_draw_date") or None,
         markers=markers, dexa_history=dexa_history, protocol=protocol, pain_points=pain_points,
         cns_domains=extracted.get("cns_domains"), provider_note_raw=extracted.get("provider_note_raw"),
     )
