@@ -72,10 +72,13 @@ class Marker:
 class DexaReading:
     """One DEXA scan. VAT/SAT are optional per-reading — not every visit re-measures them."""
     date_display: str          # e.g. "May 21, 2025"
-    total_mass_lb: float
-    fat_mass_lb: float
-    lean_mass_lb: float
-    body_fat_pct: str          # pre-formatted, e.g. "34.4%"
+    # A scan may be partial (e.g. a follow-up visit that only re-measured VAT) — any metric the
+    # source didn't actually report stays None, never a fabricated 0, so the template can render
+    # it honestly (a dash) instead of a real-looking zero measurement.
+    total_mass_lb: Optional[float] = None
+    fat_mass_lb: Optional[float] = None
+    lean_mass_lb: Optional[float] = None
+    body_fat_pct: Optional[str] = None   # pre-formatted, e.g. "34.4%"
     vat_fat_mass_lb: Optional[float] = None   # None if this visit didn't measure VAT
     scan_image_b64: Optional[str] = None      # rendered body-composition scan page, if present in the source PDF
 

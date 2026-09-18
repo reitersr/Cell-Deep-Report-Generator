@@ -11,8 +11,24 @@ are computed here, never left to the generation model to decide.
 from schema import Marker
 
 
+def _clear_zero_sentinel_partial_scan(dexa_data: dict) -> None:
+    """Safety net for a partial DEXA scan (e.g. a VAT-only follow-up) that got recorded with 0
+    for the metrics it didn't actually measure, instead of null. A real "0 lb" total/fat/lean
+    mass alongside a real, nonzero VAT reading is not a plausible scan result — it's a partial
+    record that must render honestly (a dash), never as a fabricated zero measurement."""
+    core_fields = ("total_mass_lb", "fat_mass_lb", "lean_mass_lb")
+    all_zero = all(dexa_data.get(field) in (0, 0.0) for field in core_fields)
+    vat = dexa_data.get("vat_fat_mass_lb")
+    has_real_vat = vat not in (None, "", 0, 0.0)
+    if all_zero and has_real_vat:
+        for field in core_fields:
+            dexa_data[field] = None
+        dexa_data["body_fat_pct"] = None
+
+
 def normalize_dexa_body_fat(dexa_data: dict) -> dict:
     """Derive a body-fat percentage only from already-reported mass values when needed."""
+    _clear_zero_sentinel_partial_scan(dexa_data)
     body_fat = dexa_data.get("body_fat_pct")
     if body_fat not in (None, "", "None"):
         return dexa_data

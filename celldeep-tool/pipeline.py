@@ -66,7 +66,8 @@ def parse_provider_statuses(note_text: str | None) -> tuple[bool | None, bool | 
     trt = re.search(
         r"\b(?:on|start(?:ing|ed)?|begin(?:ning)?|active(?:ly on)?)\s+(?:testosterone\s+)?(?:trt|replacement therapy)\b"
         r"|\btestosterone\s+(?:replacement therapy|injections?|therapy)\s+(?:is\s+)?(?:active|current|started|ongoing)\b"
-        r"|\bon\s+testosterone\s+injections?\b",
+        r"|\bon\s+testosterone\s+injections?\b"
+        r"|\bactive\s+testosterone\s+(?:replacement\s+)?therapy\b",
         text,
     )
     negative_trt = re.search(r"\b(?:not|never|no longer)\s+(?:on\s+)?(?:trt|testosterone(?: replacement therapy| injections?| therapy))\b", text)
@@ -353,6 +354,61 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
     return _parse_json_response(raw_text, patient_name=patient_name)
 
 
+def _dedupe_extracted_markers(raw_markers: list[dict]) -> tuple[list[dict], list[str]]:
+    """Collapse multiple extracted mentions of the same canonical marker into exactly one entry.
+
+    A single source lab PDF can name the same marker two different ways in two different
+    sections (e.g. "Vitamin D" on one panel and "Vitamin D, 25-Hydroxy" on another), and each
+    resolves to the same canonical marker via markers_reference.lookup_marker's alias matching.
+    Without this step, both extracted mentions would reach score_and_build_record as separate
+    Marker objects and render as duplicate rows - this is a generalized fix (grouped by
+    resolved canonical name, not a per-marker patch) so it applies to every alias in the library,
+    not just the ones seen in any one report.
+
+    If the mentions agree (or one simply fills in a field the other left null), they're merged
+    into a single entry. If they genuinely conflict on "then" or "now", this never silently picks
+    one as correct - both values are logged as a review item and the first mention is kept so the
+    report still renders, exactly like every other "flag it, don't guess" safeguard in this file.
+    """
+    groups: dict = {}
+    order = []
+    for raw in raw_markers:
+        match = markers_reference_lookup(raw.get("name", ""))
+        key = match[0] if match else id(raw)  # unrecognized markers are never merged with each other
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(raw)
+
+    deduped = []
+    conflict_notes = []
+    for key in order:
+        entries = groups[key]
+        if len(entries) == 1 or not isinstance(key, str):
+            deduped.extend(entries)
+            continue
+        conflicts = []
+        for field in ("then", "now"):
+            values = {entry.get(field) for entry in entries if entry.get(field) is not None}
+            if len(values) > 1:
+                conflicts.append(f"{field}={sorted(values)}")
+        if conflicts:
+            detail = "; ".join(conflicts)
+            conflict_notes.append(
+                f"WARNING: MARKER '{key}' EXTRACTED {len(entries)} TIMES WITH CONFLICTING VALUES "
+                f"({detail}) - NOT AUTO-RESOLVED, NEEDS HUMAN REVIEW"
+            )
+            deduped.append(entries[0])
+            continue
+        merged = dict(entries[0])
+        for other in entries[1:]:
+            for field_name, value in other.items():
+                if merged.get(field_name) in (None, "") and value not in (None, ""):
+                    merged[field_name] = value
+        deduped.append(merged)
+    return deduped, conflict_notes
+
+
 def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionReviewNotice]:
     """Step 2: deterministic. No AI. Takes extraction's structured output, matches markers against
     the reference library, computes tiers/percentages via scoring.py (the same math as data.py),
@@ -386,7 +442,11 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             continue
         overrides_by_marker[canonical] = (lo, hi)
 
-    for raw in extracted.get("markers", []):
+    deduped_markers, dedupe_notes = _dedupe_extracted_markers(extracted.get("markers", []))
+    notice.other_notes.extend(dedupe_notes)
+    scoring_log_lines.extend(dedupe_notes)
+
+    for raw in deduped_markers:
         match = markers_reference_lookup(raw["name"])
         if match is None:
             notice.unrecognized_markers.append(UnrecognizedMarker(
@@ -491,7 +551,43 @@ def markers_reference_lookup(raw_name: str):
     return lookup_marker(raw_name)
 
 
-def generate_copy(client: Anthropic, record: PatientRecord) -> dict:
+# An LLM occasionally degrades mid-response and drops spaces between words for a stretch of text
+# (never a data-value corruption, always prose) - a real word essentially never runs this long
+# with no space, so this is a reliable enough signal to catch it without false-positiving on
+# legitimate long marker/compound names.
+_RUN_ON_WORD_RE = re.compile(r"[A-Za-z]{24,}")
+
+
+def _find_corrupted_text_paths(value, path: str = "") -> list[str]:
+    """Recursively find generated string fields that look like they lost their spacing."""
+    found = []
+    if isinstance(value, str):
+        if _RUN_ON_WORD_RE.search(value):
+            found.append(path)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            found.extend(_find_corrupted_text_paths(item, f"{path}.{key}" if path else str(key)))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.extend(_find_corrupted_text_paths(item, f"{path}[{index}]"))
+    return found
+
+
+def _clear_path(data, path: str) -> None:
+    """Blank out one corrupted field by its dotted/bracketed path rather than rendering garbled
+    run-on text - used only as a last resort after retries have already failed."""
+    parts = re.findall(r"[^.\[\]]+|\[\d+\]", path)
+    node = data
+    for part in parts[:-1]:
+        node = node[int(part[1:-1])] if part.startswith("[") else node[part]
+    last = parts[-1]
+    if last.startswith("["):
+        node[int(last[1:-1])] = ""
+    else:
+        node[last] = ""
+
+
+def generate_copy(client: Anthropic, record: PatientRecord) -> tuple[dict, list[str]]:
     """Step 3: the interpretive writing pass. Takes the fully-scored PatientRecord (all numbers,
     all tiers already fixed by deterministic code) and generates the sentences that go around them,
     in V23's locked voice."""
@@ -501,20 +597,39 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> dict:
                            or NARRATIVE_CATEGORY_OVERRIDE.get(marker.name) == patient_category]
         for patient_category in DATA_TO_PATIENT_CATEGORY.values()
     }
+    # Structure isn't derived from any marker category (it comes from DEXA, not bloodwork), so
+    # without an explicit entry the model has no membership signal for it at all - unlike every
+    # other category, which at least gets an explicit empty list telling it "no markers here."
+    category_membership["Structure"] = (["DEXA body composition scan"] if record.dexa_history else [])
     payload = json.dumps({"record": asdict(record), "patient_facing_category_membership": category_membership},
                          default=str, indent=2)
-    resp = client.messages.create(
-        model=MODEL,
-        max_tokens=16000,
-        system=GENERATION_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": f"Here is the fully scored patient record and its category membership:\n\n{payload}\n\n"
-                                                 "Generate the interpretive copy per the instructions."}],
-    )
-    text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
-    raw_text = "".join(text_blocks)
-    with open("/tmp/pre_sanitize_copy.json", "w", encoding="utf-8") as f:
-        f.write(raw_text)
-    return _parse_json_response(raw_text, patient_name=record.name)
+    warnings = []
+    parsed = {}
+    for attempt in range(2):
+        resp = client.messages.create(
+            model=MODEL,
+            max_tokens=16000,
+            system=GENERATION_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": f"Here is the fully scored patient record and its category membership:\n\n{payload}\n\n"
+                                                     "Generate the interpretive copy per the instructions."}],
+        )
+        text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
+        raw_text = "".join(text_blocks)
+        with open("/tmp/pre_sanitize_copy.json", "w", encoding="utf-8") as f:
+            f.write(raw_text)
+        parsed = _parse_json_response(raw_text, patient_name=record.name)
+        corrupted_paths = _find_corrupted_text_paths(parsed)
+        if not corrupted_paths:
+            return parsed, warnings
+        if attempt == 0:
+            continue  # one resample is usually enough to clear a stochastic formatting glitch
+        for path in corrupted_paths:
+            _clear_path(parsed, path)
+        warnings.append(
+            "WARNING: GENERATED COPY HAD RUN-ON/UNSPACED TEXT THAT SURVIVED A RETRY - FIELDS "
+            f"BLANKED RATHER THAN RENDERED GARBLED: {', '.join(corrupted_paths)} - NEEDS HUMAN REVIEW"
+        )
+    return parsed, warnings
 
 
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
@@ -538,7 +653,9 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
     notice.other_notes.extend(completeness_notice.other_notes)
 
     print("Step 3/3: generating interpretive copy...")
-    copy = _sanitize_em_dashes(generate_copy(client, record))
+    raw_copy, generation_warnings = generate_copy(client, record)
+    notice.other_notes.extend(generation_warnings)
+    copy = _sanitize_em_dashes(raw_copy)
     copy = _substitute_marker_list_placeholders(copy, _marker_list_placeholders(record))
     with open("/tmp/post_sanitize_copy.json", "w", encoding="utf-8") as f:
         json.dump(copy, f, indent=2, ensure_ascii=False)

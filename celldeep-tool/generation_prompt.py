@@ -114,6 +114,21 @@ PROJECTION-ROW CONTENT LOGIC:
 zero markers this round — write it as a short, plain statement that there's nothing to report for that \
 system yet (e.g. "No markers in this category this round."). Never output JSON null or omit the key for a \
 category with no markers.
+- Structure is the one category driven by dexa_history, not by markers — `patient_facing_category_membership` \
+still includes a "Structure" entry so you know whether real DEXA data exists (a non-empty list means it \
+does). Whenever dexa_history is non-empty, headlines.Structure MUST be a real sentence grounded in the \
+actual first-vs-latest scan comparison (e.g. visceral fat, body fat %, or lean mass change) — never null, \
+never an empty string, even if some individual scans in the history have partial/missing metrics. Ground the \
+sentence only in the metrics that actually have values; never invent a number for a metric that's null.
+
+TRT / HORMONE SUPPRESSION NARRATIVE SAFETY:
+- The record's "on_trt" field is true only when the provider's note explicitly confirmed active testosterone \
+replacement therapy — it is false or null in every other case, including when the patient is simply on a \
+testosterone-related protocol item without an explicit confirmed status.
+- Only write language asserting that LH/FSH suppression is "expected," "normal," or "anticipated" in the \
+context of TRT when on_trt is true in the record you were given. If on_trt is not true and FSH/LH are \
+flagged, describe the flagged result plainly on its own terms — do not assert or imply a TRT explanation you \
+were not given confirmed data for.
 
 RETESTED VS. NOT RETESTED — this is a real distinction in the data, never blur it:
 - Every marker has a "now" value and a "now_tier". If BOTH are null for a marker, that marker was NOT \

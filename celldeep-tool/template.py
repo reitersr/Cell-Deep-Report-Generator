@@ -392,6 +392,21 @@ def box_html(patient_cat, roll, copy, record, logo_mark):
     </div>'''
 
 
+def _default_structure_headline(record: PatientRecord) -> str:
+    """Deterministic, data-grounded fallback so the DEXA headline is never blank/dashed even if
+    the generation step's own headline came back empty - built only from real scan values, never
+    a fabricated one. This is a safety net; the generation prompt is the primary fix."""
+    scans_with_vat = [d for d in record.dexa_history if d.vat_fat_mass_lb is not None]
+    if len(scans_with_vat) >= 2:
+        first_vat, latest_vat = scans_with_vat[0].vat_fat_mass_lb, scans_with_vat[-1].vat_fat_mass_lb
+        if latest_vat < first_vat:
+            return f"Visceral fat down from {first_vat} lb to {latest_vat} lb."
+        if latest_vat > first_vat:
+            return f"Visceral fat up from {first_vat} lb to {latest_vat} lb."
+        return f"Visceral fat holding steady at {latest_vat} lb."
+    return "Body composition tracked across your DEXA scan history."
+
+
 def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     if not record.dexa_history:
         return ""
@@ -416,10 +431,14 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     note = copy.get("box_stories", {}).get("Structure", "")
     delta_html = f'<div class="dexa-delta">{delta}</div>' if delta else ""
     note_html = f'<p class="dexa-note">{note}</p>' if note else ""
+    # a plain default() call here would treat "" the same as null and convert it to a dash - a
+    # real headline must always render when real DEXA data exists (see generation prompt), so an
+    # empty AI response falls back to a deterministic real-data sentence instead of a blank dash
+    structure_headline = copy.get("headlines", {}).get("Structure") or _default_structure_headline(record)
     return f'''<div class="dexa-panel">
       <div class="dexa-top">
         <div><div class="dexa-eyebrow">STRUCTURE &middot; DEXA BODY COMPOSITION SCAN</div>
-        <div class="dexa-title">{fmt(copy.get("headlines", {}).get("Structure", ""))}</div></div>
+        <div class="dexa-title">{structure_headline}</div></div>
         <div class="dexa-badge">{CHECK}</div>
       </div>
       <div class="dexa-body">
