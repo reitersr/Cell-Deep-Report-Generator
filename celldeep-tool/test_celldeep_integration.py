@@ -282,3 +282,21 @@ def test_lab_printed_range_fallback_for_lh_fsh(tmp_path):
     })
     assert configured.markers[0].range_source == "celldeep"
     assert configured.markers[0].now_tier == "optimal"
+
+
+def test_completeness_warns_when_repeated_source_marker_has_no_current_value():
+    notice = pipeline.verify_extraction_completeness(
+        {"markers": [{"name": "LH", "then": 0.2, "now": None}]},
+        lab_text="LH 0.2 mIU/mL\nLH 0.1 mIU/mL",
+    )
+    assert any("LH' APPEARS 2 TIMES" in warning for warning in notice.other_notes)
+
+
+def test_rendered_retest_status_uses_current_value_not_score_tier():
+    marker = Marker(
+        name="Review Needed", category="Thyroid", unit="", kind="range", disp_range="0.0 - 2.0",
+        now=1.0, disp_now="1.0", now_tier=None,
+    )
+    html = template.bio_row_tr(marker, {})
+    assert "Not retested" not in html
+    assert "Current result needs review" in html

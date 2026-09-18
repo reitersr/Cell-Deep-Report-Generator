@@ -264,11 +264,28 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
             extracted_markers.add(match[0])
     lab_lower = lab_text.lower()
     for canonical, config in MARKER_LIBRARY.items():
-        if canonical.lower() not in lab_lower and not any(alias.lower() in lab_lower for alias in config.get("aliases", [])):
+        names = [canonical, *config.get("aliases", [])]
+        source_positions = set()
+        for name in names:
+            source_positions.update(match.start() for match in re.finditer(
+                rf"(?<!\w){re.escape(name.lower())}(?!\w)", lab_lower
+            ))
+        source_mentions = len(source_positions)
+        if not source_mentions:
             continue
         if canonical not in extracted_markers:
             warning = (f"WARNING: MARKER '{canonical}' FOUND IN SOURCE BUT MISSING FROM EXTRACTION - "
                        "NEEDS HUMAN REVIEW")
+            notice.other_notes.append(warning)
+            log_lines.append(warning)
+            continue
+        extracted_marker = next(
+            marker for marker in extracted["markers"]
+            if (match := markers_reference_lookup(marker.get("name", ""))) and match[0] == canonical
+        )
+        if source_mentions >= 2 and extracted_marker.get("now") is None:
+            warning = (f"WARNING: MARKER '{canonical}' APPEARS {source_mentions} TIMES IN SOURCE BUT "
+                       "HAS NO LATEST-DRAW VALUE IN EXTRACTION - NEEDS HUMAN REVIEW")
             notice.other_notes.append(warning)
             log_lines.append(warning)
 

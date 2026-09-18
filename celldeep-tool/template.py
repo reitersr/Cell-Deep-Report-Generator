@@ -492,7 +492,7 @@ def protocol_section(record: PatientRecord, roll, copy):
 
 
 def bio_row_tr(m, copy, color_override=None):
-    not_retested = m.now_tier is None  # no result for this marker on the latest draw, not a real comparison
+    not_retested = m.now is None  # no result for this marker on the latest draw, not a real comparison
     unscored = m.unscored_reason == "missing_threshold"
     if unscored:
         color = MUTE
@@ -500,6 +500,9 @@ def bio_row_tr(m, copy, color_override=None):
     elif not_retested:
         color = MUTE
         tier_word = "Not retested"
+    elif m.now_tier is None:
+        color = MUTE
+        tier_word = "Current result needs review"
     else:
         color = color_override or TIER_COLOR.get(m.now_tier, MUTE)
         tier_word = {"optimal": "Optimal", "moderate": "Moderate", "flag": "Flagged"}[m.now_tier]
