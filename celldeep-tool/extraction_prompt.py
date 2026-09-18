@@ -73,6 +73,14 @@ not.
     range from a general medical reference, another marker, or another draw. If a range is not printed or
     cannot be read confidently, set its display field to "" and both numeric fields to 0. If the marker has
     only one draw, use that same empty-display/zero sentinel for all three earliest-draw fields.
+- Some reference ranges are printed as more than one sub-range for the same single result (most commonly a
+    time-of-day-qualified range, e.g. cortisol printed as "AM (6-10 AM) 4.8-19.5 ug/dL; PM (4-8 PM) 2.5-11.9
+    ug/dL"). This is a real, normal, recurring lab-report format - it is NOT the same thing as an unreadable
+    or absent range, and must NOT fall back to the 0/0/"" sentinel just because it has more than one part.
+    When this happens: use the FIRST-listed sub-range's numeric endpoints for the _lo/_hi fields (the AM
+    range in the cortisol example), and put the FULL printed text, including every sub-range and its
+    qualifier, in the _display field so nothing is lost. Only fall back to the empty/zero sentinel when the
+    range is genuinely not printed at all or is illegible - never because it has multiple qualified parts.
 - If a marker's reference range is stated differently on this specific lab report than in the reference \
 library provided to you, still use the reference library's scoring configuration (it is the clinically \
 reviewed standard this pipeline runs on) — but note the discrepancy in "other_notes" so a human can review it \

@@ -114,6 +114,58 @@ def test_dedupe_does_not_drop_a_real_lab_range_for_the_sentinel_from_a_duplicate
     assert not any("CONFLICTING" in note for note in notice.other_notes)
 
 
+# Real ground-truth data relayed directly from the patient's actual source bloodwork PDF
+# (not a reconstruction): a single Cortisol, Total line with the current (4/24/2026) and
+# historical (1/7/2026) values, followed immediately by the lab's own AM/PM dual sub-range.
+# This DISPROVES the dedup/sentinel-merge theory above as the mechanism for this patient - there
+# is only one real mention, nothing to merge. The actual root cause is that extraction_prompt.py
+# had no guidance for a reference range printed as more than one time-qualified sub-range, so the
+# model could (non-deterministically) treat it as "can't be read confidently" and fall back to
+# the 0/0/"" sentinel exactly as if no range were printed at all.
+REAL_CORTISOL_SOURCE_TEXT = (
+    "Cortisol, Total 14.7 ug/dL Z4M 4.8\n"
+    "Reference range: AM (6-10 AM) 4.8-19.5 ug/dL; PM (4-8 PM) 2.5-11.9 ug/dL."
+)
+
+
+@pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key")
+def test_live_extraction_handles_the_real_cortisol_am_pm_dual_range_text(tmp_path):
+    """Live API check against the REAL verbatim source text (not a cleaned-up reconstruction):
+    confirms extraction populates a real lab_range_now_lo/hi/display for this exact dual
+    time-of-day range format instead of falling back to the 0/0/"" sentinel."""
+    from anthropic import Anthropic
+
+    source = tmp_path / "real_cortisol_range.pdf"
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_textbox(
+        fitz.Rect(36, 36, 560, 780),
+        "SYNTHETIC RE-CREATION FOR TESTING - Cleveland HeartLab / Quest style panel\n"
+        "Patient: Real Cortisol Range Check\n\n" + REAL_CORTISOL_SOURCE_TEXT + "\n",
+        fontsize=10, fontname="cour",
+    )
+    document.save(source)
+    document.close()
+
+    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    extracted = pipeline.extract(client, labs_pdf=str(source), dexa_pdfs=[], note_text=None,
+                                  patient_name="Real Cortisol Range Check")
+    cortisol_entries = [m for m in extracted.get("markers", []) if "cortisol" in m.get("name", "").lower()]
+    assert len(cortisol_entries) == 1
+    cortisol = cortisol_entries[0]
+    assert cortisol["lab_range_now_display"] != ""
+    assert cortisol["lab_range_now_lo"] == 4.8
+    assert cortisol["lab_range_now_hi"] == 19.5
+
+    record, _ = pipeline.score_and_build_record({
+        "name": "Real Cortisol Range Check", "sex": "male", "provider_note_raw": "",
+        "markers": [cortisol],
+    })
+    assert record.markers[0].now_tier == "optimal"
+    assert record.markers[0].unscored_reason is None
+
+
+
 # ---------------------------------------------------------------------------
 # Issue 2: corrupted partial DEXA scans (fabricated 0s alongside a real VAT value)
 # ---------------------------------------------------------------------------
@@ -282,6 +334,38 @@ def test_normal_prose_with_hyphens_and_long_names_is_never_flagged():
         }
     }
     assert pipeline._find_corrupted_text_paths(fine) == []
+
+
+# Verbatim (not paraphrased) garbled text relayed directly from the real rendered Evan Walker
+# report's SHBG entry. Confirmed by direct inspection: 363 letters, only 12 real spaces (ratio
+# 30.25, vs. the _MAX_LETTERS_PER_SPACE threshold of 12), and the pure word-length check alone
+# already finds multiple runs well past 24 chars (e.g. "testosteronedetermineswhatyourbodyisactually",
+# 44 chars) - _is_run_on_text() returns True on this exact string. The detector was never the
+# blind spot; this fixture exists so a future regression in the detector itself is caught against
+# the real failure text, not a reconstruction of it.
+REAL_SHBG_GARBLED_TEXT = (
+    "Whatthisis:Aproteinthatbindstestosterone,makingitunavailableforimmediateuse. "
+    "The balancebetweenSHBG,totaltestosterone,andfree testosteronedetermineswhatyourbodyisactually "
+    "experiencing.. Movedfrom38.0to52.0nmol/L, crossingfromoptimalintomoderate. SHBGbinds "
+    "testosteroneandaffectshowmuchisavailableas freehormone. ArisingSHBGalongsideveryhigh "
+    "totaltestosteroneproducesanunpredictablefree fraction."
+)
+
+
+def test_real_shbg_garbled_text_is_detected_as_run_on():
+    assert pipeline._is_run_on_text(REAL_SHBG_GARBLED_TEXT) is True
+
+    letters = sum(1 for c in REAL_SHBG_GARBLED_TEXT if c.isalpha())
+    spaces = REAL_SHBG_GARBLED_TEXT.count(" ")
+    assert letters == 363
+    assert spaces == 12
+    assert letters / spaces > pipeline._MAX_LETTERS_PER_SPACE
+
+    longest_run = max(pipeline._RUN_ON_WORD_RE.findall(REAL_SHBG_GARBLED_TEXT), key=len)
+    assert len(longest_run) >= 24  # e.g. "testosteronedetermineswhatyourbodyisactually" (44 chars)
+
+    corrupted = {"marker_what": {"SHBG": REAL_SHBG_GARBLED_TEXT}}
+    assert pipeline._find_corrupted_text_paths(corrupted) == ["marker_what.SHBG"]
 
 
 def test_clear_path_blanks_only_the_corrupted_field():
@@ -456,8 +540,7 @@ def test_live_full_pipeline_regeneration_all_fixes_hold_together(tmp_path):
         "SYNTHETIC TEST LAB REPORT - FAKE DATA, NOT A REAL PATIENT\n"
         "Patient: Live Full Pipeline Patient\n\n"
         "HORMONE PANEL - COLLECTED: 07/01/2026\n"
-        "  Cortisol: 8.0 ug/dL\n"
-        "  Cortisol Total: 8.0 ug/dL   (Reference: AM 4.8-19.5, PM 2.5-11.9)\n"
+        f"  {REAL_CORTISOL_SOURCE_TEXT}\n"
         "  SHBG: 60.0 nmol/L   (ref 10-80)\n"
         "  LH: 0.1 mIU/mL   (ref 1.0-10.0)\n"
         "  FSH: 0.1 mIU/mL   (ref 1.0-10.0)\n\n"
