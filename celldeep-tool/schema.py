@@ -36,6 +36,13 @@ class Marker:
     direction: Optional[Direction] = None # for "bounded": which way is better
     lo: Optional[float] = None            # for "range": low end of reference range
     hi: Optional[float] = None            # for "range": high end of reference range
+    suppress_low_on_trt: bool = False     # LH/FSH only: low values are not flagged on explicit TRT
+    unscored_reason: Optional[str] = None # e.g. missing_threshold; distinct from a missing latest value
+    range_source: Optional[str] = None    # "celldeep" or "lab" when a numeric range was used
+    lab_range_then: Optional[dict] = None # literal printed range for the earliest draw, if extracted
+    lab_range_now: Optional[dict] = None  # literal printed range for the latest draw, if extracted
+    then_lo: Optional[float] = None       # scoring endpoints for a source-lab then range
+    then_hi: Optional[float] = None
 
     # actual values — "then" is the earliest available reading, "now" is the most recent.
     # If only one reading exists (first-ever test), then=None and only now is set.

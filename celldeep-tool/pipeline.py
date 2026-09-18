@@ -74,6 +74,18 @@ def parse_provider_statuses(note_text: str | None) -> tuple[bool | None, bool | 
     return bhrt_status, on_trt
 
 
+def _valid_lab_range(raw: dict, key: str) -> dict | None:
+    value = raw.get(key)
+    if not isinstance(value, dict):
+        return None
+    lo, hi, display = value.get("lo"), value.get("hi"), value.get("display")
+    if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)) or not isinstance(display, str):
+        return None
+    if lo > hi:
+        return None
+    return {"lo": lo, "hi": hi, "display": display}
+
+
 def sanitize_text(s: str) -> str:
     s = s.replace(" — ", "; ")
     s = s.replace("—", ", ")
@@ -369,14 +381,21 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         canonical, cfg = match
         cfg = resolve_marker_config(canonical, cfg, patient_sex, postmenopausal_bhrt=postmenopausal_bhrt)
         override = overrides_by_marker.get(canonical)
-        if override is None and has_missing_thresholds(cfg):
-            # Data error in the reference library (or a bad sex resolution) - exclude just this
-            # one marker rather than letting a None optimal/moderate crash the whole report.
+        lab_range_then = _valid_lab_range(raw, "lab_range_then")
+        lab_range = _valid_lab_range(raw, "lab_range_now")
+        active_lab_range = lab_range or lab_range_then
+        missing_threshold = override is None and has_missing_thresholds(cfg)
+        lab_range_fallback = missing_threshold and active_lab_range is not None
+        if missing_threshold:
+            # Keep the real lab result visible; scoring remains explicitly unscored until configured.
             error_line = (f"ERROR: missing threshold for {canonical} / {patient_sex or 'unknown'} "
-                          "- marker excluded from scoring")
+                          + ("- using printed lab range" if lab_range_fallback else "- marker retained as unscored"))
             scoring_log_lines.append(error_line)
             notice.other_notes.append(error_line)
-            continue
+        if lab_range_fallback:
+            cfg = dict(cfg, kind="range", lo=active_lab_range["lo"], hi=active_lab_range["hi"],
+                       disp_range=active_lab_range["display"])
+            missing_threshold = False
         if override is not None:
             lo, hi = override
             # Provider-note override always scores as a "range" band around the stated optimal
@@ -398,19 +417,19 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 disp_range=cfg["disp_range"],
                 optimal=cfg.get("optimal"), moderate=cfg.get("moderate"), direction=cfg.get("direction"),
                 lo=cfg.get("lo"), hi=cfg.get("hi"),
+                suppress_low_on_trt=cfg.get("suppress_low_on_trt", False),
+                unscored_reason="missing_threshold" if missing_threshold else None,
+                range_source="lab" if lab_range_fallback else ("celldeep" if cfg.get("kind") == "range" else None),
+                lab_range_now=lab_range,
+                lab_range_then=lab_range_then,
+                then_lo=lab_range_then["lo"] if lab_range_then else None,
+                then_hi=lab_range_then["hi"] if lab_range_then else None,
                 then=raw.get("then"), now=raw.get("now"),
                 disp_then=raw.get("disp_then"), disp_now=raw.get("disp_now"),
                 is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
                 full_history=raw.get("full_history", []),
             )
         scoring.attach_scores(m, sex=patient_sex, on_trt=on_trt)   # computes now_tier/then_tier/pct in place — pure math, no AI
-        if m.now_tier == "unscored":
-            # Defense-in-depth: should already be caught by has_missing_thresholds() above, but
-            # never let a None threshold that slips through crash the report - skip it instead.
-            skip_line = f"MARKER SKIPPED - missing threshold data: {canonical}"
-            scoring_log_lines.append(skip_line)
-            notice.other_notes.append(skip_line)
-            continue
         markers.append(m)
 
     dexa_history = [DexaReading(**scoring.normalize_dexa_body_fat(d))

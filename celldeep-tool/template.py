@@ -491,7 +491,11 @@ def protocol_section(record: PatientRecord, roll, copy):
 
 def bio_row_tr(m, copy, color_override=None):
     not_retested = m.now_tier is None  # no result for this marker on the latest draw, not a real comparison
-    if not_retested:
+    unscored = m.unscored_reason == "missing_threshold"
+    if unscored:
+        color = MUTE
+        tier_word = "Reference range pending"
+    elif not_retested:
         color = MUTE
         tier_word = "Not retested"
     else:
@@ -502,7 +506,7 @@ def bio_row_tr(m, copy, color_override=None):
     note = copy.get("marker_notes", {}).get(m.name)
     what = copy.get("marker_what", {}).get(m.name)
     if m.then is not None:
-        then_color = TIER_COLOR.get(m.then_tier, YELLOW)
+        then_color = MUTE if unscored else TIER_COLOR.get(m.then_tier, YELLOW)
         then_cell = f'<span class="bio-pill" style="background:{then_color}22; color:{then_color};">{fmt(m.disp_then)}</span>'
     else:
         then_cell = f'<span class="bio-dash">{fmt(m.disp_then)}</span>'

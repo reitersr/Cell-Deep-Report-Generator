@@ -95,6 +95,17 @@ def score_range(value: float, lo: float, hi: float):
     return round(pct), tier
 
 
+def score_lab_range(value: float, lo: float, hi: float):
+    """Score a source-lab range as binary optimal/in-range or flagged/out-of-range."""
+    if lo is None or hi is None:
+        return None, "unscored"
+    if value is None:
+        return None, None
+    if lo <= value <= hi:
+        return 96, "optimal"
+    return 20, "flag"
+
+
 def score_categorical(is_good: bool | None):
     if is_good is None:
         return None, None  # normal: this draw simply has no result for this marker
@@ -115,12 +126,27 @@ def attach_scores(m: Marker, sex: str | None = None, on_trt: bool | None = None)
         then_pct, then_tier = (score_bounded(m.then, m.direction, m.optimal, m.moderate)
                                 if m.then is not None and now_tier != "unscored" else (None, None))
     elif m.kind == "range":
-        now_pct, now_tier = score_range(m.now, m.lo, m.hi)
-        then_pct, then_tier = (score_range(m.then, m.lo, m.hi) if m.then is not None else (None, None))
+        scorer = score_lab_range if m.range_source == "lab" else score_range
+        now_pct, now_tier = scorer(m.now, m.lo, m.hi)
+        then_lo = m.then_lo if m.then_lo is not None else m.lo
+        then_hi = m.then_hi if m.then_hi is not None else m.hi
+        then_pct, then_tier = (scorer(m.then, then_lo, then_hi) if m.then is not None else (None, None))
     else:  # categorical
         now_pct, now_tier = score_categorical(m.is_good_now)
         then_pct, then_tier = (score_categorical(m.is_good_then)
                                 if m.is_good_then is not None else (None, None))
+
+    if m.suppress_low_on_trt:
+        if m.now is not None and m.lo is not None and m.now < m.lo:
+            now_pct, now_tier = 20, "flag"
+        if m.then is not None and m.lo is not None and m.then < m.lo:
+            then_pct, then_tier = 20, "flag"
+
+    if m.suppress_low_on_trt and on_trt is True:
+        if m.now is not None and m.lo is not None and m.now < m.lo and now_tier == "flag":
+            now_pct, now_tier = 96, "optimal"
+        if m.then is not None and m.lo is not None and m.then < m.lo and then_tier == "flag":
+            then_pct, then_tier = 96, "optimal"
 
     m.now_pct, m.now_tier = now_pct, now_tier
     m.then_pct, m.then_tier = then_pct, then_tier

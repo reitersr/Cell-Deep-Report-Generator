@@ -64,6 +64,12 @@ an honest null, not a reason to shift an older reading into the "now" slot. This
 normal and expected for some markers on a given draw to have results while others on that exact same draw do \
 not.
 - Extract dates exactly as printed on the source document. Do not reformat, estimate, or round a date.
+- For EVERY recognized marker, also extract the literal reference range printed on the same lab report row
+    for each draw. Put the earliest-draw range in "lab_range_then" and the latest-draw range in
+    "lab_range_now", each as {"lo": <number>, "hi": <number>, "display": "exact printed text"}. If the
+    marker has only one draw, use "lab_range_now". Preserve the report's exact display text and numeric
+    endpoints; never infer a range from a general medical reference, another marker, or another draw. If no
+    range is printed or it cannot be read confidently, set that range object to null.
 - If a marker's reference range is stated differently on this specific lab report than in the reference \
 library provided to you, still use the reference library's scoring configuration (it is the clinically \
 reviewed standard this pipeline runs on) — but note the discrepancy in "other_notes" so a human can review it \
@@ -152,6 +158,8 @@ OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
             "now": 0.7,
             "disp_then": "3.1",
             "disp_now": "0.7",
+            "lab_range_then": null,
+            "lab_range_now": {"lo": 0.0, "hi": 1.0, "display": "0.0-1.0"},
             "is_good_then": null,
             "is_good_now": null,
             "full_history": []
@@ -226,6 +234,18 @@ EXTRACTION_OUTPUT_SCHEMA = {
                     # stays nullable; disp_now stays a plain required string and the prompt
                     # instructs the model to use "" (not a fabricated value) when now is null.
                     "disp_now": {"type": "string"},
+                    "lab_range_then": {
+                        "type": ["object", "null"],
+                        "additionalProperties": False,
+                        "properties": {"lo": {"type": "number"}, "hi": {"type": "number"}, "display": {"type": "string"}},
+                        "required": ["lo", "hi", "display"],
+                    },
+                    "lab_range_now": {
+                        "type": ["object", "null"],
+                        "additionalProperties": False,
+                        "properties": {"lo": {"type": "number"}, "hi": {"type": "number"}, "display": {"type": "string"}},
+                        "required": ["lo", "hi", "display"],
+                    },
                     "is_good_then": _NULLABLE_BOOL,
                     "is_good_now": _NULLABLE_BOOL,
                     "full_history": {
@@ -242,7 +262,7 @@ EXTRACTION_OUTPUT_SCHEMA = {
                         },
                     },
                 },
-                "required": ["name", "then", "now", "disp_then", "disp_now",
+                "required": ["name", "then", "now", "disp_then", "disp_now", "lab_range_then", "lab_range_now",
                              "is_good_then", "is_good_now", "full_history"],
             },
         },
