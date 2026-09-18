@@ -34,6 +34,7 @@ class Marker:
     optimal: Optional[float] = None       # for "bounded": the optimal cutoff
     moderate: Optional[float] = None      # for "bounded": the moderate cutoff
     direction: Optional[Direction] = None # for "bounded": which way is better
+    inclusive: bool = True                 # whether equality at a bounded cutoff is optimal
     lo: Optional[float] = None            # for "range": low end of reference range
     hi: Optional[float] = None            # for "range": high end of reference range
     suppress_low_on_trt: bool = False     # LH/FSH only: low values are not flagged on explicit TRT

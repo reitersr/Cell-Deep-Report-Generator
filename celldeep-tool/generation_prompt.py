@@ -106,6 +106,9 @@ PROJECTION-ROW CONTENT LOGIC:
 - NEXT 30 DAYS: name the single most time-sensitive action given the patient's actual moderate/flagged markers and current protocol. Only use a generic "stay the course" message if literally nothing needs attention.
 - NEXT 90 DAYS: name which specific system is expected to change tier and why, grounded in real trend direction already in the data. Never invent a specific re-test date the source data doesn't support — describe the expected change without a date if no date is known.
 - BY [target age]: describe the long-range goal state, grounded in the patient's actual target_age field.
+- `patient_facing_category_membership` explicitly maps each report-system name to its real markers. Use it
+  as the authority for whether a system has markers; for example, Thyroid markers belong to Pace. A category
+  may say "No markers in this category this round." only when its membership list is empty.
 - category_taglines is required only for categories actually present in this patient's data — never invent an entry for a category with no markers.
 - box_stories/box_forward/headlines must have an entry for all seven category keys even when a category has \
 zero markers this round — write it as a short, plain statement that there's nothing to report for that \

@@ -415,6 +415,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 name=canonical, category=cfg["category"], unit=cfg["unit"], kind=cfg["kind"],
                 disp_range=cfg["disp_range"],
                 optimal=cfg.get("optimal"), moderate=cfg.get("moderate"), direction=cfg.get("direction"),
+                inclusive=cfg.get("inclusive", True),
                 lo=cfg.get("lo"), hi=cfg.get("hi"),
                 suppress_low_on_trt=cfg.get("suppress_low_on_trt", False),
                 unscored_reason="missing_threshold" if missing_threshold else None,
@@ -477,12 +478,19 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> dict:
     """Step 3: the interpretive writing pass. Takes the fully-scored PatientRecord (all numbers,
     all tiers already fixed by deterministic code) and generates the sentences that go around them,
     in V23's locked voice."""
-    payload = json.dumps(asdict(record), default=str, indent=2)
+    category_membership = {
+        patient_category: [marker.name for marker in record.markers
+                           if DATA_TO_PATIENT_CATEGORY.get(marker.category) == patient_category
+                           or NARRATIVE_CATEGORY_OVERRIDE.get(marker.name) == patient_category]
+        for patient_category in DATA_TO_PATIENT_CATEGORY.values()
+    }
+    payload = json.dumps({"record": asdict(record), "patient_facing_category_membership": category_membership},
+                         default=str, indent=2)
     resp = client.messages.create(
         model=MODEL,
         max_tokens=16000,
         system=GENERATION_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": f"Here is the fully scored patient record:\n\n{payload}\n\n"
+        messages=[{"role": "user", "content": f"Here is the fully scored patient record and its category membership:\n\n{payload}\n\n"
                                                  "Generate the interpretive copy per the instructions."}],
     )
     text_blocks = [b.text for b in resp.content if hasattr(b, "text")]

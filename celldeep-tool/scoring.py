@@ -39,13 +39,13 @@ def normalize_dexa_body_fat(dexa_data: dict) -> dict:
     return dexa_data
 
 
-def score_bounded(value: float, direction: str, optimal: float, moderate: float):
+def score_bounded(value: float, direction: str, optimal: float, moderate: float, inclusive: bool = True):
     if optimal is None or moderate is None:
         return None, "unscored"  # data error: reference library config is incomplete
     if value is None:
         return None, None  # normal: this draw simply has no result for this marker
     if direction == "lower":
-        if value <= optimal:
+        if value < optimal or (inclusive and value == optimal):
             frac = 0 if optimal == 0 else value / optimal
             pct = 100 - frac * 12
             return max(88, round(pct)), "optimal"
@@ -59,7 +59,7 @@ def score_bounded(value: float, direction: str, optimal: float, moderate: float)
             pct = max(8, 50 - over * 90)
             return round(pct), "flag"
     else:  # higher is better
-        if value >= optimal:
+        if value > optimal or (inclusive and value == optimal):
             pct = 88 + min(12, (value - optimal) / max(optimal, 1) * 12)
             return round(pct), "optimal"
         elif value >= moderate:
@@ -124,8 +124,8 @@ def attach_scores(m: Marker, sex: str | None = None, on_trt: bool | None = None)
     already reflect the patient's sex by the time they reach this function, per
     markers_reference.resolve_marker_config."""
     if m.kind == "bounded":
-        now_pct, now_tier = score_bounded(m.now, m.direction, m.optimal, m.moderate)
-        then_pct, then_tier = (score_bounded(m.then, m.direction, m.optimal, m.moderate)
+        now_pct, now_tier = score_bounded(m.now, m.direction, m.optimal, m.moderate, m.inclusive)
+        then_pct, then_tier = (score_bounded(m.then, m.direction, m.optimal, m.moderate, m.inclusive)
                                 if m.then is not None and now_tier != "unscored" else (None, None))
     elif m.kind == "range":
         scorer = score_lab_range if m.range_source == "lab" else score_range

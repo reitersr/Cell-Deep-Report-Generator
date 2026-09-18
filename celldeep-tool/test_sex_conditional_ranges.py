@@ -33,8 +33,28 @@ def test_female_default_range_unchanged():
     }
     record, _ = score_and_build_record(extracted)
     marker = _testosterone_marker(record)
-    assert (marker.lo, marker.hi) == (2, 45)
-    print("PASS: female default range (2-45) unchanged")
+    assert marker.now_tier == "unscored"
+    assert marker.unscored_reason == "missing_threshold"
+    print("PASS: female Total Testosterone remains unscored without a supplied female target")
+
+
+def test_progesterone_is_unscored_for_male_and_bhrt_gated_for_female():
+    male, _ = score_and_build_record({
+        "name": "Male Progesterone Patient", "sex": "male", "provider_note_raw": "",
+        "markers": [{"name": "Progesterone", "now": 5, "disp_now": "5"}],
+    })
+    male_marker = next(marker for marker in male.markers if marker.name == "Progesterone")
+    assert male_marker.now_tier == "unscored"
+    assert male_marker.unscored_reason == "missing_threshold"
+
+    female, _ = score_and_build_record({
+        "name": "Female BHRT Patient", "sex": "female",
+        "provider_note_raw": "Postmenopausal and started BHRT.",
+        "markers": [{"name": "Progesterone", "now": 5, "disp_now": "5"}],
+    })
+    female_marker = next(marker for marker in female.markers if marker.name == "Progesterone")
+    assert (female_marker.lo, female_marker.hi) == (2, 10)
+    assert female_marker.now_tier == "optimal"
 
 
 def test_explicit_override_used_and_logged():

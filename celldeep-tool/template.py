@@ -366,6 +366,8 @@ def box_html(patient_cat, roll, copy, record, logo_mark):
     # generation step may emit JSON null (not a missing key) for an empty category - .get(key) or ""
     # catches that, since a plain default only covers the key-missing case
     story = copy.get("box_stories", {}).get(patient_cat) or ""
+    if r["count"] and story.strip().lower() == "no markers in this category this round.":
+        story = ""
     if not story and r.get("count", 1) == 0:
         story = "No markers in this category this round."
     why_lines = f'<span class="box-tierword" style="color:{color}">{tier_word}.</span> {story}'

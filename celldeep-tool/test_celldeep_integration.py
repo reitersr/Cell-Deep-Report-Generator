@@ -77,6 +77,21 @@ def test_top_level_schema_sentinels_normalize_at_record_boundary():
     assert record.latest_draw_date is None
 
 
+def test_populated_category_never_renders_empty_category_fallback():
+    record, _ = pipeline.score_and_build_record({
+        "name": "Pace Patient", "sex": "male", "provider_note_raw": "",
+        "markers": [{"name": "TSH", "now": 2.0, "disp_now": "2.0"}],
+    })
+    roll, *_ = template.build_rollups(record, None, None, False)
+    html = template.box_html("Pace", roll, {
+        "box_stories": {"Pace": "No markers in this category this round."},
+    }, record, "")
+    assert "No markers in this category this round." not in html
+
+    empty_html = template.box_html("Fuel", roll, {"box_stories": {}}, record, "")
+    assert "No markers in this category this round." in empty_html
+
+
 def test_all_new_markers_alias_score_category_and_render(tmp_path):
     source = tmp_path / "celldeep_aliases.pdf"
     document = fitz.open()
@@ -112,7 +127,10 @@ def test_all_new_markers_alias_score_category_and_render(tmp_path):
     assert {marker.name for marker in record.markers} == set(EXPECTED_CATEGORIES)
     for marker in record.markers:
         assert DATA_TO_PATIENT_CATEGORY.get(marker.category, marker.category) == EXPECTED_CATEGORIES[marker.name]
-        assert marker.now_tier == "optimal"
+        expected_tier = "unscored" if marker.name in {
+            "Progesterone", "Free Testosterone", "Bioavailable Testosterone", "SHBG"
+        } else "optimal"
+        assert marker.now_tier == expected_tier
 
     output = tmp_path / "celldeep_aliases.pdf.out.pdf"
     template.render(record, _copy_for_render(), str(output))
@@ -143,10 +161,10 @@ def test_status_aware_estradiol_and_lh_fsh_scoring():
     assert unknown.postmenopausal_bhrt is None
     assert unknown.on_trt is None
     assert {marker.name: marker.now_tier for marker in unknown.markers} == {
-        "Estradiol": "optimal", "LH": "unscored", "FSH": "unscored",
+        "Estradiol": "unscored", "LH": "unscored", "FSH": "unscored",
     }
     assert {marker.name: marker.unscored_reason for marker in unknown.markers} == {
-        "Estradiol": None, "LH": "missing_threshold", "FSH": "missing_threshold",
+        "Estradiol": "missing_threshold", "LH": "missing_threshold", "FSH": "missing_threshold",
     }
     assert any("missing threshold for LH" in note for note in unknown_notice.other_notes)
     assert any("missing threshold for FSH" in note for note in unknown_notice.other_notes)
