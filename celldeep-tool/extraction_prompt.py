@@ -223,6 +223,13 @@ CRITICAL RULES, apply to every patient this runs on, not just the current one:
 - Numbers must be actual JSON numbers (170.5), not strings ("170.5").
 - This schema and these rules apply identically to every patient's data run through this pipeline — never adjust field names or structure based on what a specific patient's documents contain.
 
+Before finalizing your output, re-scan the full source text for every marker name and known alias you can \
+identify. For each one that appears anywhere in the source, confirm it has a corresponding entry in your \
+markers output — with a real value, or with the appropriate null/sentinel fields if it was only mentioned in \
+narrative text without a measured result. Do not omit a marker from your output solely because it appears \
+only once in the source, and do not omit a marker just because it was not part of the most recent draw's \
+panel — it should still appear with its historical value if one exists.
+
 Return ONLY this JSON object. No markdown fences, no prose before or after, no explanation.
 """
 
