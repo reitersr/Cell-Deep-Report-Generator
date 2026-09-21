@@ -59,6 +59,12 @@ they agree — if a marker's result for one date appears in two different report
 the same report, output TWO separate entries, never one. Do NOT let one report's silence, or one report's \
 explicit "not performed" statement, cause you to skip or suppress a real result that ANOTHER report contains \
 for that same marker/date — every occurrence you can find gets its own independent entry.
+- A report's printed specimen/collection date applies to every result in that report unless a nearer printed \
+date explicitly identifies a different result date. This includes table or column headers: if a Historical, \
+Previous, Current, or similar value column has one date printed in its header, copy that exact printed date into \
+"date_display" for every marker value under that column. Do not leave those occurrences undated merely because \
+the date is printed once above the rows rather than repeated beside each row. When multiple reports are present, \
+attach each occurrence to the date printed by its own report; never use the first report's date for another report.
 - "source_label": a short label identifying which report or section this specific occurrence came from — \
 taken from the nearest report title, lab name, or section header in the source (e.g. "Cleveland HeartLab \
 Cardiometabolic", "Quest Diagnostics MR421967F", "Non-Cardiometabolic panel"). Use the same label \

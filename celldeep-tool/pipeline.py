@@ -103,18 +103,18 @@ def _normalize_date_for_matching(date_str: str):
     if not date_str:
         return ""
     s = date_str.strip().lower().rstrip(".")
-    m = re.match(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$", s)
+    m = re.search(r"(?<!\d)(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?!\d)", s)
     if m:
         mm, dd, yy = m.groups()
         yy = int(yy)
         if yy < 100:
             yy += 2000
         return (yy, int(mm), int(dd))
-    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", s)
+    m = re.search(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)", s)
     if m:
         yy, mm, dd = m.groups()
         return (int(yy), int(mm), int(dd))
-    m = re.match(r"^([a-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})$", s)
+    m = re.search(r"\b([a-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})\b", s)
     if m:
         month_name, dd, yy = m.groups()
         month = _MONTH_NAMES.get(month_name)

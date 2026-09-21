@@ -490,6 +490,23 @@ def test_occurrence_reconciliation_uses_actual_dates_and_never_picks_conflicts()
     assert any("TSH" in note and "CONFLICTING" in note for note in notes)
 
 
+def test_occurrence_reconciliation_reads_dates_embedded_in_report_column_labels():
+    occurrences = [
+        {"name": "Total Cholesterol", "date_display": "Historical (01/07/2026)",
+         "status": "reported", "value": 180, "disp_value": "180", "is_good": None,
+         "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
+        {"name": "Total Cholesterol", "date_display": "Current (04/24/2026)",
+         "status": "reported", "value": 200, "disp_value": "200", "is_good": None,
+         "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
+    ]
+
+    reconciled, notes, _ = pipeline.reconcile_marker_occurrences(occurrences)
+
+    assert reconciled[0]["then"] == 180
+    assert reconciled[0]["now"] == 200
+    assert not notes
+
+
 
 def test_dedupe_fills_in_a_result_missing_from_only_one_of_two_same_draw_source_mentions():
     """If extraction emits one entry per source report for the same draw (one from the primary
