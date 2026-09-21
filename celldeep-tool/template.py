@@ -312,6 +312,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .bio-pill{{display:inline-block; font-weight:800; font-size:13px; padding:4px 12px; border-radius:20px;}}
 .bio-dash{{color:{MIDGRAY}; font-size:13px;}}
 .bio-unit{{font-size:9px; color:{MUTE}; margin-left:3px; display:block; margin-top:1px;}}
+.bio-date{{display:block; font-size:8px; color:{MUTE}; margin-top:2px; line-height:1.1;}}
 .bio-note{{font-size:9.5px; color:{DARKGRAY}; line-height:1.3; font-style:italic; max-width:6.2in;}}
 '''
 
@@ -549,10 +550,12 @@ def bio_row_tr(m, copy, color_override=None):
     what = copy.get("marker_what", {}).get(m.name)
     if m.then is not None:
         then_color = MUTE if unscored else TIER_COLOR.get(m.then_tier, YELLOW)
-        then_cell = f'<span class="bio-pill" style="background:{then_color}22; color:{then_color};">{fmt(m.disp_then)}</span>'
+        then_date = f'<span class="bio-date">{fmt_date(m.then_date_display)}</span>' if m.then_date_display else ""
+        then_cell = f'<span class="bio-pill" style="background:{then_color}22; color:{then_color};">{fmt(m.disp_then)}</span>{then_date}'
     else:
         then_cell = f'<span class="bio-dash">{fmt(m.disp_then)}</span>'
-    now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{fmt(m.disp_now)}</span>{unit}'
+    now_date = f'<span class="bio-date">{fmt_date(m.now_date_display)}</span>' if m.now_date_display else ""
+    now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{fmt(m.disp_now)}</span>{unit}{now_date}'
     note_html = ""
     if note:
         what_html = f'<b style="font-style:normal; color:{INK};">What this is:</b> {what}. ' if what else ""

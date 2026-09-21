@@ -482,7 +482,9 @@ def test_occurrence_reconciliation_uses_only_dated_actual_results():
     assert occult["now"] is None
     assert occult["disp_now"] == "Negative"
     assert occult["is_good_now"] is True
-    assert by_name["Myeloperoxidase"]["now"] == 300
+    assert by_name["Myeloperoxidase"]["now"] is None
+    assert by_name["Myeloperoxidase"]["then"] == 300
+    assert by_name["Myeloperoxidase"]["then_date_display"] == "01/07/2026"
     assert by_name["hs-CRP"]["now"] == 0.3
     assert by_name["hs-CRP"]["then"] is None
 
@@ -568,6 +570,65 @@ def test_report_collection_date_propagates_to_all_undated_current_column_occurre
     assert [occurrence["date_display"] for occurrence in extracted["marker_occurrences"]] == [
         "03/18/2026", "03/18/2026", "03/18/2026",
     ]
+
+
+def _dated_occurrence(name, date_display, value, disp_value=None):
+    return {"name": name, "date_display": date_display, "status": "reported",
+            "value": value, "disp_value": disp_value or str(value), "is_good": None,
+            "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""}
+
+
+def test_lone_older_marker_is_then_not_now_and_renders_its_real_date():
+    reconciled = pipeline.reconcile_marker_occurrences([
+        _dated_occurrence("Myeloperoxidase", "01/07/2026", 300),
+        _dated_occurrence("hs-CRP", "04/24/2026", 0.3),
+    ])
+    raw = next(marker for marker in reconciled if marker["name"] == "Myeloperoxidase")
+    record, _ = pipeline.score_and_build_record({"name": "Date Labels", "markers": [raw]})
+    html = template.bio_row_tr(record.markers[0], {})
+
+    assert raw["now"] is None
+    assert raw["then"] == 300
+    assert raw["then_date_display"] == "01/07/2026"
+    assert "January 7, 2026" in html
+
+
+def test_lone_marker_on_report_current_date_is_now_not_then():
+    reconciled = pipeline.reconcile_marker_occurrences([
+        _dated_occurrence("Progesterone", "04/24/2026", 1.2),
+        _dated_occurrence("hs-CRP", "04/24/2026", 0.3),
+    ])
+    raw = next(marker for marker in reconciled if marker["name"] == "Progesterone")
+    assert raw["now"] == 1.2
+    assert raw["then"] is None
+    assert raw["now_date_display"] == "04/24/2026"
+
+
+def test_two_older_marker_occurrences_keep_newer_as_now_and_older_as_then():
+    reconciled = pipeline.reconcile_marker_occurrences([
+        _dated_occurrence("CoQ10", "01/07/2026", 0.8),
+        _dated_occurrence("CoQ10", "02/15/2026", 1.1),
+        _dated_occurrence("hs-CRP", "04/24/2026", 0.3),
+    ])
+    raw = next(marker for marker in reconciled if marker["name"] == "CoQ10")
+    assert raw["now"] == 1.1
+    assert raw["then"] == 0.8
+    assert raw["now_date_display"] == "02/15/2026"
+    assert raw["then_date_display"] == "01/07/2026"
+
+
+def test_then_and_now_cells_show_each_value_date_not_static_header_dates():
+    reconciled = pipeline.reconcile_marker_occurrences([
+        _dated_occurrence("CoQ10", "01/07/2026", 0.8),
+        _dated_occurrence("CoQ10", "02/15/2026", 1.1),
+        _dated_occurrence("hs-CRP", "04/24/2026", 0.3),
+    ])
+    raw = next(marker for marker in reconciled if marker["name"] == "CoQ10")
+    record, _ = pipeline.score_and_build_record({"name": "Per Value Dates", "markers": [raw]})
+    html = template.bio_row_tr(record.markers[0], {})
+
+    assert "January 7, 2026" in html
+    assert "February 15, 2026" in html
 
 
 class _CopyTextBlock:

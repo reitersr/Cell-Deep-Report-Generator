@@ -124,7 +124,13 @@ def _normalize_date_for_matching(date_str: str):
 
 
 def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
-    """Reconcile every marker by one mechanical rule: newest dated result is now."""
+    """Reconcile marker values against the document-wide most recent report date."""
+    report_dates = [
+        _normalize_date_for_matching(occ.get("date_display", ""))
+        for occ in occurrences
+    ]
+    report_dates = [date for date in report_dates if isinstance(date, tuple)]
+    report_current_key = max(report_dates) if report_dates else None
     by_marker: dict = {}
     order = []
     for occ in occurrences:
@@ -160,8 +166,17 @@ def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
                 seen.add(signature)
                 unique_results.append(occ)
 
-        now_occ = unique_results[0] if unique_results else None
-        then_occ = unique_results[1] if len(unique_results) > 1 else None
+        if len(unique_results) == 1 and report_current_key is not None:
+            only_key = _normalize_date_for_matching(unique_results[0].get("date_display", ""))
+            if only_key != report_current_key:
+                now_occ = None
+                then_occ = unique_results[0]
+            else:
+                now_occ = unique_results[0]
+                then_occ = None
+        else:
+            now_occ = unique_results[0] if unique_results else None
+            then_occ = unique_results[1] if len(unique_results) > 1 else None
         history = [{
             "date_display": occ.get("date_display", ""),
             "value": occ.get("value") if occ.get("value") is not None else 0,
