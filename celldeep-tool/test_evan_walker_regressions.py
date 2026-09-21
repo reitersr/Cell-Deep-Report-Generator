@@ -418,6 +418,95 @@ def test_real_shbg_garbled_text_is_detected_as_run_on():
     assert pipeline._find_corrupted_text_paths(corrupted) == ["marker_what.SHBG"]
 
 
+# ---------------------------------------------------------------------------
+# Issue 6: a marker present only in a secondary same-draw lab report (e.g. a separate Quest
+# Diagnostics report for the same specimen/draw date as the primary Cleveland HeartLab panel)
+# was dropped entirely instead of being captured as that draw's "now" value. Confirmed real
+# case: the CHL Cardiometabolic report for the 04/24/2026 draw states urinalysis was
+# "Test Not Performed / No specimen received," but the separate Quest report for that exact
+# same draw date/specimen (MR421967F) DID run it, with Occult Blood = Negative. That Negative
+# result must surface as "now" for Urinalysis — Occult Blood; it was being lost.
+# No real Evan Walker source PDFs exist in this workspace (same caveat as Issue 1-5 above), so
+# the fixtures below reproduce the same underlying condition synthetically.
+# ---------------------------------------------------------------------------
+
+def test_dedupe_fills_in_a_result_missing_from_only_one_of_two_same_draw_source_mentions():
+    """If extraction emits one entry per source report for the same draw (one from the primary
+    report where the marker was "not performed" -> now=None, one from a secondary report for
+    that same draw date where it WAS run), the dedupe/merge step must adopt the real result
+    rather than let the primary report's null win. This is the same generic gap-fill dedupe
+    already used for the Cortisol dual-alias case, applied to a categorical marker."""
+    record, notice = pipeline.score_and_build_record({
+        "name": "Occult Blood Patient", "sex": "male", "provider_note_raw": "",
+        "markers": [
+            {"name": "Urinalysis", "now": None, "disp_now": ""},  # primary report: not performed
+            {"name": "occult blood", "now": None, "disp_now": "Negative", "is_good_now": True},
+        ],
+    })
+    assert [m.name for m in record.markers] == ["Urinalysis \u2014 Occult Blood"]
+    marker = record.markers[0]
+    assert marker.disp_now == "Negative"
+    assert marker.is_good_now is True
+    assert not any("CONFLICTING" in note for note in notice.other_notes)
+
+
+def test_marker_missing_from_every_report_for_the_draw_still_renders_not_retested():
+    """Control case (Myeloperoxidase): the primary report explicitly says not performed for this
+    draw, and NO other report contains it either - this must stay null, not be filled in by the
+    Issue 6 fix. Never-infer still applies when a marker genuinely has no result anywhere."""
+    record, notice = pipeline.score_and_build_record({
+        "name": "Myeloperoxidase Patient", "sex": "male", "provider_note_raw": "",
+        "markers": [
+            {"name": "Myeloperoxidase", "then": 300, "disp_then": "300", "now": None, "disp_now": ""},
+        ],
+    })
+    marker = record.markers[0]
+    assert marker.now is None
+    assert marker.disp_now == ""
+    html = template.bio_row_tr(marker, {})
+    assert "Not retested" in html
+
+
+@pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key")
+def test_live_extraction_pulls_a_marker_only_present_in_the_secondary_same_draw_report(tmp_path):
+    """Live API check reproducing the real Evan Walker condition as closely as possible without
+    the actual source PDFs: a single uploaded labs PDF containing BOTH a primary panel (which
+    explicitly states a marker was not performed on the current draw) and a separate secondary
+    report for that exact same draw date that DID run it. Confirms extraction surfaces the
+    secondary report's real result as "now" instead of dropping it, and that a marker missing
+    from both reports for that draw (the Myeloperoxidase control) correctly stays null."""
+    from anthropic import Anthropic
+
+    source = tmp_path / "multi_source_same_draw.pdf"
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_textbox(
+        fitz.Rect(36, 36, 560, 780),
+        "SYNTHETIC TEST LAB REPORT - FAKE DATA, NOT A REAL PATIENT\n"
+        "Patient: Multi Source Draw Check\n\n"
+        "=== Cleveland HeartLab Cardiometabolic Report ===\n"
+        "Draw Date: 04/24/2026\n"
+        "Myeloperoxidase: Test Not Performed - sample degenerated in transport\n"
+        "Urinalysis: Test Not Performed / No specimen received\n\n"
+        "=== Quest Diagnostics Report (specimen MR421967F) ===\n"
+        "Draw Date: 04/24/2026\n"
+        "Urinalysis, Occult Blood: Negative\n",
+        fontsize=10, fontname="cour",
+    )
+    document.save(source)
+    document.close()
+
+    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    extracted = pipeline.extract(client, labs_pdf=str(source), dexa_pdfs=[], note_text=None,
+                                  patient_name="Multi Source Draw Check")
+    record, _ = pipeline.score_and_build_record(extracted)
+    by_name = {m.name: m for m in record.markers}
+    assert "Urinalysis \u2014 Occult Blood" in by_name
+    assert by_name["Urinalysis \u2014 Occult Blood"].disp_now == "Negative"
+    if "Myeloperoxidase" in by_name:
+        assert by_name["Myeloperoxidase"].now is None
+
+
 def test_clear_path_blanks_only_the_corrupted_field():
     data = {"marker_what": {"SHBG": "badtextwithnospacesatallanywhereinthisstring"}, "marker_notes": {"TSH": "fine"}}
     pipeline._clear_path(data, "marker_what.SHBG")

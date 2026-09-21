@@ -55,16 +55,24 @@ date, and "now" is the reading from the patient's LATEST/most recent draw date s
 list, in chronological order, as {"date_display": ..., "value": ..., "disp_value": ...} objects — never \
 omitted, never merged, never averaged across sources. If a marker only has the then/now pair with nothing in \
 between, "full_history" is simply an empty list; that is the normal case.
+- CRITICAL — A SINGLE DRAW DATE CAN BE COVERED BY MORE THAN ONE LAB REPORT/DOCUMENT (e.g. a primary \
+Cleveland HeartLab panel AND a separate Quest Diagnostics report from the same specimen/draw date). Treat \
+every report that shares that same draw date as one combined draw for that date, not as separate draws and \
+not as "primary vs. secondary" sources where one silently wins. A marker's "now" value for that draw date is \
+whatever result ANY of the reports covering that date actually contains for it — never leave "now" null just \
+because the specific report you happen to be reading first, or the report that carries most of the other \
+markers, doesn't contain that marker or states it wasn't performed there. Only if you check every report \
+covering that draw date and NONE of them contains a result for that marker is "now": null the correct output.
 - CRITICAL — DO NOT COLLAPSE A MISSING LATEST-DRAW RESULT INTO "now": if a marker was tested on an earlier \
-draw but the source material shows that marker was NOT run on the most recent draw (cancelled, not ordered, \
-no sample received, degenerated sample, or the marker's section is simply absent from that draw's results, \
-even though other markers from that same draw ARE present and were run), the correct output is "now": null \
-(and "disp_now": "" — an empty string, the closest this field can express to null) with "then" holding the \
-earlier value — never repeat, copy, or carry the earlier \
-value forward into "now" just because it is the only value available. A missing result on the latest draw is \
-an honest null, not a reason to shift an older reading into the "now" slot. This applies per-marker: it is \
-normal and expected for some markers on a given draw to have results while others on that exact same draw do \
-not.
+draw but every report covering the most recent draw date shows that marker was NOT run on it (cancelled, not \
+ordered, no sample received, degenerated sample, or the marker's section is simply absent from every one of \
+those reports, even though other markers from that same draw ARE present and were run), the correct output is \
+"now": null (and "disp_now": "" — an empty string, the closest this field can express to null) with "then" \
+holding the earlier value — never repeat, copy, or carry the earlier value forward into "now" just because it \
+is the only value available. A missing result on the latest draw is an honest null only after confirming no \
+report for that draw date reports it — never a reason to shift an older reading into the "now" slot. This \
+applies per-marker: it is normal and expected for some markers on a given draw to have results while others \
+on that exact same draw do not.
 - Extract dates exactly as printed on the source document. Do not reformat, estimate, or round a date.
 - For EVERY recognized marker, also extract the literal reference range printed on the same lab report row
     for each draw. Put the earliest-draw range in "lab_range_then_lo", "lab_range_then_hi", and
