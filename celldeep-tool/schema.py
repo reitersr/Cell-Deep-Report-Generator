@@ -51,6 +51,8 @@ class Marker:
     now: Optional[float] = None
     disp_then: Optional[str] = None   # pre-formatted display string, e.g. "3.1" or "1+" (categorical)
     disp_now: Optional[str] = None              # pre-formatted display string, e.g. "0.7" or "Negative"
+    then_date_display: Optional[str] = None     # date of the reconciled then value, never a raw occurrence date
+    now_date_display: Optional[str] = None      # date of the reconciled now value, never a raw occurrence date
 
     # for categorical markers (e.g. Urinalysis) — bounded/range fields stay None
     is_good_then: Optional[bool] = None

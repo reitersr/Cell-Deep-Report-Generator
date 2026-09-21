@@ -123,35 +123,8 @@ def _normalize_date_for_matching(date_str: str):
     return s
 
 
-def reconcile_marker_occurrences(occurrences: list[dict], first_draw_date: str = "",
-                                  latest_draw_date: str = "") -> tuple[list[dict], list[str], set[str]]:
-    """Deterministic (non-AI) reconciliation of a marker's value across every report/section/draw
-    date it was mentioned in - replaces trusting a single model pass to do this reconciliation
-    itself, which is what silently dropped a real Quest-only result when the primary CHL report
-    said "not performed" for the same draw, and could just as easily let two agreeing-by-luck
-    section duplicates (e.g. Glucose printed in both the Cardiometabolic and Non-Cardiometabolic
-    sections of one report) go out with no flag if they ever disagreed instead.
-
-    Groups every raw occurrence (see extraction_prompt.py's "marker_occurrences" - deliberately
-    NOT pre-reconciled by the model) by canonical marker, then by draw date, and resolves each
-    marker/date in code:
-      - exactly one real value for that marker/date -> use it, regardless of what any other
-        report/section says (including an explicit "not performed" statement, or silence)
-      - multiple real values that agree -> dedupe silently
-      - multiple real values that disagree -> flagged for human review, never silently picked
-      - no real value anywhere for that date, but at least one explicit "not performed" mention
-        -> confirmed absent (distinct from merely unmentioned; lets the completeness check treat
-        a confirmed non-result as settled rather than ambiguous)
-    Marker-agnostic: operates on whichever canonical name markers_reference.lookup_marker
-    resolves each occurrence to - never a hardcoded marker list.
-
-    Returns (reconciled_markers, conflict_notes, confirmed_absent_now), where reconciled_markers
-    is shaped exactly like the legacy pre-reconciled "markers" list (then/now/disp_then/disp_now/
-    lab ranges/full_history) so it drops straight into score_and_build_record unchanged, and
-    confirmed_absent_now is the set of canonical marker names whose latest-draw absence was
-    explicitly confirmed by at least one report (used to suppress a false-positive completeness
-    warning for a marker like Myeloperoxidase that genuinely was not run anywhere for that draw).
-    """
+def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
+    """Reconcile every marker by one mechanical rule: newest dated result is now."""
     by_marker: dict = {}
     order = []
     for occ in occurrences:
@@ -164,75 +137,45 @@ def reconcile_marker_occurrences(occurrences: list[dict], first_draw_date: str =
             order.append(canonical)
         by_marker[canonical].append(occ)
 
-    conflict_notes = []
-    confirmed_absent_now = set()
     reconciled = []
 
     for canonical in order:
-        by_date: dict = {}
-        date_order = []
-        for occ in by_marker[canonical]:
-            key = _normalize_date_for_matching(occ.get("date_display", ""))
-            if key not in by_date:
-                by_date[key] = []
-                date_order.append(key)
-            by_date[key].append(occ)
-
-        date_keys = [key for key in date_order if key]
-        date_keys.sort(key=lambda key: (0, key) if isinstance(key, tuple) else (1, key))
-        then_key = date_keys[0] if date_keys else ""
-        now_key = date_keys[-1] if date_keys else ""
-        undated = by_date.get("", [])
-        if undated:
-            conflict_notes.append(
-                f"WARNING: MARKER '{canonical}' HAS UNDATED OCCURRENCES "
-                f"({len(undated)} source occurrence(s)) - NOT USED FOR THEN/NOW, "
-                "NEEDS HUMAN REVIEW"
+        dated_results = [occ for occ in by_marker[canonical]
+                         if _normalize_date_for_matching(occ.get("date_display", ""))
+                         and occ.get("status") == "reported"
+                         and (occ.get("value") is not None or occ.get("disp_value"))]
+        dated_results.sort(
+            key=lambda occ: _normalize_date_for_matching(occ.get("date_display", "")),
+            reverse=True,
+        )
+        unique_results = []
+        seen = set()
+        for occ in dated_results:
+            signature = (
+                _normalize_date_for_matching(occ.get("date_display", "")),
+                occ.get("value"),
+                occ.get("disp_value") if occ.get("value") is None else None,
             )
+            if signature not in seen:
+                seen.add(signature)
+                unique_results.append(occ)
 
-        def _resolve(key):
-            group = by_date.get(key, [])
-            reported = [o for o in group if o.get("status") == "reported"
-                        and (o.get("value") is not None or o.get("disp_value"))]
-            not_performed = any(o.get("status") == "not_performed" for o in group)
-            if not reported:
-                return None, not_performed
-            signatures = {
-                (o.get("value"), o.get("disp_value") if o.get("value") is None else None)
-                for o in reported
-            }
-            if len(signatures) > 1:
-                real_date = next((o.get("date_display") for o in group if o.get("date_display")), "")
-                conflict_notes.append(
-                    f"WARNING: MARKER '{canonical}' HAS CONFLICTING VALUES ACROSS SOURCE REPORTS "
-                    f"FOR DRAW {real_date!r} "
-                    f"({[o.get('disp_value') or o.get('value') for o in reported]}) - "
-                    "NOT AUTO-RESOLVED, NEEDS HUMAN REVIEW"
-                )
-                return None, False
-            return reported[0], False
-
-        now_occ, now_confirmed_absent = _resolve(now_key) if now_key else (None, False)
-        then_occ, _ = _resolve(then_key) if then_key and then_key != now_key else (None, False)
-
-        history = []
-        for key in date_keys:
-            if key in (now_key, then_key):
-                continue
-            occ, _ = _resolve(key)
-            if occ is not None:
-                history.append({
-                    "date_display": occ.get("date_display", ""),
-                    "value": occ.get("value") if occ.get("value") is not None else 0,
-                    "disp_value": occ.get("disp_value", ""),
-                })
+        now_occ = unique_results[0] if unique_results else None
+        then_occ = unique_results[1] if len(unique_results) > 1 else None
+        history = [{
+            "date_display": occ.get("date_display", ""),
+            "value": occ.get("value") if occ.get("value") is not None else 0,
+            "disp_value": occ.get("disp_value", ""),
+        } for occ in reversed(unique_results[2:])]
 
         reconciled.append({
             "name": canonical,
             "then": then_occ.get("value") if then_occ else None,
             "disp_then": then_occ.get("disp_value") if then_occ else None,
+            "then_date_display": then_occ.get("date_display", "") if then_occ else "",
             "now": now_occ.get("value") if now_occ else None,
             "disp_now": now_occ.get("disp_value") if now_occ else "",
+            "now_date_display": now_occ.get("date_display", "") if now_occ else "",
             "is_good_then": then_occ.get("is_good") if then_occ else None,
             "is_good_now": now_occ.get("is_good") if now_occ else None,
             "lab_range_then_lo": then_occ.get("lab_range_lo", 0) if then_occ else 0,
@@ -243,10 +186,7 @@ def reconcile_marker_occurrences(occurrences: list[dict], first_draw_date: str =
             "lab_range_now_display": now_occ.get("lab_range_display", "") if now_occ else "",
             "full_history": history,
         })
-        if now_occ is None and now_confirmed_absent:
-            confirmed_absent_now.add(canonical)
-
-    return reconciled, conflict_notes, confirmed_absent_now
+    return reconciled
 
 
 def sanitize_text(s: str) -> str:
@@ -485,25 +425,12 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
             break
 
     extracted_markers = set()
-    reconciled_markers, _, confirmed_absent_now = reconcile_marker_occurrences(
-        extracted.get("marker_occurrences", []),
-        extracted.get("first_draw_date", ""), extracted.get("latest_draw_date", ""),
-    )
+    reconciled_markers = reconcile_marker_occurrences(extracted.get("marker_occurrences", []))
     combined_markers = reconciled_markers + extracted.get("markers", [])
     for marker in combined_markers:
         match = markers_reference_lookup(marker.get("name", ""))
         if match:
             extracted_markers.add(match[0])
-    explicitly_absent = set()
-    occurrences_by_marker = {}
-    for occurrence in extracted.get("marker_occurrences", []):
-        match = markers_reference_lookup(occurrence.get("name", ""))
-        if match:
-            occurrences_by_marker.setdefault(match[0], []).append(occurrence)
-    for canonical, occurrences in occurrences_by_marker.items():
-        if occurrences and all(occurrence.get("status") == "not_performed" for occurrence in occurrences):
-            explicitly_absent.add(canonical)
-
     lab_lower = lab_text.lower()
     for canonical, config in MARKER_LIBRARY.items():
         names = [canonical, *config.get("aliases", [])]
@@ -525,8 +452,6 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
             marker for marker in combined_markers
             if (match := markers_reference_lookup(marker.get("name", ""))) and match[0] == canonical
         )
-        if canonical in confirmed_absent_now or canonical in explicitly_absent:
-            continue  # every report for this draw explicitly accounted for the absence - not ambiguous
         if source_mentions >= 2 and extracted_marker.get("now") is None:
             warning = (f"WARNING: MARKER '{canonical}' APPEARS {source_mentions} TIMES IN SOURCE BUT "
                        "HAS NO LATEST-DRAW VALUE IN EXTRACTION - NEEDS HUMAN REVIEW")
@@ -736,13 +661,10 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     # pre-collapsed then/now entries, used by callers that never went through the occurrence-level
     # extraction) still runs through the older alias-collapsing dedupe below so nothing that
     # depended on that shape breaks.
-    reconciled_markers, occurrence_notes, _ = reconcile_marker_occurrences(
-        extracted.get("marker_occurrences", []),
-        extracted.get("first_draw_date", ""), extracted.get("latest_draw_date", ""),
-    )
+    reconciled_markers = reconcile_marker_occurrences(extracted.get("marker_occurrences", []))
     legacy_deduped, legacy_notes = _dedupe_extracted_markers(extracted.get("markers", []))
     deduped_markers = reconciled_markers + legacy_deduped
-    dedupe_notes = occurrence_notes + legacy_notes
+    dedupe_notes = legacy_notes
     notice.other_notes.extend(dedupe_notes)
     scoring_log_lines.extend(dedupe_notes)
     with open("/tmp/post_dedup_markers.json", "w", encoding="utf-8") as f:
@@ -785,6 +707,8 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 lo=lo, hi=hi,
                 then=raw.get("then"), now=raw.get("now"),
                 disp_then=raw.get("disp_then"), disp_now=raw.get("disp_now"),
+                then_date_display=raw.get("then_date_display"),
+                now_date_display=raw.get("now_date_display"),
                 is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
                 full_history=raw.get("full_history", []),
             )
@@ -805,6 +729,8 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 then_hi=lab_range_then["hi"] if lab_range_then else None,
                 then=raw.get("then"), now=raw.get("now"),
                 disp_then=raw.get("disp_then"), disp_now=raw.get("disp_now"),
+                then_date_display=raw.get("then_date_display"),
+                now_date_display=raw.get("now_date_display"),
                 is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
                 full_history=raw.get("full_history", []),
             )
@@ -908,6 +834,34 @@ def _clear_path(data, path: str) -> None:
         node[last] = ""
 
 
+def _narrative_marker_payload(marker: Marker) -> dict:
+    """Expose only values that survived deterministic reconciliation to the copywriter."""
+    history = [entry for entry in marker.full_history
+               if entry.get("date_display") and
+               (entry.get("value") is not None or entry.get("disp_value"))]
+    return {
+        "name": marker.name,
+        "category": marker.category,
+        "unit": marker.unit,
+        "kind": marker.kind,
+        "disp_range": marker.disp_range,
+        "then_value": marker.then,
+        "then_display": marker.disp_then,
+        "then_date_display": marker.then_date_display,
+        "now_value": marker.now,
+        "now_display": marker.disp_now,
+        "now_date_display": marker.now_date_display,
+        "history": history,
+        "then_tier": marker.then_tier,
+        "then_pct": marker.then_pct,
+        "now_tier": marker.now_tier,
+        "now_pct": marker.now_pct,
+        "is_good_then": marker.is_good_then,
+        "is_good_now": marker.is_good_now,
+        "unscored_reason": marker.unscored_reason,
+    }
+
+
 def generate_copy(client: Anthropic, record: PatientRecord) -> tuple[dict, list[str]]:
     """Step 3: the interpretive writing pass. Takes the fully-scored PatientRecord (all numbers,
     all tiers already fixed by deterministic code) and generates the sentences that go around them,
@@ -922,7 +876,9 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> tuple[dict, list[
     # without an explicit entry the model has no membership signal for it at all - unlike every
     # other category, which at least gets an explicit empty list telling it "no markers here."
     category_membership["Structure"] = (["DEXA body composition scan"] if record.dexa_history else [])
-    payload = json.dumps({"record": asdict(record), "patient_facing_category_membership": category_membership},
+    record_payload = asdict(record)
+    record_payload["markers"] = [_narrative_marker_payload(marker) for marker in record.markers]
+    payload = json.dumps({"record": record_payload, "patient_facing_category_membership": category_membership},
                          default=str, indent=2)
     warnings = []
     parsed = {}

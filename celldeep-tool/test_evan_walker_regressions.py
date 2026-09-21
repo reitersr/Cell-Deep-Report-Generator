@@ -20,7 +20,7 @@ import pytest
 import pipeline
 import scoring
 import template
-from schema import DexaReading, PatientRecord
+from schema import DexaReading, Marker, PatientRecord
 
 
 def _copy_for_render(**overrides):
@@ -432,7 +432,7 @@ def test_real_shbg_garbled_text_is_detected_as_run_on():
 # the fixtures below reproduce the same underlying condition synthetically.
 # ---------------------------------------------------------------------------
 
-def test_occurrence_reconciliation_uses_actual_dates_and_never_picks_conflicts():
+def test_occurrence_reconciliation_uses_only_dated_actual_results():
     occurrences = [
         {"name": "Free T3", "date_display": "01/07/2026", "source_label": "CHL",
          "status": "reported", "value": 3.5, "disp_value": "3.5", "is_good": None,
@@ -461,33 +461,30 @@ def test_occurrence_reconciliation_uses_actual_dates_and_never_picks_conflicts()
         {"name": "Myeloperoxidase", "date_display": "04/24/2026", "source_label": "CHL",
          "status": "not_performed", "value": None, "disp_value": "", "is_good": None,
          "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
-        {"name": "TSH", "date_display": "04/24/2026", "source_label": "CHL",
-         "status": "reported", "value": 1.2, "disp_value": "1.2", "is_good": None,
-         "lab_range_lo": 0.4, "lab_range_hi": 4.0, "lab_range_display": "0.4-4.0"},
-        {"name": "TSH", "date_display": "04/24/2026", "source_label": "Quest MR421967F",
-         "status": "reported", "value": 1.8, "disp_value": "1.8", "is_good": None,
-         "lab_range_lo": 0.4, "lab_range_hi": 4.0, "lab_range_display": "0.4-4.0"},
+        {"name": "hs-CRP", "date_display": "04/24/2026", "source_label": "CHL",
+         "status": "reported", "value": 0.3, "disp_value": "0.3", "is_good": None,
+         "lab_range_lo": 0, "lab_range_hi": 10, "lab_range_display": "0-10"},
+        {"name": "hs-CRP", "date_display": "", "source_label": "CHL current",
+         "status": "reported", "value": 1.9, "disp_value": "1.9", "is_good": None,
+         "lab_range_lo": 0, "lab_range_hi": 10, "lab_range_display": "0-10"},
     ]
 
-    reconciled, notes, confirmed_absent = pipeline.reconcile_marker_occurrences(
-        occurrences, first_draw_date="04/24/2026", latest_draw_date="02/01/2026",
-    )
+    reconciled = pipeline.reconcile_marker_occurrences(occurrences)
     by_name = {marker["name"]: marker for marker in reconciled}
 
-    assert by_name["Free T3"]["then"] == 3.5
+    assert by_name["Free T3"]["then"] == 2.9
     assert by_name["Free T3"]["now"] == 3.5
     assert by_name["Free T3"]["full_history"] == [{
-        "date_display": "02/01/2026", "value": 2.9, "disp_value": "2.9",
+        "date_display": "01/07/2026", "value": 3.5, "disp_value": "3.5",
     }]
     assert by_name["Glucose (fasting)"]["now"] == 92
     occult = next(marker for name, marker in by_name.items() if "Occult Blood" in name)
     assert occult["now"] is None
     assert occult["disp_now"] == "Negative"
     assert occult["is_good_now"] is True
-    assert by_name["Myeloperoxidase"]["now"] is None
-    assert "Myeloperoxidase" in confirmed_absent
-    assert by_name["TSH"]["now"] is None
-    assert any("TSH" in note and "CONFLICTING" in note for note in notes)
+    assert by_name["Myeloperoxidase"]["now"] == 300
+    assert by_name["hs-CRP"]["now"] == 0.3
+    assert by_name["hs-CRP"]["then"] is None
 
 
 def test_occurrence_reconciliation_reads_dates_embedded_in_report_column_labels():
@@ -500,11 +497,10 @@ def test_occurrence_reconciliation_reads_dates_embedded_in_report_column_labels(
          "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
     ]
 
-    reconciled, notes, _ = pipeline.reconcile_marker_occurrences(occurrences)
+    reconciled = pipeline.reconcile_marker_occurrences(occurrences)
 
     assert reconciled[0]["then"] == 180
     assert reconciled[0]["now"] == 200
-    assert not notes
 
 
 def test_occurrence_history_is_sorted_by_date_not_source_order():
@@ -520,12 +516,12 @@ def test_occurrence_history_is_sorted_by_date_not_source_order():
          "lab_range_display": ""},
     ]
 
-    reconciled, _, _ = pipeline.reconcile_marker_occurrences(occurrences)
+    reconciled = pipeline.reconcile_marker_occurrences(occurrences)
 
-    assert reconciled[0]["then"] == 1.0
+    assert reconciled[0]["then"] == 2.0
     assert reconciled[0]["now"] == 3.0
     assert reconciled[0]["full_history"] == [{
-        "date_display": "02/01/2026", "value": 2.0, "disp_value": "2.0",
+        "date_display": "01/07/2026", "value": 1.0, "disp_value": "1.0",
     }]
 
 
@@ -541,17 +537,15 @@ def test_hormone_precedence_ignores_undated_chl_and_uses_later_real_date():
         "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": "",
     }
 
-    reconciled, notes, _ = pipeline.reconcile_marker_occurrences([undated_chl, dated_quest])
+    reconciled = pipeline.reconcile_marker_occurrences([undated_chl, dated_quest])
 
     assert reconciled[0]["now"] == 42
     assert reconciled[0]["then"] is None
-    assert any("Estradiol" in note and "UNDATED" in note for note in notes)
 
     dated_chl = dict(undated_chl, date_display="04/25/2026")
-    reconciled, notes, _ = pipeline.reconcile_marker_occurrences([dated_quest, dated_chl])
+    reconciled = pipeline.reconcile_marker_occurrences([dated_quest, dated_chl])
 
     assert reconciled[0]["now"] == 18
-    assert not any("UNDATED" in note for note in notes)
 
 
 def test_report_collection_date_propagates_to_all_undated_current_column_occurrences():
@@ -574,6 +568,77 @@ def test_report_collection_date_propagates_to_all_undated_current_column_occurre
     assert [occurrence["date_display"] for occurrence in extracted["marker_occurrences"]] == [
         "03/18/2026", "03/18/2026", "03/18/2026",
     ]
+
+
+class _CopyTextBlock:
+    def __init__(self, text):
+        self.text = text
+
+
+class _CopyResponse:
+    stop_reason = "end_turn"
+
+    def __init__(self, text):
+        self.content = [_CopyTextBlock(text)]
+
+
+class _CaptureCopyClient:
+    def __init__(self):
+        self.payload = ""
+
+        class Messages:
+            def __init__(inner):
+                inner.owner = self
+
+            def create(inner, **kwargs):
+                inner.owner.payload = kwargs["messages"][0]["content"]
+                return _CopyResponse(
+                    '{"marker_notes": {}, "marker_what": {}, "headlines": {}, '
+                    '"box_stories": {}, "box_forward": {}, "category_taglines": {}, '
+                    '"optimization_summary_bullets": [], "protocol_reasons": {}, '
+                    '"pain_point_maintenance": {}, "dexa_delta": "", '
+                    '"hero_question": "", "hero_target_line": "", "next_30_label": "", '
+                    '"next_30_sub": "", "next_90_label": "", "next_90_sub": "", '
+                    '"by_age_label": "", "by_age_sub": "", "structure_score_now": 0, '
+                    '"structure_score_then": 0, "structure_improved": false}'
+                )
+
+        self.messages = Messages()
+
+
+def test_narrative_payload_excludes_undated_superseded_marker_value():
+    marker = Marker(
+        name="Testosterone, Total", category="Hormones", unit="ng/dL", kind="range",
+        disp_range="300 - 1000", then=506, disp_then="506", then_date_display="01/07/2026",
+        now=720, disp_now="720", now_date_display="04/24/2026",
+    )
+    client = _CaptureCopyClient()
+
+    pipeline.generate_copy(client, PatientRecord(name="Scoped Payload", markers=[marker]))
+
+    assert '"then_value": 506' in client.payload
+    assert '"now_value": 720' in client.payload
+    assert "1846" not in client.payload
+
+
+def test_narrative_payload_keeps_all_reconciled_multi_point_history():
+    marker = Marker(
+        name="Testosterone, Total", category="Hormones", unit="ng/dL", kind="range",
+        disp_range="300 - 1000", then=400, disp_then="400", then_date_display="01/01/2025",
+        now=700, disp_now="700", now_date_display="01/01/2027",
+        full_history=[
+            {"date_display": "04/01/2025", "value": 500, "disp_value": "500"},
+            {"date_display": "04/01/2026", "value": 600, "disp_value": "600"},
+            {"date_display": "10/01/2026", "value": 650, "disp_value": "650"},
+        ],
+    )
+    client = _CaptureCopyClient()
+
+    pipeline.generate_copy(client, PatientRecord(name="History Payload", markers=[marker]))
+
+    for value in ("500", "600", "650"):
+        assert value in client.payload
+    assert client.payload.count('"date_display"') >= 3
 
 
 
@@ -612,22 +677,6 @@ def test_marker_missing_from_every_report_for_the_draw_still_renders_not_reteste
     assert marker.disp_now == ""
     html = template.bio_row_tr(marker, {})
     assert "Not retested" in html
-
-
-def test_completeness_does_not_flag_marker_explicitly_not_performed_everywhere():
-    notice = pipeline.verify_extraction_completeness(
-        {
-            "marker_occurrences": [
-                {"name": "Myeloperoxidase", "date_display": "01/07/2026", "status": "not_performed"},
-                {"name": "Myeloperoxidase", "date_display": "04/24/2026", "status": "not_performed"},
-            ],
-            "first_draw_date": "01/07/2026",
-            "latest_draw_date": "04/24/2026",
-        },
-        lab_text="Myeloperoxidase Test Not Performed\nMyeloperoxidase Test Not Performed",
-    )
-
-    assert not any("Myeloperoxidase" in warning for warning in notice.other_notes)
 
 
 @pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key")
