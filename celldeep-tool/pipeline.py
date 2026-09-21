@@ -148,7 +148,7 @@ def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
     for canonical in order:
         dated_results = [occ for occ in by_marker[canonical]
                          if _normalize_date_for_matching(occ.get("date_display", ""))
-                         and occ.get("status") == "reported"
+                         and occ.get("status") != "not_performed"
                          and (occ.get("value") is not None or occ.get("disp_value"))]
         dated_results.sort(
             key=lambda occ: _normalize_date_for_matching(occ.get("date_display", "")),

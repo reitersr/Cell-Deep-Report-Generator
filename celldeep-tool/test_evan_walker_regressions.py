@@ -549,17 +549,43 @@ def test_hscrp_three_real_values_uses_true_baseline_then():
     reconciled = pipeline.reconcile_marker_occurrences([
         _dated_occurrence("hs-CRP", "01/07/2026", 20.0, ">20.0"),
         _dated_occurrence("hs-CRP", "01/27/2026", 0.3),
-        _dated_occurrence("hs-CRP", "04/24/2026", 3.0, "<3.0"),
+        {"name": "hs-CRP", "date_display": "04/24/2026", "status": "unscored",
+         "value": None, "disp_value": "<3.0", "is_good": None,
+         "lab_range_lo": 0, "lab_range_hi": 3, "lab_range_display": "<3.0"},
     ])
     raw = reconciled[0]
 
     assert raw["then"] == 20.0
     assert raw["disp_then"] == ">20.0"
-    assert raw["now"] == 3.0
+    assert raw["now"] is None
     assert raw["disp_now"] == "<3.0"
     assert raw["full_history"] == [{
         "date_display": "01/27/2026", "value": 0.3, "disp_value": "0.3",
     }]
+
+
+def test_fsh_lh_threshold_results_remain_current_when_numeric_value_is_null():
+    occurrences = [
+        {"name": "FSH", "date_display": "01/07/2026", "status": "reported",
+         "value": 2.0, "disp_value": "2.0", "is_good": None,
+         "lab_range_lo": 1, "lab_range_hi": 10, "lab_range_display": "1-10"},
+        {"name": "FSH", "date_display": "04/24/2026", "status": "reported",
+         "value": None, "disp_value": "<0.7", "is_good": None,
+         "lab_range_lo": 1, "lab_range_hi": 10, "lab_range_display": "1-10"},
+        {"name": "LH", "date_display": "01/07/2026", "status": "reported",
+         "value": 1.5, "disp_value": "1.5", "is_good": None,
+         "lab_range_lo": 1, "lab_range_hi": 10, "lab_range_display": "1-10"},
+        {"name": "LH", "date_display": "04/24/2026", "status": "reported",
+         "value": None, "disp_value": "<0.2", "is_good": None,
+         "lab_range_lo": 1, "lab_range_hi": 10, "lab_range_display": "1-10"},
+    ]
+
+    reconciled = {marker["name"]: marker for marker in pipeline.reconcile_marker_occurrences(occurrences)}
+
+    assert reconciled["FSH"]["now"] is None
+    assert reconciled["FSH"]["disp_now"] == "<0.7"
+    assert reconciled["LH"]["now"] is None
+    assert reconciled["LH"]["disp_now"] == "<0.2"
 
 
 def test_hormone_precedence_ignores_undated_chl_and_uses_later_real_date():
