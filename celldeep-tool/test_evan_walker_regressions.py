@@ -564,6 +564,32 @@ def test_hscrp_three_real_values_uses_true_baseline_then():
     }]
 
 
+@pytest.mark.parametrize(("name", "values"), [
+    ("hs-CRP", [(20.0, ">20.0"), (0.3, "0.3"), (None, "<3.0")]),
+    ("Testosterone, Total", [(506, "506"), (1846, "1846"), (1193, "1193")]),
+    ("Free Testosterone", [(66.3, "66.3"), (310.1, "310.1"), (210.0, "210.0")]),
+])
+def test_three_occurrences_keep_earliest_then_latest_now_and_dates_paired(name, values):
+    dates = ["01/07/2026", "01/27/2026", "04/24/2026"]
+    occurrences = [
+        dict(_dated_occurrence(name, date, value, disp_value),
+             status="unscored" if value is None else "reported")
+        for date, (value, disp_value) in zip(dates, values)
+    ]
+
+    raw = pipeline.reconcile_marker_occurrences(occurrences)[0]
+
+    assert (raw["then"], raw["disp_then"], raw["then_date_display"]) == (
+        values[0][0], values[0][1], dates[0],
+    )
+    assert (raw["now"], raw["disp_now"], raw["now_date_display"]) == (
+        values[-1][0], values[-1][1], dates[-1],
+    )
+    assert raw["full_history"] == [{
+        "date_display": dates[1], "value": values[1][0], "disp_value": values[1][1],
+    }]
+
+
 def test_fsh_lh_threshold_results_remain_current_when_numeric_value_is_null():
     occurrences = [
         {"name": "FSH", "date_display": "01/07/2026", "status": "reported",

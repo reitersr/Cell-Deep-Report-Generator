@@ -152,7 +152,6 @@ def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
                          and (occ.get("value") is not None or occ.get("disp_value"))]
         dated_results.sort(
             key=lambda occ: _normalize_date_for_matching(occ.get("date_display", "")),
-            reverse=True,
         )
         unique_results = []
         seen = set()
@@ -175,13 +174,13 @@ def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
                 now_occ = unique_results[0]
                 then_occ = None
         else:
-            now_occ = unique_results[0] if unique_results else None
-            then_occ = unique_results[-1] if len(unique_results) > 1 else None
+            then_occ = unique_results[0] if len(unique_results) > 1 else None
+            now_occ = unique_results[-1] if unique_results else None
         history = [{
             "date_display": occ.get("date_display", ""),
             "value": occ.get("value") if occ.get("value") is not None else 0,
             "disp_value": occ.get("disp_value", ""),
-        } for occ in reversed(unique_results[1:-1])]
+        } for occ in unique_results[1:-1]]
 
         reconciled.append({
             "name": canonical,
