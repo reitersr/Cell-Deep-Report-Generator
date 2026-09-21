@@ -41,58 +41,61 @@ the list, still include it in the output (using whatever cadence/purpose the not
 assign it a target category unless the note itself explicitly connects it to a system — an unmatched \
 compound with no explicit category in the note gets an empty target_categories list, not a guess.
 
-EXTRACTING BLOODWORK:
-- For each marker you can match to the reference list, extract every value found in the source, in \
-chronological order if multiple draws exist. If a patient has only ever had ONE draw total (no earlier draw \
-exists at all), a marker result from that single draw is a normal, expected "first reading" case — do not \
-treat it as missing data, and never invent a "then" value to pair with it.
-- A patient may have any number of draws (not just one or two) and may have labs from more than one lab \
-source (e.g. Cleveland HeartLab and Quest Diagnostics for the same patient). This is normal, not a special \
-case requiring extra reasoning. "then" and "now" must always be anchored to actual DRAWS/DATES, not just to \
-whichever readings happen to exist for a marker: "then" is the reading from the patient's EARLIEST draw \
-date, and "now" is the reading from the patient's LATEST/most recent draw date specifically — never simply \
-"whichever reading exists." Every reading from any draw in between goes into that marker's "full_history" \
-list, in chronological order, as {"date_display": ..., "value": ..., "disp_value": ...} objects — never \
-omitted, never merged, never averaged across sources. If a marker only has the then/now pair with nothing in \
-between, "full_history" is simply an empty list; that is the normal case.
-- CRITICAL — A SINGLE DRAW DATE CAN BE COVERED BY MORE THAN ONE LAB REPORT/DOCUMENT (e.g. a primary \
-Cleveland HeartLab panel AND a separate Quest Diagnostics report from the same specimen/draw date). Treat \
-every report that shares that same draw date as one combined draw for that date, not as separate draws and \
-not as "primary vs. secondary" sources where one silently wins. A marker's "now" value for that draw date is \
-whatever result ANY of the reports covering that date actually contains for it — never leave "now" null just \
-because the specific report you happen to be reading first, or the report that carries most of the other \
-markers, doesn't contain that marker or states it wasn't performed there. Only if you check every report \
-covering that draw date and NONE of them contains a result for that marker is "now": null the correct output.
-- CRITICAL — DO NOT COLLAPSE A MISSING LATEST-DRAW RESULT INTO "now": if a marker was tested on an earlier \
-draw but every report covering the most recent draw date shows that marker was NOT run on it (cancelled, not \
-ordered, no sample received, degenerated sample, or the marker's section is simply absent from every one of \
-those reports, even though other markers from that same draw ARE present and were run), the correct output is \
-"now": null (and "disp_now": "" — an empty string, the closest this field can express to null) with "then" \
-holding the earlier value — never repeat, copy, or carry the earlier value forward into "now" just because it \
-is the only value available. A missing result on the latest draw is an honest null only after confirming no \
-report for that draw date reports it — never a reason to shift an older reading into the "now" slot. This \
-applies per-marker: it is normal and expected for some markers on a given draw to have results while others \
-on that exact same draw do not.
-- Extract dates exactly as printed on the source document. Do not reformat, estimate, or round a date.
-- For EVERY recognized marker, also extract the literal reference range printed on the same lab report row
-    for each draw. Put the earliest-draw range in "lab_range_then_lo", "lab_range_then_hi", and
-    "lab_range_then_display", and the latest-draw range in "lab_range_now_lo", "lab_range_now_hi", and
-    "lab_range_now_display". Preserve the report's exact display text and numeric endpoints; never infer a
-    range from a general medical reference, another marker, or another draw. If a range is not printed or
-    cannot be read confidently, set its display field to "" and both numeric fields to 0. If the marker has
-    only one draw, use that same empty-display/zero sentinel for all three earliest-draw fields.
+EXTRACTING BLOODWORK — YOUR JOB HERE IS TO LIST EVERY OCCURRENCE, NOT TO RECONCILE THEM:
+Reconciling multiple mentions of the same marker into a single current/prior value used to be your job, and \
+that repeatedly failed on real patient data: when one report said a marker was not performed while a separate \
+report for that same draw actually contained the result, the reconciliation-by-single-model-pass approach \
+silently lost the real value. That reconciliation now happens in a separate, deterministic, non-AI process \
+after your output. Your only job is to record every occurrence you find, exactly as printed, without judging \
+which one is "the" answer.
+- For each RECOGNIZED marker, emit one entry in "marker_occurrences" for every single time its result (or an \
+explicit statement that it was not performed) appears anywhere in the source material — every lab report, \
+every section of a report, every draw date. Do not skip a repeat mention just because you already recorded \
+one occurrence of that marker.
+- Do NOT decide which draw is "current" or "prior" — just record the exact date printed next to each \
+occurrence in "date_display". Do NOT merge, average, or silently pick between two occurrences of the same \
+marker on the same date, even if they come from different reports/sections and even if you are confident \
+they agree — if a marker's result for one date appears in two different reports or two different sections of \
+the same report, output TWO separate entries, never one. Do NOT let one report's silence, or one report's \
+explicit "not performed" statement, cause you to skip or suppress a real result that ANOTHER report contains \
+for that same marker/date — every occurrence you can find gets its own independent entry.
+- "source_label": a short label identifying which report or section this specific occurrence came from — \
+taken from the nearest report title, lab name, or section header in the source (e.g. "Cleveland HeartLab \
+Cardiometabolic", "Quest Diagnostics MR421967F", "Non-Cardiometabolic panel"). Use the same label \
+consistently for every occurrence that plainly comes from the same report/section. If the entire source is \
+genuinely one single undifferentiated report with no distinguishable sections, use one consistent label for \
+all of it (e.g. the lab's name) rather than leaving it blank.
+- "status": "reported" when the source states an actual result (numeric or text) for that marker on that \
+date; "not_performed" when the source EXPLICITLY states, for that specific marker and that specific date, \
+that it was not performed / no specimen received / cancelled / sample degenerated in transport — never infer \
+"not_performed" just because a marker's row happens to be absent from a section; only use it when the source \
+says so in words. If a marker simply doesn't appear anywhere near a given date's results at all, do not emit \
+an occurrence for it there — silence is not the same as an explicit "not performed" statement, and it is not \
+your job to record an absence the source itself never states.
+- "value" and "disp_value": the literal numeric result and its literal printed text respectively (e.g. \
+value=8.2, disp_value="8.2"; or for a text-only/categorical result, value=null, disp_value="Negative"). When \
+status is "not_performed", value is null and disp_value is "".
+- "is_good": for categorical/pass-fail markers only (e.g. Urinalysis), whether this specific result is the \
+expected/normal outcome as literally stated or unambiguously implied by the source (e.g. "Negative" for an \
+occult-blood test expected to read negative). Use null when not applicable or not stated clearly enough to \
+be confident.
+- Extract dates exactly as printed on the source document for each occurrence. Do not reformat, estimate, or \
+round a date.
+- For every occurrence, also extract the literal reference range printed on that same lab report row into \
+"lab_range_lo", "lab_range_hi", and "lab_range_display". Preserve the report's exact display text and \
+numeric endpoints; never infer a range from a general medical reference, another marker, or another draw. \
+If a range is not printed or cannot be read confidently, use the sentinel "" / 0 / 0.
 - Some reference ranges are printed as more than one sub-range for the same single result (most commonly a
     time-of-day-qualified range, e.g. cortisol printed as "AM (6-10 AM) 4.8-19.5 ug/dL; PM (4-8 PM) 2.5-11.9
     ug/dL"). This is a real, normal, recurring lab-report format - it is NOT the same thing as an unreadable
     or absent range, and must NOT fall back to the 0/0/"" sentinel just because it has more than one part.
-    When this happens: use the FIRST-listed sub-range's numeric endpoints for the _lo/_hi fields (the AM
-    range in the cortisol example), and put the FULL printed text, including every sub-range and its
-    qualifier, in the _display field so nothing is lost. Only fall back to the empty/zero sentinel when the
+    When this happens: use the FIRST-listed sub-range's numeric endpoints for lab_range_lo/lab_range_hi (the
+    AM range in the cortisol example), and put the FULL printed text, including every sub-range and its
+    qualifier, in lab_range_display so nothing is lost. Only fall back to the empty/zero sentinel when the
     range is genuinely not printed at all or is illegible - never because it has multiple qualified parts.
 - If a marker's reference range is stated differently on this specific lab report than in the reference \
-library provided to you, still use the reference library's scoring configuration (it is the clinically \
-reviewed standard this pipeline runs on) — but note the discrepancy in "other_notes" so a human can review it \
-if it's meaningful, rather than silently overriding either source.
+library provided to you, still note the discrepancy in "other_notes" so a human can review it if it's \
+meaningful — never silently override either source.
 
 EXTRACTING PER-PATIENT PROVIDER-NOTE RANGE OVERRIDES — this requires the same never-infer discipline as \
 everything else, applied strictly:
@@ -180,22 +183,18 @@ OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
     "on_trt": false,
     "first_draw_date": "exact date as printed on the earliest lab draw, or empty string if only one draw exists",
     "latest_draw_date": "exact date as printed on the most recent lab draw, or empty string if unavailable",
-    "markers": [
+    "marker_occurrences": [
         {
             "name": "MUST exactly match a name from the recognized marker list provided above",
-            "then": 3.1,
-            "now": 0.7,
-            "disp_then": "3.1",
-            "disp_now": "0.7",
-            "lab_range_then_lo": 0,
-            "lab_range_then_hi": 0,
-            "lab_range_then_display": "",
-            "lab_range_now_lo": 0.0,
-            "lab_range_now_hi": 1.0,
-            "lab_range_now_display": "0.0-1.0",
-            "is_good_then": null,
-            "is_good_now": null,
-            "full_history": []
+            "date_display": "exact date as printed next to this specific occurrence",
+            "source_label": "short label for which report/section this occurrence came from",
+            "status": "reported",
+            "value": 0.7,
+            "disp_value": "0.7",
+            "is_good": null,
+            "lab_range_lo": 0.0,
+            "lab_range_hi": 1.0,
+            "lab_range_display": "0.0-1.0"
         }
     ],
     "dexa_history": [
@@ -220,12 +219,12 @@ OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
 }
 
 CRITICAL RULES, apply to every patient this runs on, not just the current one:
-- Include one entry in "markers" for EVERY marker found in the lab PDF that matches a name on the recognized list, even if it only has a "now" value and no "then". Do not skip markers. Do not summarize or sample — every match goes in.
+- Include one entry in "marker_occurrences" for EVERY occurrence of a recognized marker found anywhere in the source material, including every repeat mention across different reports, sections, or dates — never collapse, merge, or skip an occurrence because another one for the same marker already exists. Do not summarize or sample — every occurrence goes in.
 - If TWO DEXA PDFs are provided, they must both be read, and dexa_history must contain every distinct scan date found across BOTH documents, not just the first one. A DEXA PDF may itself contain multiple historical scan dates in a table — extract every row, not just the most recent.
 - Read the ENTIRE provider's note for both protocol items and pain points — do not stop after the first paragraph. Every compound the note names goes into "protocol". Any patient-stated concern or goal, anywhere in the note, produces a "pain_points" entry.
-- "then", "now", "disp_then", "vat_fat_mass_lb", "first_draw_date" are the only marker/dexa fields that may be JSON null, and each is null exactly when that specific draw/scan genuinely has no result for that field (or, for "then"/"first_draw_date", when no earlier draw exists at all) — never fill one from the other, and every other field must be filled from the actual source material when that material was provided.
-- "total_mass_lb", "fat_mass_lb", and "lean_mass_lb" use the sentinel -1 (never 0, never null) when a partial scan genuinely didn't report that metric; "body_fat_pct" uses "" the same way. This is the same required-field-with-sentinel pattern as "disp_now" — it exists because the API's strict structured-output grammar compiler rejects this schema once too many fields are nullable unions, so real nullability is reserved only for fields in this list.
-- "disp_now" cannot be JSON null (a schema constraint, not a data one): when "now" is null, set "disp_now" to an empty string "" rather than null or a fabricated display value. An empty "disp_now" means exactly the same thing as a null "now" — no result for this marker on the latest draw — never put any text there in that case. A missing lab range uses the same empty-display sentinel with its two numeric range fields set to 0.
+- "value", "is_good", "vat_fat_mass_lb", "first_draw_date" are the only marker-occurrence/dexa fields that may be JSON null, and each is null exactly when that specific occurrence/scan genuinely has no result for that field (or, for "first_draw_date", when no earlier draw exists at all) — never fill one from the other, and every other field must be filled from the actual source material when that material was provided.
+- "total_mass_lb", "fat_mass_lb", and "lean_mass_lb" use the sentinel -1 (never 0, never null) when a partial scan genuinely didn't report that metric; "body_fat_pct" uses "" the same way. This is the same required-field-with-sentinel pattern as "disp_value" — it exists because the API's strict structured-output grammar compiler rejects this schema once too many fields are nullable unions, so real nullability is reserved only for fields in this list.
+- "disp_value" cannot be JSON null (a schema constraint, not a data one): when "value" is null, set "disp_value" to an empty string "" rather than null or a fabricated display value. A missing lab range uses the same empty-display sentinel with its two numeric range fields set to 0.
 - "marker_overrides" should be an empty list in the ordinary case — it is only ever populated when the provider's note states an explicit, unambiguous numeric range tied to a specific recognized marker (see rules above). Do not populate it from a vague mention or from the lab's own printed reference range.
 - If a whole section has genuinely no source material at all (e.g. no DEXA PDF provided), return that key as an empty list — never omit the key, and never partially fill it from only some of the available source material.
 - Numbers must be actual JSON numbers (170.5), not strings ("170.5").
@@ -233,10 +232,10 @@ CRITICAL RULES, apply to every patient this runs on, not just the current one:
 
 Before finalizing your output, re-scan the full source text for every marker name and known alias you can \
 identify. For each one that appears anywhere in the source, confirm it has a corresponding entry in your \
-markers output — with a real value, or with the appropriate null/sentinel fields if it was only mentioned in \
-narrative text without a measured result. Do not omit a marker from your output solely because it appears \
-only once in the source, and do not omit a marker just because it was not part of the most recent draw's \
-panel — it should still appear with its historical value if one exists.
+marker_occurrences output for every place it appears — with a real value, or a "not_performed" status if the \
+source explicitly says so. Do not omit a marker occurrence solely because it appears only once in the \
+source, and do not omit an occurrence just because it was not part of the most recent draw's panel — it \
+should still appear with its historical value if one exists.
 
 Return ONLY this JSON object. No markdown fences, no prose before or after, no explanation.
 """
@@ -259,48 +258,35 @@ EXTRACTION_OUTPUT_SCHEMA = {
         "on_trt": {"type": "boolean"},
         "first_draw_date": {"type": "string"},
         "latest_draw_date": {"type": "string"},
-        "markers": {
+        # Raw, per-occurrence sightings only - deliberately NOT pre-reconciled into a then/now
+        # pair by the model. Reconciling multiple mentions (across reports, sections, or draw
+        # dates) into one current/prior value per marker is done downstream in pipeline.py's
+        # reconcile_marker_occurrences(), deterministically, precisely because trusting a single
+        # model pass to do that reconciliation itself failed on real patient data (see
+        # extraction_prompt.py's EXTRACTING BLOODWORK section above for the real case).
+        "marker_occurrences": {
             "type": "array",
             "items": {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
                     "name": {"type": "string"},
-                    "then": _NULLABLE_NUMBER,
-                    "now": _NULLABLE_NUMBER,
-                    "disp_then": _NULLABLE_STRING,
-                    # Not _NULLABLE_STRING here on purpose: the API's strict structured-output
-                    # grammar compiler rejects this schema as "too large" once both now and
-                    # disp_now are nullable unions. now (the real signal scoring/rendering use)
-                    # stays nullable; disp_now stays a plain required string and the prompt
-                    # instructs the model to use "" (not a fabricated value) when now is null.
-                    "disp_now": {"type": "string"},
-                    "lab_range_then_lo": {"type": "number"},
-                    "lab_range_then_hi": {"type": "number"},
-                    "lab_range_then_display": {"type": "string"},
-                    "lab_range_now_lo": {"type": "number"},
-                    "lab_range_now_hi": {"type": "number"},
-                    "lab_range_now_display": {"type": "string"},
-                    "is_good_then": _NULLABLE_BOOL,
-                    "is_good_now": _NULLABLE_BOOL,
-                    "full_history": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "date_display": {"type": "string"},
-                                "value": {"type": "number"},
-                                "disp_value": {"type": "string"},
-                            },
-                            "required": ["date_display", "value", "disp_value"],
-                        },
-                    },
+                    "date_display": {"type": "string"},
+                    "source_label": {"type": "string"},
+                    "status": {"type": "string"},
+                    "value": _NULLABLE_NUMBER,
+                    # Not _NULLABLE_STRING here on purpose - see the disp_now precedent this
+                    # replaces: the API's strict structured-output grammar compiler rejects this
+                    # schema once too many fields are nullable unions. value stays nullable;
+                    # disp_value stays a plain required string, "" when value is null.
+                    "disp_value": {"type": "string"},
+                    "is_good": _NULLABLE_BOOL,
+                    "lab_range_lo": {"type": "number"},
+                    "lab_range_hi": {"type": "number"},
+                    "lab_range_display": {"type": "string"},
                 },
-                "required": ["name", "then", "now", "disp_then", "disp_now",
-                             "lab_range_then_lo", "lab_range_then_hi", "lab_range_then_display",
-                             "lab_range_now_lo", "lab_range_now_hi", "lab_range_now_display",
-                             "is_good_then", "is_good_now", "full_history"],
+                "required": ["name", "date_display", "source_label", "status", "value", "disp_value",
+                             "is_good", "lab_range_lo", "lab_range_hi", "lab_range_display"],
             },
         },
         "dexa_history": {
@@ -380,8 +366,8 @@ EXTRACTION_OUTPUT_SCHEMA = {
         },
         "other_notes": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["name", "age", "sex", "postmenopausal_bhrt", "on_trt", "first_draw_date", "latest_draw_date", "markers",
-                 "dexa_history", "protocol", "pain_points", "marker_overrides",
+    "required": ["name", "age", "sex", "postmenopausal_bhrt", "on_trt", "first_draw_date", "latest_draw_date",
+                 "marker_occurrences", "dexa_history", "protocol", "pain_points", "marker_overrides",
                  "unrecognized_markers", "other_notes"],
 }
 

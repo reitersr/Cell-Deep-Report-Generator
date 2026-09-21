@@ -150,16 +150,18 @@ def test_live_extraction_handles_the_real_cortisol_am_pm_dual_range_text(tmp_pat
     client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     extracted = pipeline.extract(client, labs_pdf=str(source), dexa_pdfs=[], note_text=None,
                                   patient_name="Real Cortisol Range Check")
-    cortisol_entries = [m for m in extracted.get("markers", []) if "cortisol" in m.get("name", "").lower()]
+    cortisol_entries = [m for m in extracted.get("marker_occurrences", [])
+                         if "cortisol" in m.get("name", "").lower()]
     assert len(cortisol_entries) == 1
     cortisol = cortisol_entries[0]
-    assert cortisol["lab_range_now_display"] != ""
-    assert cortisol["lab_range_now_lo"] == 4.8
-    assert cortisol["lab_range_now_hi"] == 19.5
+    assert cortisol["lab_range_display"] != ""
+    assert cortisol["lab_range_lo"] == 4.8
+    assert cortisol["lab_range_hi"] == 19.5
 
     record, _ = pipeline.score_and_build_record({
         "name": "Real Cortisol Range Check", "sex": "male", "provider_note_raw": "",
-        "markers": [cortisol],
+        "first_draw_date": "", "latest_draw_date": cortisol["date_display"],
+        "marker_occurrences": [cortisol],
     })
     assert record.markers[0].now_tier == "optimal"
     assert record.markers[0].unscored_reason is None
@@ -429,6 +431,65 @@ def test_real_shbg_garbled_text_is_detected_as_run_on():
 # No real Evan Walker source PDFs exist in this workspace (same caveat as Issue 1-5 above), so
 # the fixtures below reproduce the same underlying condition synthetically.
 # ---------------------------------------------------------------------------
+
+def test_occurrence_reconciliation_uses_actual_dates_and_never_picks_conflicts():
+    occurrences = [
+        {"name": "Free T3", "date_display": "01/07/2026", "source_label": "CHL",
+         "status": "reported", "value": 3.5, "disp_value": "3.5", "is_good": None,
+         "lab_range_lo": 2.0, "lab_range_hi": 4.4, "lab_range_display": "2.0-4.4"},
+        {"name": "Free T3", "date_display": "02/01/2026", "source_label": "CHL",
+         "status": "reported", "value": 2.9, "disp_value": "2.9", "is_good": None,
+         "lab_range_lo": 2.0, "lab_range_hi": 4.4, "lab_range_display": "2.0-4.4"},
+        {"name": "Free T3", "date_display": "04/24/2026", "source_label": "Quest MR421967F",
+         "status": "reported", "value": 3.5, "disp_value": "3.5", "is_good": None,
+         "lab_range_lo": 2.0, "lab_range_hi": 4.4, "lab_range_display": "2.0-4.4"},
+        {"name": "Glucose (fasting)", "date_display": "04/24/2026", "source_label": "CHL",
+         "status": "reported", "value": 92, "disp_value": "92", "is_good": None,
+         "lab_range_lo": 70, "lab_range_hi": 99, "lab_range_display": "70-99"},
+        {"name": "Glucose (fasting)", "date_display": "04/24/2026", "source_label": "Quest MR421967F",
+         "status": "reported", "value": 92, "disp_value": "92.0", "is_good": None,
+         "lab_range_lo": 70, "lab_range_hi": 99, "lab_range_display": "70-99"},
+        {"name": "Urinalysis", "date_display": "04/24/2026", "source_label": "CHL",
+         "status": "not_performed", "value": None, "disp_value": "", "is_good": None,
+         "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
+        {"name": "Occult Blood", "date_display": "04/24/2026", "source_label": "Quest MR421967F",
+         "status": "reported", "value": None, "disp_value": "Negative", "is_good": True,
+         "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
+        {"name": "Myeloperoxidase", "date_display": "01/07/2026", "source_label": "CHL",
+         "status": "reported", "value": 300, "disp_value": "300", "is_good": None,
+         "lab_range_lo": 0, "lab_range_hi": 539, "lab_range_display": "0-539"},
+        {"name": "Myeloperoxidase", "date_display": "04/24/2026", "source_label": "CHL",
+         "status": "not_performed", "value": None, "disp_value": "", "is_good": None,
+         "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
+        {"name": "TSH", "date_display": "04/24/2026", "source_label": "CHL",
+         "status": "reported", "value": 1.2, "disp_value": "1.2", "is_good": None,
+         "lab_range_lo": 0.4, "lab_range_hi": 4.0, "lab_range_display": "0.4-4.0"},
+        {"name": "TSH", "date_display": "04/24/2026", "source_label": "Quest MR421967F",
+         "status": "reported", "value": 1.8, "disp_value": "1.8", "is_good": None,
+         "lab_range_lo": 0.4, "lab_range_hi": 4.0, "lab_range_display": "0.4-4.0"},
+    ]
+
+    reconciled, notes, confirmed_absent = pipeline.reconcile_marker_occurrences(
+        occurrences, first_draw_date="04/24/2026", latest_draw_date="02/01/2026",
+    )
+    by_name = {marker["name"]: marker for marker in reconciled}
+
+    assert by_name["Free T3"]["then"] == 3.5
+    assert by_name["Free T3"]["now"] == 3.5
+    assert by_name["Free T3"]["full_history"] == [{
+        "date_display": "02/01/2026", "value": 2.9, "disp_value": "2.9",
+    }]
+    assert by_name["Glucose (fasting)"]["now"] == 92
+    occult = next(marker for name, marker in by_name.items() if "Occult Blood" in name)
+    assert occult["now"] is None
+    assert occult["disp_now"] == "Negative"
+    assert occult["is_good_now"] is True
+    assert by_name["Myeloperoxidase"]["now"] is None
+    assert "Myeloperoxidase" in confirmed_absent
+    assert by_name["TSH"]["now"] is None
+    assert any("TSH" in note and "CONFLICTING" in note for note in notes)
+
+
 
 def test_dedupe_fills_in_a_result_missing_from_only_one_of_two_same_draw_source_mentions():
     """If extraction emits one entry per source report for the same draw (one from the primary
