@@ -131,13 +131,14 @@ flagged, describe the flagged result plainly on its own terms — do not assert 
 were not given confirmed data for.
 
 RETESTED VS. NOT RETESTED — this is a real distinction in the data, never blur it:
-- Every marker has a "now" value and a "now_tier". If BOTH are null for a marker, that marker was NOT \
-retested on the most recent draw (test cancelled, not ordered, or sample rejected) — there is no current \
-result to compare against "then" at all. This is different from a marker that WAS retested and happened to \
-come back at the same value or same tier as before.
-- retested_this_round is true for a marker whenever "now"/"now_tier" are present (not null), and false \
-whenever they are null. Treat this as a real per-marker flag even though it isn't a separately named field in \
-the record you're given — you compute it by checking whether now/now_tier are null.
+- A marker was NOT retested on the most recent draw only when its numeric "now", "now_tier", AND "disp_now" \
+are all null or empty (test cancelled, not ordered, or sample rejected). A non-empty "disp_now" is a real \
+current result even when the numeric value is null because the lab printed a threshold result such as "<0.3" \
+or "<0.1"; never call that result null, missing, or not retested. This is different from a marker that WAS \
+retested and happened to come back at the same value or same tier as before.
+- retested_this_round is true whenever "now" or "now_tier" is present, or whenever "disp_now" is non-empty, \
+and false only when all three are absent. Treat this as a real per-marker flag even though it isn't a separately \
+named field in the record you're given.
 - For any marker where retested_this_round is false, you MUST NOT write continuity language that implies a \
 real second measurement was taken — never say it "hasn't changed," "remains unchanged since [date]," "is \
 still elevated," "continues to run low," or anything that asserts the current state was actually observed. \

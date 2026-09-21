@@ -182,6 +182,13 @@ def reconcile_marker_occurrences(occurrences: list[dict], first_draw_date: str =
         date_keys.sort(key=lambda key: (0, key) if isinstance(key, tuple) else (1, key))
         then_key = date_keys[0] if date_keys else ""
         now_key = date_keys[-1] if date_keys else ""
+        undated = by_date.get("", [])
+        if undated:
+            conflict_notes.append(
+                f"WARNING: MARKER '{canonical}' HAS UNDATED OCCURRENCES "
+                f"({len(undated)} source occurrence(s)) - NOT USED FOR THEN/NOW, "
+                "NEEDS HUMAN REVIEW"
+            )
 
         def _resolve(key):
             group = by_date.get(key, [])
@@ -209,7 +216,7 @@ def reconcile_marker_occurrences(occurrences: list[dict], first_draw_date: str =
         then_occ, _ = _resolve(then_key) if then_key and then_key != now_key else (None, False)
 
         history = []
-        for key in date_order:
+        for key in date_keys:
             if key in (now_key, then_key):
                 continue
             occ, _ = _resolve(key)
@@ -379,6 +386,61 @@ def _pdf_text(path: str | None) -> str:
         return "\n".join(page.get_text() for page in document)
 
 
+_PRINTED_DATE_RE = re.compile(
+    r"(?<!\d)(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|"
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|"
+    r"Dec(?:ember)?)\.?\s+\d{1,2},?\s+\d{4})(?!\d)", re.IGNORECASE
+)
+_COLLECTION_DATE_RE = re.compile(
+    r"(?:collected|collection|specimen|draw|service|received)[^\n:]{0,35}[:#]?\s*"
+    r"(" + _PRINTED_DATE_RE.pattern + r")", re.IGNORECASE
+)
+
+
+def _source_label_tokens(source_label: str) -> set[str]:
+    ignored = {"report", "panel", "section", "current", "historical", "lab"}
+    return {token for token in re.findall(r"[a-z0-9]+", source_label.lower())
+            if len(token) >= 3 and token not in ignored}
+
+
+def _report_collection_dates(lab_text: str, source_labels: set[str]) -> dict[str, set[str]]:
+    """Find literal report-level collection dates, keyed by extracted source label.
+
+    This is deliberately conservative: a date is attached only when a collection/specimen
+    keyword is printed near a source-label match. It never chooses among unrelated dates.
+    """
+    lines = lab_text.splitlines()
+    label_dates: dict[str, set[str]] = {}
+    for label in source_labels:
+        tokens = _source_label_tokens(label)
+        if not tokens:
+            continue
+        matching_lines = [index for index, line in enumerate(lines)
+                          if len(tokens & set(re.findall(r"[a-z0-9]+", line.lower()))) >= max(1, len(tokens) // 2)]
+        candidates = set()
+        for index in matching_lines:
+            window = "\n".join(lines[max(0, index - 12):min(len(lines), index + 25)])
+            candidates.update(match.group(1) for match in _COLLECTION_DATE_RE.finditer(window))
+        if candidates:
+            label_dates[label] = candidates
+    return label_dates
+
+
+def _attach_report_collection_dates(extracted: dict, lab_text: str) -> None:
+    """Attach a report's printed collection date to undated occurrences from that report."""
+    occurrences = extracted.get("marker_occurrences", [])
+    labels = {occurrence.get("source_label", "") for occurrence in occurrences
+              if not occurrence.get("date_display") and occurrence.get("source_label")}
+    label_dates = _report_collection_dates(lab_text, labels)
+    for occurrence in occurrences:
+        if occurrence.get("date_display"):
+            continue
+        dates = label_dates.get(occurrence.get("source_label", ""), set())
+        if len(dates) == 1:
+            occurrence["date_display"] = next(iter(dates))
+
+
 def _nearby_cadence(note_text: str, start: int, end: int) -> str | None:
     window_start = max(0, start - 40)
     window = note_text[window_start:min(len(note_text), end + 40)].lower()
@@ -432,6 +494,16 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
         match = markers_reference_lookup(marker.get("name", ""))
         if match:
             extracted_markers.add(match[0])
+    explicitly_absent = set()
+    occurrences_by_marker = {}
+    for occurrence in extracted.get("marker_occurrences", []):
+        match = markers_reference_lookup(occurrence.get("name", ""))
+        if match:
+            occurrences_by_marker.setdefault(match[0], []).append(occurrence)
+    for canonical, occurrences in occurrences_by_marker.items():
+        if occurrences and all(occurrence.get("status") == "not_performed" for occurrence in occurrences):
+            explicitly_absent.add(canonical)
+
     lab_lower = lab_text.lower()
     for canonical, config in MARKER_LIBRARY.items():
         names = [canonical, *config.get("aliases", [])]
@@ -453,7 +525,7 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
             marker for marker in combined_markers
             if (match := markers_reference_lookup(marker.get("name", ""))) and match[0] == canonical
         )
-        if canonical in confirmed_absent_now:
+        if canonical in confirmed_absent_now or canonical in explicitly_absent:
             continue  # every report for this draw explicitly accounted for the absence - not ambiguous
         if source_mentions >= 2 and extracted_marker.get("now") is None:
             warning = (f"WARNING: MARKER '{canonical}' APPEARS {source_mentions} TIMES IN SOURCE BUT "
@@ -506,6 +578,16 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         content.append(_pdf_content_block(labs_pdf))
     for p in dexa_pdfs:
         content.append(_pdf_content_block(p))
+    if labs_pdf:
+        content.append({
+            "type": "text",
+            "text": (
+                "LITERAL TEXT EXTRACTED FROM THE LAB PDF. Use this as a transcription aid, especially "
+                "for report-level specimen dates and dates printed once in Historical/Current column headers. "
+                "Do not infer or reconcile values from it; copy only what the source prints.\n\n"
+                + _pdf_text(labs_pdf)
+            ),
+        })
     content.append({
         "type": "text",
         "text": build_extraction_user_message(_marker_library_summary(), _protocol_library_summary(), note_text),
@@ -523,6 +605,8 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
     with open("/tmp/last_extraction_raw.txt", "w") as f:
         f.write(raw_text)
     parsed = _parse_json_response(raw_text, patient_name=patient_name)
+    if labs_pdf:
+        _attach_report_collection_dates(parsed, _pdf_text(labs_pdf))
     # exactly what the model returned for every marker occurrence, before reconciliation ever
     # runs - the ground truth needed to confirm (not assume) how a marker like Cortisol was
     # actually extracted, instead of reconstructing it from a guess

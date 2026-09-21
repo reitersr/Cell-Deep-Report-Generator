@@ -507,6 +507,75 @@ def test_occurrence_reconciliation_reads_dates_embedded_in_report_column_labels(
     assert not notes
 
 
+def test_occurrence_history_is_sorted_by_date_not_source_order():
+    occurrences = [
+        {"name": "TSH", "date_display": "04/24/2026", "status": "reported", "value": 3.0,
+         "disp_value": "3.0", "is_good": None, "lab_range_lo": 0, "lab_range_hi": 0,
+         "lab_range_display": ""},
+        {"name": "TSH", "date_display": "02/01/2026", "status": "reported", "value": 2.0,
+         "disp_value": "2.0", "is_good": None, "lab_range_lo": 0, "lab_range_hi": 0,
+         "lab_range_display": ""},
+        {"name": "TSH", "date_display": "01/07/2026", "status": "reported", "value": 1.0,
+         "disp_value": "1.0", "is_good": None, "lab_range_lo": 0, "lab_range_hi": 0,
+         "lab_range_display": ""},
+    ]
+
+    reconciled, _, _ = pipeline.reconcile_marker_occurrences(occurrences)
+
+    assert reconciled[0]["then"] == 1.0
+    assert reconciled[0]["now"] == 3.0
+    assert reconciled[0]["full_history"] == [{
+        "date_display": "02/01/2026", "value": 2.0, "disp_value": "2.0",
+    }]
+
+
+def test_hormone_precedence_ignores_undated_chl_and_uses_later_real_date():
+    undated_chl = {
+        "name": "Estradiol", "date_display": "", "source_label": "CHL current",
+        "status": "reported", "value": 18, "disp_value": "18", "is_good": None,
+        "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": "",
+    }
+    dated_quest = {
+        "name": "Estradiol", "date_display": "04/24/2026", "source_label": "Quest MR421967F",
+        "status": "reported", "value": 42, "disp_value": "42", "is_good": None,
+        "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": "",
+    }
+
+    reconciled, notes, _ = pipeline.reconcile_marker_occurrences([undated_chl, dated_quest])
+
+    assert reconciled[0]["now"] == 42
+    assert reconciled[0]["then"] is None
+    assert any("Estradiol" in note and "UNDATED" in note for note in notes)
+
+    dated_chl = dict(undated_chl, date_display="04/25/2026")
+    reconciled, notes, _ = pipeline.reconcile_marker_occurrences([dated_quest, dated_chl])
+
+    assert reconciled[0]["now"] == 18
+    assert not any("UNDATED" in note for note in notes)
+
+
+def test_report_collection_date_propagates_to_all_undated_current_column_occurrences():
+    extracted = {
+        "marker_occurrences": [
+            {"name": "Testosterone Total", "source_label": "CHL Cardiometabolic", "date_display": ""},
+            {"name": "Estradiol", "source_label": "CHL Cardiometabolic", "date_display": ""},
+            {"name": "SHBG", "source_label": "CHL Cardiometabolic", "date_display": ""},
+        ]
+    }
+    lab_text = (
+        "Cleveland HeartLab Cardiometabolic Report\n"
+        "Specimen Information\n"
+        "Collected: 03/18/2026\n\n"
+        "Testosterone Total 510\nEstradiol 22\nSHBG 48\n"
+    )
+
+    pipeline._attach_report_collection_dates(extracted, lab_text)
+
+    assert [occurrence["date_display"] for occurrence in extracted["marker_occurrences"]] == [
+        "03/18/2026", "03/18/2026", "03/18/2026",
+    ]
+
+
 
 def test_dedupe_fills_in_a_result_missing_from_only_one_of_two_same_draw_source_mentions():
     """If extraction emits one entry per source report for the same draw (one from the primary
@@ -543,6 +612,22 @@ def test_marker_missing_from_every_report_for_the_draw_still_renders_not_reteste
     assert marker.disp_now == ""
     html = template.bio_row_tr(marker, {})
     assert "Not retested" in html
+
+
+def test_completeness_does_not_flag_marker_explicitly_not_performed_everywhere():
+    notice = pipeline.verify_extraction_completeness(
+        {
+            "marker_occurrences": [
+                {"name": "Myeloperoxidase", "date_display": "01/07/2026", "status": "not_performed"},
+                {"name": "Myeloperoxidase", "date_display": "04/24/2026", "status": "not_performed"},
+            ],
+            "first_draw_date": "01/07/2026",
+            "latest_draw_date": "04/24/2026",
+        },
+        lab_text="Myeloperoxidase Test Not Performed\nMyeloperoxidase Test Not Performed",
+    )
+
+    assert not any("Myeloperoxidase" in warning for warning in notice.other_notes)
 
 
 @pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key")

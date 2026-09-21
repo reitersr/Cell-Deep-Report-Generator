@@ -52,8 +52,10 @@ which one is "the" answer.
 explicit statement that it was not performed) appears anywhere in the source material — every lab report, \
 every section of a report, every draw date. Do not skip a repeat mention just because you already recorded \
 one occurrence of that marker.
-- Do NOT decide which draw is "current" or "prior" — just record the exact date printed next to each \
-occurrence in "date_display". Do NOT merge, average, or silently pick between two occurrences of the same \
+- Do NOT decide which draw is "current" or "prior" — just record the actual collection/specimen date printed \
+on the report or in the value column header in "date_display". "date_display" MUST be the date itself, such \
+as "01/07/2026" or "April 24, 2026", never a label such as "Historical", "Current", "Prior", or "Now". \
+Do NOT merge, average, or silently pick between two occurrences of the same \
 marker on the same date, even if they come from different reports/sections and even if you are confident \
 they agree — if a marker's result for one date appears in two different reports or two different sections of \
 the same report, output TWO separate entries, never one. Do NOT let one report's silence, or one report's \
@@ -61,7 +63,8 @@ explicit "not performed" statement, cause you to skip or suppress a real result 
 for that same marker/date — every occurrence you can find gets its own independent entry.
 - A report's printed specimen/collection date applies to every result in that report unless a nearer printed \
 date explicitly identifies a different result date. This includes table or column headers: if a Historical, \
-Previous, Current, or similar value column has one date printed in its header, copy that exact printed date into \
+Previous, Current, or similar value column has one date printed in its header, copy that exact printed date, \
+not the column label, into \
 "date_display" for every marker value under that column. Do not leave those occurrences undated merely because \
 the date is printed once above the rows rather than repeated beside each row. When multiple reports are present, \
 attach each occurrence to the date printed by its own report; never use the first report's date for another report.
