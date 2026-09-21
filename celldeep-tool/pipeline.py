@@ -176,12 +176,12 @@ def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
                 then_occ = None
         else:
             now_occ = unique_results[0] if unique_results else None
-            then_occ = unique_results[1] if len(unique_results) > 1 else None
+            then_occ = unique_results[-1] if len(unique_results) > 1 else None
         history = [{
             "date_display": occ.get("date_display", ""),
             "value": occ.get("value") if occ.get("value") is not None else 0,
             "disp_value": occ.get("disp_value", ""),
-        } for occ in reversed(unique_results[2:])]
+        } for occ in reversed(unique_results[1:-1])]
 
         reconciled.append({
             "name": canonical,

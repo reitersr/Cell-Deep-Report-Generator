@@ -349,6 +349,24 @@ def test_dexa_panel_snapshot_uses_the_real_latest_complete_scan_not_the_last_lis
     assert "Feb 27, 2026" not in now_section
 
 
+def test_dexa_panel_renders_all_seven_real_scan_dates_in_full_history():
+    history = _evan_walker_dexa_history() + [
+        DexaReading(date_display="Jun 10, 2026", total_mass_lb=157.0, fat_mass_lb=41.0,
+                    lean_mass_lb=114.0, body_fat_pct="26.1%", vat_fat_mass_lb=0.58),
+        DexaReading(date_display="Jul 2, 2026", total_mass_lb=156.0, fat_mass_lb=40.0,
+                    lean_mass_lb=114.5, body_fat_pct="25.6%", vat_fat_mass_lb=0.55),
+    ]
+    record = PatientRecord(name="Seven Scan History", dexa_history=history)
+    html = template.dexa_panel(record, _copy_for_render(headlines={"Structure": "Tracked."}),
+                               {"Structure": {"now": 90}}, None)
+
+    history_section = html[html.index("Full scan history"):]
+    for date in ("January 1, 2026", "January 27, 2026", "February 18, 2026", "February 27, 2026",
+                 "May 28, 2026", "June 10, 2026", "July 2, 2026"):
+        assert date in history_section
+    assert history_section.count('class="dexa-hist-row"') == 7
+
+
 # ---------------------------------------------------------------------------
 # Issue 4: generated copy text losing spacing mid-document
 # ---------------------------------------------------------------------------
@@ -472,10 +490,10 @@ def test_occurrence_reconciliation_uses_only_dated_actual_results():
     reconciled = pipeline.reconcile_marker_occurrences(occurrences)
     by_name = {marker["name"]: marker for marker in reconciled}
 
-    assert by_name["Free T3"]["then"] == 2.9
+    assert by_name["Free T3"]["then"] == 3.5
     assert by_name["Free T3"]["now"] == 3.5
     assert by_name["Free T3"]["full_history"] == [{
-        "date_display": "01/07/2026", "value": 3.5, "disp_value": "3.5",
+        "date_display": "02/01/2026", "value": 2.9, "disp_value": "2.9",
     }]
     assert by_name["Glucose (fasting)"]["now"] == 92
     occult = next(marker for name, marker in by_name.items() if "Occult Blood" in name)
@@ -520,10 +538,27 @@ def test_occurrence_history_is_sorted_by_date_not_source_order():
 
     reconciled = pipeline.reconcile_marker_occurrences(occurrences)
 
-    assert reconciled[0]["then"] == 2.0
+    assert reconciled[0]["then"] == 1.0
     assert reconciled[0]["now"] == 3.0
     assert reconciled[0]["full_history"] == [{
-        "date_display": "01/07/2026", "value": 1.0, "disp_value": "1.0",
+        "date_display": "02/01/2026", "value": 2.0, "disp_value": "2.0",
+    }]
+
+
+def test_hscrp_three_real_values_uses_true_baseline_then():
+    reconciled = pipeline.reconcile_marker_occurrences([
+        _dated_occurrence("hs-CRP", "01/07/2026", 20.0, ">20.0"),
+        _dated_occurrence("hs-CRP", "01/27/2026", 0.3),
+        _dated_occurrence("hs-CRP", "04/24/2026", 3.0, "<3.0"),
+    ])
+    raw = reconciled[0]
+
+    assert raw["then"] == 20.0
+    assert raw["disp_then"] == ">20.0"
+    assert raw["now"] == 3.0
+    assert raw["disp_now"] == "<3.0"
+    assert raw["full_history"] == [{
+        "date_display": "01/27/2026", "value": 0.3, "disp_value": "0.3",
     }]
 
 
