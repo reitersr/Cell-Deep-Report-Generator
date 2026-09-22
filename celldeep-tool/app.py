@@ -10,7 +10,7 @@ import traceback
 import shutil
 import uuid
 
-from flask import Flask, request, render_template, send_file, flash, redirect, url_for
+from flask import Flask, request, render_template, send_file, flash, redirect, url_for, jsonify
 
 import pipeline
 
@@ -23,6 +23,13 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
+
+
+@app.route("/version", methods=["GET"])
+def version():
+    response = jsonify({"commit": os.environ.get("RENDER_GIT_COMMIT", "unknown")})
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/generate", methods=["POST"])
