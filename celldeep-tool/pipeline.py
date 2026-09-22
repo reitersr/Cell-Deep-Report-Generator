@@ -24,7 +24,10 @@ import json
 import base64
 import argparse
 import re
+import sys
+import tempfile
 from dataclasses import asdict
+from pathlib import Path
 
 from anthropic import Anthropic
 from json_repair import repair_json
@@ -49,6 +52,10 @@ if os.path.exists(".env"):
                 os.environ.setdefault(k, v)
 
 MODEL = "claude-sonnet-4-6"
+
+
+class ExtractionOccurrenceValidationError(RuntimeError):
+    """The source contains a dated marker result that extraction omitted."""
 
 
 def parse_provider_statuses(note_text: str | None) -> tuple[bool | None, bool | None]:
@@ -398,6 +405,94 @@ def _attach_report_collection_dates(extracted: dict, lab_text: str) -> None:
             occurrence["date_display"] = next(iter(dates))
 
 
+_RESULT_TOKEN_RE = re.compile(
+    r"(?:[<>]=?\s*)?\d+(?:\.\d+)?|\b(?:negative|positive|detected|not detected|"
+    r"not performed|cancelled|canceled)\b",
+    re.IGNORECASE,
+)
+_DATE_HEADER_RE = re.compile(
+    r"\b(?:collected|collection|specimen|draw|current|historical|previous|result date|report date)\b",
+    re.IGNORECASE,
+)
+_BIRTH_DATE_RE = re.compile(r"\b(?:date of birth|birth date|dob)\b", re.IGNORECASE)
+
+
+def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
+    """Return conservative source evidence for marker/date pairs.
+
+    A marker must appear on a result-bearing line. Dates count when printed on that line or in
+    the nearest preceding collection/current/historical header block. This deliberately avoids
+    treating unrelated demographics dates as draw dates.
+    """
+    lines = lab_text.splitlines()
+    dated_header_lines = []
+    for index, line in enumerate(lines):
+        dates = [match.group(0) for match in _PRINTED_DATE_RE.finditer(line)]
+        if not dates:
+            continue
+        context = " ".join(lines[max(0, index - 2):min(len(lines), index + 3)])
+        if _DATE_HEADER_RE.search(context) and not _BIRTH_DATE_RE.search(context):
+            dated_header_lines.append((index, dates))
+
+    evidence: dict[str, dict[object, str]] = {}
+    for canonical, config in MARKER_LIBRARY.items():
+        aliases = sorted({canonical, *config.get("aliases", [])}, key=len, reverse=True)
+        alias_pattern = re.compile(
+            r"(?<!\w)(?:" + "|".join(re.escape(alias) for alias in aliases) + r")(?!\w)",
+            re.IGNORECASE,
+        )
+        for index, line in enumerate(lines):
+            match = alias_pattern.search(line)
+            if not match:
+                continue
+            result_text = line[:match.start()] + line[match.end():]
+            result_text = re.split(r"\breference\s+range\b", result_text, maxsplit=1,
+                                   flags=re.IGNORECASE)[0]
+            result_tokens = _RESULT_TOKEN_RE.findall(result_text)
+            if not result_tokens:
+                continue
+
+            source_dates = [date.group(0) for date in _PRINTED_DATE_RE.finditer(line)]
+            if not source_dates:
+                preceding = [item for item in dated_header_lines if 0 <= index - item[0] <= 40]
+                if preceding:
+                    nearest_index = preceding[-1][0]
+                    source_dates = [date for header_index, dates in preceding
+                                    if nearest_index - header_index <= 2 for date in dates]
+                    if len(result_tokens) < len(source_dates):
+                        source_dates = []
+            for date_display in source_dates:
+                normalized = _normalize_date_for_matching(date_display)
+                if isinstance(normalized, tuple):
+                    evidence.setdefault(canonical, {}).setdefault(normalized, date_display)
+    return evidence
+
+
+def _missing_source_marker_dates(extracted: dict, lab_text: str) -> list[tuple[str, str]]:
+    extracted_dates: dict[str, set] = {}
+    for occurrence in extracted.get("marker_occurrences", []):
+        match = markers_reference_lookup(occurrence.get("name", ""))
+        normalized = _normalize_date_for_matching(occurrence.get("date_display", ""))
+        if match and isinstance(normalized, tuple):
+            extracted_dates.setdefault(match[0], set()).add(normalized)
+
+    missing = []
+    for canonical, source_dates in _source_marker_dates(lab_text).items():
+        for normalized, date_display in source_dates.items():
+            if normalized not in extracted_dates.get(canonical, set()):
+                missing.append((canonical, date_display))
+    return sorted(missing, key=lambda item: (item[0], _normalize_date_for_matching(item[1])))
+
+
+def _format_missing_occurrences(missing: list[tuple[str, str]]) -> str:
+    grouped: dict[str, list[str]] = {}
+    for marker, date_display in missing:
+        grouped.setdefault(marker, []).append(date_display)
+    details = "; ".join(f"{marker} [{', '.join(dates)}]" for marker, dates in grouped.items())
+    return ("Extraction occurrence validation failed: source PDF contains marker/date pairs "
+            f"missing from marker_occurrences: {details}")
+
+
 def _nearby_cadence(note_text: str, start: int, end: int) -> str | None:
     window_start = max(0, start - 40)
     window = note_text[window_start:min(len(note_text), end + 40)].lower()
@@ -513,8 +608,9 @@ def _protocol_library_summary() -> str:
 
 
 def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
-            patient_name: str | None = None) -> dict:
+        patient_name: str | None = None, audit_root: str | None = None) -> dict:
     """Step 1: raw material in, structured (but not yet scored or written) JSON out."""
+    lab_text = _pdf_text(labs_pdf) if labs_pdf else ""
     content = []
     if labs_pdf:
         content.append(_pdf_content_block(labs_pdf))
@@ -527,7 +623,7 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
                 "LITERAL TEXT EXTRACTED FROM THE LAB PDF. Use this as a transcription aid, especially "
                 "for report-level specimen dates and dates printed once in Historical/Current column headers. "
                 "Do not infer or reconcile values from it; copy only what the source prints.\n\n"
-                + _pdf_text(labs_pdf)
+                + lab_text
             ),
         })
     content.append({
@@ -535,26 +631,47 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         "text": build_extraction_user_message(_marker_library_summary(), _protocol_library_summary(), note_text),
     })
 
-    resp = client.messages.create(
-        model=MODEL,
-        max_tokens=16000,
-        system=EXTRACTION_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": content}],
-        output_config={"format": {"type": "json_schema", "schema": EXTRACTION_OUTPUT_SCHEMA}},
-    )
-    text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
-    raw_text = "".join(text_blocks)
-    with open("/tmp/last_extraction_raw.txt", "w") as f:
-        f.write(raw_text)
-    parsed = _parse_json_response(raw_text, patient_name=patient_name)
-    if labs_pdf:
-        _attach_report_collection_dates(parsed, _pdf_text(labs_pdf))
-    # exactly what the model returned for every marker occurrence, before reconciliation ever
-    # runs - the ground truth needed to confirm (not assume) how a marker like Cortisol was
-    # actually extracted, instead of reconstructing it from a guess
-    with open("/tmp/last_extraction_markers_raw.json", "w", encoding="utf-8") as f:
-        json.dump(parsed.get("marker_occurrences", []), f, indent=2, ensure_ascii=False)
-    return parsed
+    safe_patient = re.sub(r"[^A-Za-z0-9._-]+", "_", (patient_name or "patient")).strip("._") or "patient"
+    audit_base = Path(audit_root or tempfile.gettempdir()) / "celldeep_extraction_audits"
+    audit_base.mkdir(parents=True, exist_ok=True)
+    audit_dir = Path(tempfile.mkdtemp(prefix=f"{safe_patient}_", dir=audit_base))
+
+    attempts = 2 if labs_pdf else 1
+    for attempt in range(1, attempts + 1):
+        resp = client.messages.create(
+            model=MODEL,
+            max_tokens=16000,
+            system=EXTRACTION_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": content}],
+            output_config={"format": {"type": "json_schema", "schema": EXTRACTION_OUTPUT_SCHEMA}},
+        )
+        text_blocks = [block.text for block in resp.content if hasattr(block, "text")]
+        raw_text = "".join(text_blocks)
+        parsed = _parse_json_response(raw_text, patient_name=patient_name)
+        raw_path = audit_dir / f"attempt-{attempt}-raw-response.txt"
+        occurrences_path = audit_dir / f"attempt-{attempt}-marker-occurrences.json"
+        raw_path.write_text(raw_text, encoding="utf-8")
+        occurrences_path.write_text(
+            json.dumps(parsed.get("marker_occurrences", []), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"Extraction audit saved: {occurrences_path}")
+
+        if labs_pdf:
+            _attach_report_collection_dates(parsed, lab_text)
+        missing = _missing_source_marker_dates(parsed, lab_text) if labs_pdf else []
+        if not missing:
+            return parsed
+
+        message = _format_missing_occurrences(missing)
+        if attempt < attempts:
+            print(f"{message}. Retrying extraction once.", file=sys.stderr)
+        else:
+            raise ExtractionOccurrenceValidationError(
+                f"{message}. Audit files: {audit_dir}"
+            )
+
+    raise AssertionError("extraction attempt loop exited unexpectedly")
 
 
 _LAB_RANGE_TRIOS = [
