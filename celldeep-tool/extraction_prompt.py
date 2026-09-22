@@ -61,6 +61,15 @@ they agree — if a marker's result for one date appears in two different report
 the same report, output TWO separate entries, never one. Do NOT let one report's silence, or one report's \
 explicit "not performed" statement, cause you to skip or suppress a real result that ANOTHER report contains \
 for that same marker/date — every occurrence you can find gets its own independent entry.
+- A threshold-style result (e.g. "<3.0", ">20.0") is a real, complete, literal reported result, exactly as \
+eligible for its own "marker_occurrences" entry as any plain numeric result — never treat it as ambiguous, \
+partial, or skippable just because it has no single numeric value. It gets "value": null and its literal \
+text in "disp_value" (per the "value"/"disp_value" rule below), with "status": "reported", the same as any \
+other real result. Also, one marker may legitimately have a different number of occurrences across the \
+document than another marker sitting right next to it in the same report (e.g. one marker was redrawn on an \
+extra follow-up date that another marker was not) — never let how many times a neighboring marker was \
+mentioned change how many occurrences you record for this one; each marker's occurrence count is decided \
+solely by how many times its own result actually appears in the source.
 - A report's printed specimen/collection date applies to every result in that report unless a nearer printed \
 date explicitly identifies a different result date. This includes table or column headers: if a Historical, \
 Previous, Current, or similar value column has one date printed in its header, copy that exact printed date, \
