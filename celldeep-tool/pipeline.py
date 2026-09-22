@@ -475,38 +475,6 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
             notice.other_notes.append(warning)
             log_lines.append(warning)
 
-    # Safety net (general, not marker-specific): a report that successfully extracted real
-    # values for other markers, but has a hole (no value/disp_value) for a marker that DOES
-    # have real values from another report elsewhere in the document, is more likely an
-    # extraction miss than a genuine "not retested this time" gap - flag it for staff, without
-    # changing what the patient-facing reconciliation actually renders.
-    raw_occurrences = extracted.get("marker_occurrences", [])
-    occurrences_by_label: dict[str, list[dict]] = {}
-    for occ in raw_occurrences:
-        occurrences_by_label.setdefault(occ.get("source_label", ""), []).append(occ)
-    real_value_labels_by_marker: dict[str, set[str]] = {}
-    for occ in raw_occurrences:
-        match = markers_reference_lookup(occ.get("name", ""))
-        if match is None or not (occ.get("value") is not None or occ.get("disp_value")):
-            continue
-        real_value_labels_by_marker.setdefault(match[0], set()).add(occ.get("source_label", ""))
-    for label, label_occs in occurrences_by_label.items():
-        if not label or not any(occ.get("value") is not None or occ.get("disp_value") for occ in label_occs):
-            continue  # this report itself extracted nothing real, so a hole here isn't suspicious
-        for occ in label_occs:
-            if occ.get("value") is not None or occ.get("disp_value"):
-                continue
-            match = markers_reference_lookup(occ.get("name", ""))
-            if match is None:
-                continue
-            canonical = match[0]
-            if real_value_labels_by_marker.get(canonical, set()) - {label}:
-                warning = (f"WARNING: MARKER '{canonical}' FROM REPORT '{label}' HAS NO VALUE WHILE OTHER "
-                           f"MARKERS FROM THAT SAME REPORT EXTRACTED SUCCESSFULLY, AND '{canonical}' HAS A "
-                           "REAL VALUE ELSEWHERE IN THE DOCUMENT - POSSIBLE EXTRACTION GAP, NEEDS HUMAN REVIEW")
-                notice.other_notes.append(warning)
-                log_lines.append(warning)
-
     dexa_entries = extracted.get("dexa_history", [])
     if dexa_entries:
         first = dexa_entries[0]

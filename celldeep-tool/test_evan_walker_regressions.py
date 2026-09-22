@@ -588,42 +588,6 @@ def test_hscrp_latest_occurrence_wins_now_even_when_mistagged_not_performed():
     }]
 
 
-def test_completeness_flags_suspicious_hole_in_a_report_that_otherwise_extracted_fine():
-    """General safety net (not marker-specific): a report that successfully extracted real
-    values for its other markers, but has an empty value/disp_value for a marker that DOES
-    have a real value from another report elsewhere in the document, is flagged for staff
-    review as a possible extraction gap - distinct from a genuine, isolated "not retested"
-    result, which must not be flagged."""
-    extracted = {
-        "markers": [],
-        "marker_occurrences": [
-            {"name": "hs-CRP", "date_display": "01/07/2026", "source_label": "CHL",
-             "status": "reported", "value": 20.0, "disp_value": ">20.0", "is_good": None,
-             "lab_range_lo": 0, "lab_range_hi": 10, "lab_range_display": "0-10"},
-            {"name": "FSH", "date_display": "04/24/2026", "source_label": "Quest",
-             "status": "reported", "value": None, "disp_value": "<0.7", "is_good": None,
-             "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
-            {"name": "LH", "date_display": "04/24/2026", "source_label": "Quest",
-             "status": "reported", "value": None, "disp_value": "<0.2", "is_good": None,
-             "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
-            {"name": "hs-CRP", "date_display": "04/24/2026", "source_label": "Quest",
-             "status": "not_performed", "value": None, "disp_value": "", "is_good": None,
-             "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
-            # a genuinely isolated not-performed marker with no real value anywhere else -
-            # must NOT be flagged, this is a normal expected gap
-            {"name": "Ferritin", "date_display": "04/24/2026", "source_label": "Quest",
-             "status": "not_performed", "value": None, "disp_value": "", "is_good": None,
-             "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
-        ],
-    }
-
-    notice = pipeline.verify_extraction_completeness(extracted, lab_text="")
-
-    assert any("hs-CRP" in note and "REPORT 'Quest'" in note and "POSSIBLE EXTRACTION GAP" in note
-               for note in notice.other_notes)
-    assert not any("Ferritin" in note and "EXTRACTION GAP" in note for note in notice.other_notes)
-
-
 @pytest.mark.parametrize(("name", "values"), [
     ("hs-CRP", [(20.0, ">20.0"), (0.3, "0.3"), (None, "<3.0")]),
     ("Testosterone, Total", [(506, "506"), (1846, "1846"), (1193, "1193")]),
