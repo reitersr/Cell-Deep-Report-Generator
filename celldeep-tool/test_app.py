@@ -12,7 +12,7 @@ def test_version_reports_render_commit(monkeypatch):
     assert response.headers["Cache-Control"] == "no-store"
 
 
-def test_generate_appends_all_vitality_index_defaults(tmp_path):
+def test_generate_passes_vitality_defaults_without_altering_raw_note(tmp_path):
     captured = {}
     review_path = tmp_path / "review.txt"
     review_path.write_text("", encoding="utf-8")
@@ -23,8 +23,12 @@ def test_generate_appends_all_vitality_index_defaults(tmp_path):
         return str(review_path)
 
     with patch.object(app.pipeline, "run", side_effect=fake_run):
-        response = app.app.test_client().post("/generate", data={"patient_name": "Test Patient"})
+        response = app.app.test_client().post(
+            "/generate", data={"patient_name": "Test Patient", "note_text": "Original note."}
+        )
 
     assert response.status_code == 200
-    for _, label in app.VITALITY_FIELDS:
-        assert f"{label}: Not Assessed" in captured["note_text"]
+    assert captured["note_text"] == "Original note."
+    assert captured["vitality_index"] == {
+        label: "Not Assessed" for _, label in app.VITALITY_FIELDS
+    }
