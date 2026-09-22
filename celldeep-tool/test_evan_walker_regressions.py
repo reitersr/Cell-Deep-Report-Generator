@@ -20,6 +20,7 @@ import pytest
 import pipeline
 import scoring
 import template
+from dexa_reference import dexa_percent_optimized
 from schema import DexaReading, Marker, PatientRecord
 
 
@@ -370,6 +371,20 @@ def test_current_dexa_scan_skips_trailing_partial_scans_for_a_real_complete_one(
     latest = template._latest_complete_dexa_reading(record.dexa_history)
     assert latest.date_display == "May 28, 2026"
     assert latest.total_mass_lb == 158.0
+
+
+def test_build_rollups_structure_score_skips_trailing_partial_scans():
+    """Issue 1 regression: build_rollups() must select the same complete scan dexa_panel()
+    displays, not the raw last dexa_history entry - a trailing VAT-only recheck (no body-fat
+    or VAT-area data) must never zero out the Structure score."""
+    record = PatientRecord(name="Evan Walker DEXA Selection", sex="male",
+                            dexa_history=_evan_walker_dexa_history())
+    roll, _order, _overall_now, _overall_then, has_dexa = template.build_rollups(
+        record, None, None, False
+    )
+    assert has_dexa
+    assert roll["Structure"]["now"] is not None
+    assert roll["Structure"]["now"] == dexa_percent_optimized("26.6%", None, "male")
 
 
 def test_dexa_panel_snapshot_uses_the_real_latest_complete_scan_not_the_last_list_entry():

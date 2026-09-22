@@ -353,8 +353,10 @@ def build_rollups(record: PatientRecord, structure_now: int | None, structure_th
         roll[cat] = scoring.category_rollup(rows)
     has_dexa = bool(record.dexa_history)
     if has_dexa:
-        first_dexa = record.dexa_history[0]
-        latest_dexa = record.dexa_history[-1]
+        # a trailing VAT-only recheck scan (no body-fat/mass data) must never be picked as the
+        # "now"/"then" snapshot - same completeness guard dexa_panel() already applies for display
+        first_dexa = _first_complete_dexa_reading(record.dexa_history)
+        latest_dexa = _latest_complete_dexa_reading(record.dexa_history)
         structure_now = dexa_percent_optimized(
             latest_dexa.body_fat_pct, latest_dexa.visceral_fat_area_cm2, record.sex
         )
