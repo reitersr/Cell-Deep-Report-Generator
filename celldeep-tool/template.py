@@ -22,6 +22,7 @@ from playwright.sync_api import sync_playwright
 
 from schema import PatientRecord, DexaReading
 import scoring
+from dexa_reference import dexa_percent_optimized
 from markers_reference import DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
 
 AQUA = "#81CADF"
@@ -340,14 +341,26 @@ def build_rollups(record: PatientRecord, structure_now: int | None, structure_th
         roll[cat] = scoring.category_rollup(rows)
     has_dexa = bool(record.dexa_history)
     if has_dexa:
+        first_dexa = record.dexa_history[0]
+        latest_dexa = record.dexa_history[-1]
+        structure_now = dexa_percent_optimized(
+            latest_dexa.body_fat_pct, latest_dexa.visceral_fat_area_cm2, record.sex
+        )
+        structure_then = dexa_percent_optimized(
+            first_dexa.body_fat_pct, first_dexa.visceral_fat_area_cm2, record.sex
+        ) if len(record.dexa_history) > 1 else None
+        structure_zone = ("optimal" if structure_now is not None and structure_now >= 88
+                          else "moderate" if structure_now is not None and structure_now >= 50
+                          else "flag")
         roll["Structure"] = dict(now=structure_now, then=structure_then,
-                                  now_zone="optimal" if structure_now and structure_now >= 88 else "moderate",
+                                  now_zone=structure_zone,
                                   then_zone=None, improved=structure_improved, weak=[])
     grid_cats = patient_cats  # Structure is never in the uniform grid — same rule as V23
     order = sorted(grid_cats, key=lambda c: roll[c]["now"])
-    all_cats = grid_cats + (["Structure"] if has_dexa else [])
-    overall_now = round(sum(roll[c]["now"] for c in all_cats) / len(all_cats))
-    then_vals = [roll[c]["then"] for c in all_cats if roll[c]["then"] is not None]
+    bloodwork_now = round(sum(roll[c]["now"] for c in grid_cats) / len(grid_cats))
+    symptom_now = scoring.symptom_percent_optimized(record.vitality_index)
+    overall_now = round(scoring.overall_percent_optimized(bloodwork_now, symptom_now, structure_now))
+    then_vals = [roll[c]["then"] for c in grid_cats if roll[c]["then"] is not None]
     overall_then = round(sum(then_vals) / len(then_vals)) if then_vals else None
     return roll, order, overall_now, overall_then, has_dexa
 

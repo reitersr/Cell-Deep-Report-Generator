@@ -785,7 +785,9 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         first_draw_date=extracted.get("first_draw_date") or None,
         latest_draw_date=extracted.get("latest_draw_date") or None,
         markers=markers, dexa_history=dexa_history, protocol=protocol, pain_points=pain_points,
-        cns_domains=extracted.get("cns_domains"), provider_note_raw=extracted.get("provider_note_raw"),
+        cns_domains=extracted.get("cns_domains"),
+        vitality_index=scoring.normalize_vitality_index(extracted.get("vitality_index")),
+        provider_note_raw=extracted.get("provider_note_raw"),
     )
     notice.other_notes.extend(extracted.get("other_notes", []))
     return record, notice
@@ -946,16 +948,24 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> tuple[dict, list[
     return parsed, warnings
 
 
-def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path):
+def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitality_index=None):
     client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     raw_lab_text = _pdf_text(labs_pdf)
     raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
+    extraction_note = note_text
+    if vitality_index:
+        vitality_block = "VITALITY INDEX (structured selections):\n" + "\n".join(
+            f"{label}: {value}" for label, value in vitality_index.items()
+        )
+        extraction_note = f"{note_text}\n\n{vitality_block}" if note_text else vitality_block
 
     print("Step 1/3: extracting raw material...")
-    extracted = extract(client, labs_pdf, dexa_pdfs, note_text, patient_name=patient_name)
+    extracted = extract(client, labs_pdf, dexa_pdfs, extraction_note, patient_name=patient_name)
     extracted.setdefault("name", patient_name)
     extracted.setdefault("age", age)
     extracted.setdefault("sex", sex)
+    if vitality_index:
+        extracted["vitality_index"] = vitality_index
     extracted["provider_note_raw"] = note_text
     completeness_notice = verify_extraction_completeness(
         extracted, provider_note_text=note_text or extracted.get("provider_note_raw", ""),
