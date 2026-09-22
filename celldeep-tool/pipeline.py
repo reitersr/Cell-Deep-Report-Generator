@@ -123,39 +123,8 @@ def _normalize_date_for_matching(date_str: str):
     return s
 
 
-def _realign_derived_marker_dates(occurrences: list[dict]) -> list[dict]:
-    """A marker computed by the lab from another marker's result (e.g. Estimated Average
-    Glucose from HbA1c) has no specimen of its own - its real date is always its source
-    marker's date for that same report, never a default/document-level date substituted in
-    its place. Realigns any derived occurrence whose date_display disagrees with its source
-    occurrence from the same report."""
-    by_source_and_label: dict[tuple[str, str], list[dict]] = {}
-    for occ in occurrences:
-        match = markers_reference_lookup(occ.get("name", ""))
-        if match is None:
-            continue
-        canonical, _ = match
-        by_source_and_label.setdefault((canonical, occ.get("source_label", "")), []).append(occ)
-
-    realigned = []
-    for occ in occurrences:
-        match = markers_reference_lookup(occ.get("name", ""))
-        derived_from = match[1].get("derived_from") if match else None
-        if not derived_from:
-            realigned.append(occ)
-            continue
-        source_occs = by_source_and_label.get((derived_from, occ.get("source_label", "")), [])
-        if len(source_occs) == 1 and source_occs[0].get("date_display"):
-            source_date = source_occs[0]["date_display"]
-            if occ.get("date_display") != source_date:
-                occ = dict(occ, date_display=source_date)
-        realigned.append(occ)
-    return realigned
-
-
 def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
     """Reconcile marker values against the document-wide most recent report date."""
-    occurrences = _realign_derived_marker_dates(occurrences)
     report_dates = [
         _normalize_date_for_matching(occ.get("date_display", ""))
         for occ in occurrences

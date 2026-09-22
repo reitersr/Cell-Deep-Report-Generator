@@ -588,35 +588,6 @@ def test_hscrp_latest_occurrence_wins_now_even_when_mistagged_not_performed():
     }]
 
 
-def test_estimated_average_glucose_inherits_hba1c_source_date_not_document_date():
-    """Estimated Average Glucose is calculated by the lab from HbA1c, not independently drawn.
-    A real case: the 04/24/2026 Quest report has no HbA1c/eAG draw of its own, but an eAG
-    occurrence was mistakenly stamped with that report's own date (04/24) as a default/
-    document-level date instead of inheriting 01/27/2026, the real specimen date of the HbA1c
-    value (4.6%) it was actually calculated from."""
-    reconciled = pipeline.reconcile_marker_occurrences([
-        {"name": "HbA1c", "date_display": "01/07/2026", "source_label": "CHL 01/07",
-         "status": "reported", "value": 4.2, "disp_value": "4.2", "is_good": None,
-         "lab_range_lo": 0, "lab_range_hi": 5.7, "lab_range_display": "optimal <5.7%"},
-        {"name": "Estimated Average Glucose", "date_display": "01/07/2026", "source_label": "CHL 01/07",
-         "status": "reported", "value": 92, "disp_value": "92", "is_good": None,
-         "lab_range_lo": 0, "lab_range_hi": 117, "lab_range_display": "optimal <117"},
-        {"name": "HbA1c", "date_display": "01/27/2026", "source_label": "CHL 01/27",
-         "status": "reported", "value": 4.6, "disp_value": "4.6", "is_good": None,
-         "lab_range_lo": 0, "lab_range_hi": 5.7, "lab_range_display": "optimal <5.7%"},
-        {"name": "Estimated Average Glucose", "date_display": "04/24/2026", "source_label": "CHL 01/27",
-         "status": "reported", "value": 85, "disp_value": "85", "is_good": None,
-         "lab_range_lo": 0, "lab_range_hi": 117, "lab_range_display": "optimal <117"},
-    ])
-    by_name = {marker["name"]: marker for marker in reconciled}
-    eag = by_name["Estimated Average Glucose"]
-
-    assert eag["then"] == 92
-    assert eag["then_date_display"] == "01/07/2026"
-    assert eag["now"] == 85
-    assert eag["now_date_display"] == "01/27/2026"
-
-
 @pytest.mark.parametrize(("name", "values"), [
     ("hs-CRP", [(20.0, ">20.0"), (0.3, "0.3"), (None, "<3.0")]),
     ("Testosterone, Total", [(506, "506"), (1846, "1846"), (1193, "1193")]),

@@ -26,9 +26,6 @@ not the original invented thresholds):
 # kind: "bounded" (optimal/moderate cutoffs + direction) | "range" (lo/hi reference band) | "categorical" (pass/fail)
 # aliases: alternate names/spellings this marker might appear under in a different lab's PDF —
 #          extraction matches against these case-insensitively before giving up.
-# derived_from: canonical name of the marker this one is calculated from by the lab itself (e.g.
-#               Estimated Average Glucose from HbA1c) rather than drawn/measured independently —
-#               its occurrences must always inherit that source marker's real specimen date.
 
 MARKER_LIBRARY = {
 
@@ -93,7 +90,6 @@ MARKER_LIBRARY = {
         aliases=["hba1c", "hemoglobin a1c", "a1c"]),
     "Estimated Average Glucose": dict(category="Metabolic", unit="mg/dL", kind="bounded",
         direction="lower", optimal=117, moderate=117, inclusive=False, disp_range="optimal <117",
-        derived_from="HbA1c",
         aliases=["estimated average glucose", "estimated avg glucose", "eag", "average glucose", "estimated mean glucose"]),
     "TMAO": dict(category="Metabolic", unit="\u00b5M", kind="bounded",
         direction="lower", optimal=6.2, moderate=9.9, inclusive=False, disp_range="optimal <6.2",
