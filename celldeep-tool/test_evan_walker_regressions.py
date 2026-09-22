@@ -564,6 +564,30 @@ def test_hscrp_three_real_values_uses_true_baseline_then():
     }]
 
 
+def test_hscrp_latest_occurrence_wins_now_even_when_mistagged_not_performed():
+    """A non-numeric threshold result (e.g. "<3.0") is a real reported value even if its
+    status field is mistagged "not_performed" - it must still win "now" as the latest
+    occurrence, exactly like FSH's identically-shaped threshold occurrence does."""
+    reconciled = pipeline.reconcile_marker_occurrences([
+        _dated_occurrence("hs-CRP", "01/07/2026", 20.0, ">20.0"),
+        _dated_occurrence("hs-CRP", "01/27/2026", 0.3),
+        {"name": "hs-CRP", "date_display": "04/24/2026", "source_label": "Quest",
+         "status": "not_performed", "value": None, "disp_value": "<3.0", "is_good": None,
+         "lab_range_lo": 0, "lab_range_hi": 3, "lab_range_display": "<3.0"},
+    ])
+    raw = reconciled[0]
+
+    assert raw["then"] == 20.0
+    assert raw["disp_then"] == ">20.0"
+    assert raw["then_date_display"] == "01/07/2026"
+    assert raw["now"] is None
+    assert raw["disp_now"] == "<3.0"
+    assert raw["now_date_display"] == "04/24/2026"
+    assert raw["full_history"] == [{
+        "date_display": "01/27/2026", "value": 0.3, "disp_value": "0.3",
+    }]
+
+
 @pytest.mark.parametrize(("name", "values"), [
     ("hs-CRP", [(20.0, ">20.0"), (0.3, "0.3"), (None, "<3.0")]),
     ("Testosterone, Total", [(506, "506"), (1846, "1846"), (1193, "1193")]),

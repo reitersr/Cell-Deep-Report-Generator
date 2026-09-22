@@ -146,9 +146,12 @@ def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
     reconciled = []
 
     for canonical in order:
+        # A genuine "not_performed" occurrence always carries a null value and empty
+        # disp_value by contract (see extraction_prompt.py); an occurrence with a real
+        # value/disp_value is an actual result regardless of what its status field says,
+        # so eligibility is decided by the presence of that data, not the status label.
         dated_results = [occ for occ in by_marker[canonical]
                          if _normalize_date_for_matching(occ.get("date_display", ""))
-                         and occ.get("status") != "not_performed"
                          and (occ.get("value") is not None or occ.get("disp_value"))]
         dated_results.sort(
             key=lambda occ: _normalize_date_for_matching(occ.get("date_display", "")),
