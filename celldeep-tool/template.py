@@ -375,7 +375,13 @@ def build_rollups(record: PatientRecord, structure_now: int | None, structure_th
     symptom_now = scoring.symptom_percent_optimized(record.vitality_index)
     overall_now = round(scoring.overall_percent_optimized(bloodwork_now, symptom_now, structure_now))
     then_vals = [roll[c]["then"] for c in grid_cats if roll[c]["then"] is not None]
-    overall_then = round(sum(then_vals) / len(then_vals)) if then_vals else None
+    bloodwork_then = round(sum(then_vals) / len(then_vals)) if then_vals else None
+    # no concept of a historical Vitality Index snapshot exists in this codebase - a baseline
+    # note's vitality answers are never captured apart from the current one, so this is always
+    # None, which overall_percent_optimized already treats as the missing-Symptom case
+    symptom_then = None
+    overall_then = (round(scoring.overall_percent_optimized(bloodwork_then, symptom_then, structure_then))
+                     if bloodwork_then is not None else None)
     return roll, order, overall_now, overall_then, has_dexa
 
 
