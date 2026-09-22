@@ -11,6 +11,67 @@ are computed here, never left to the generation model to decide.
 from schema import Marker
 
 
+VITALITY_DOMAINS = (
+    "energy",
+    "sleep",
+    "mental_clarity_focus",
+    "mood_emotional_balance",
+    "cravings",
+    "sexual_desire",
+    "sexual_function",
+)
+
+VITALITY_LABELS = {
+    "Energy": "energy",
+    "Sleep": "sleep",
+    "Mental Clarity & Focus": "mental_clarity_focus",
+    "Mood & Emotional Balance": "mood_emotional_balance",
+    "Cravings": "cravings",
+    "Sexual Desire": "sexual_desire",
+    "Sexual Function": "sexual_function",
+}
+VITALITY_VALUE_SCORES = {
+    "No Concern": 0,
+    "Some Concern": 1,
+    "Significant Concern": 2,
+    "Not Assessed": None,
+}
+
+
+def normalize_vitality_index(extracted_values: dict | None) -> dict[str, int | None]:
+    values = extracted_values or {}
+    return {
+        domain: VITALITY_VALUE_SCORES.get(values.get(label))
+        for label, domain in VITALITY_LABELS.items()
+    }
+
+
+def symptom_percent_optimized(domain_scores: dict[str, int | None]) -> float | None:
+    """Score only the seven defined Vitality Index domains that were assessed."""
+    assessed = [domain_scores.get(domain) for domain in VITALITY_DOMAINS
+                if domain_scores.get(domain) is not None]
+    if not assessed:
+        return None
+    if any(score not in (0, 1, 2) for score in assessed):
+        raise ValueError("Vitality Index scores must be 0, 1, 2, or None")
+    concern_score = sum(assessed)
+    return (2 * len(assessed) - concern_score) / (2 * len(assessed)) * 100
+
+
+def overall_percent_optimized(bloodwork_pct: float | None, symptom_pct: float | None,
+                              dexa_pct: float | None) -> float:
+    """Combine available domains while preserving their relative 60/30/10 weights."""
+    if bloodwork_pct is None:
+        raise ValueError("bloodwork_pct is required for overall percent optimized")
+    if symptom_pct is not None and dexa_pct is not None:
+        return (60 / 100) * bloodwork_pct + (30 / 100) * symptom_pct + (10 / 100) * dexa_pct
+    if symptom_pct is None and dexa_pct is not None:
+        return (60 / 70) * bloodwork_pct + (10 / 70) * dexa_pct
+    if symptom_pct is not None:
+        return (60 / 90) * bloodwork_pct + (30 / 90) * symptom_pct
+    return bloodwork_pct
+
+
 def _clear_zero_sentinel_partial_scan(dexa_data: dict) -> None:
     """Extraction's schema can't make total/fat/lean mass true JSON nulls (see extraction_prompt.py
     - the strict structured-output grammar compiler rejects the schema past a nullable-field
@@ -28,8 +89,8 @@ def _clear_zero_sentinel_partial_scan(dexa_data: dict) -> None:
         dexa_data["body_fat_pct"] = None
 
     all_zero = all(dexa_data.get(field) in (0, 0.0) for field in core_fields)
-    vat = dexa_data.get("vat_fat_mass_lb")
-    has_real_vat = vat not in (None, "", 0, 0.0)
+    vat_values = (dexa_data.get("vat_fat_mass_lb"), dexa_data.get("visceral_fat_area_cm2"))
+    has_real_vat = any(value not in (None, "", 0, 0.0) for value in vat_values)
     if all_zero and has_real_vat:
         for field in core_fields:
             dexa_data[field] = None

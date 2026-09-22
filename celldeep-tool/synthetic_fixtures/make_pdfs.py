@@ -117,4 +117,17 @@ section above listed for that draw was cancelled, rejected, or not ordered - no 
 those markers on this second draw. Do not carry forward the 02/25/2026 values for those markers.
 """)
 
+# ---- Composite scoring fixture: complete DEXA with body fat and VAT area ----
+make_pdf(f"{OUT}/syn_composite_dexa.pdf", """
+SYNTHETIC DEXA REPORT - FAKE DATA, NOT A REAL PATIENT
+Patient: Synthetic Composite Patient
+Sex: Male
+SCAN DATE: 09/01/2026
+  Total Mass: 180.0 lb
+  Fat Mass: 27.0 lb
+  Lean Mass: 146.0 lb
+  Body Fat: 15.0%
+  Visceral Fat Area: 80.0 cm2
+""")
+
 print("synthetic fixtures written")

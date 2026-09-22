@@ -19,6 +19,16 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "celldeep-dev-secret-change-
 RESULTS_DIR = "/tmp/celldeep-results"
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
+VITALITY_FIELDS = (
+    ("energy", "Energy"),
+    ("sleep", "Sleep"),
+    ("mental_clarity_focus", "Mental Clarity & Focus"),
+    ("mood_emotional_balance", "Mood & Emotional Balance"),
+    ("cravings", "Cravings"),
+    ("sexual_desire", "Sexual Desire"),
+    ("sexual_function", "Sexual Function"),
+)
+
 
 @app.route("/", methods=["GET"])
 def index():
@@ -39,6 +49,10 @@ def generate():
         age = request.form.get("age", "").strip()
         sex = request.form.get("sex", "").strip() or None
         note_text = request.form.get("note_text", "").strip() or None
+        vitality_index = {
+            label: request.form.get(f"vitality_{field}", "Not Assessed")
+            for field, label in VITALITY_FIELDS
+        }
 
         if not patient_name:
             flash("Patient name is required.")
@@ -71,6 +85,7 @@ def generate():
                 age=age,
                 sex=sex,
                 out_path=out_path,
+                vitality_index=vitality_index,
             )
 
             review_copy = os.path.join(RESULTS_DIR, f"{job_id}_review_notes.txt")

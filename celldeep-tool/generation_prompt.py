@@ -93,8 +93,6 @@ WHAT YOU GENERATE — return a single JSON object with EXACTLY these top-level k
   "protocol_reasons": {"Compound Name": "one sentence tying it to 1-3 specific markers in this patient's actual data"},
   "pain_point_maintenance": {"Category": "maintenance clause, only for categories with a real pain point"},
   "dexa_delta": "one sentence, only if dexa_history has 2+ entries, else empty string",
-  "structure_score_now": 92,
-  "structure_score_then": 58,
   "structure_improved": true
 }
 

@@ -13,6 +13,9 @@
       width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; box-sizing: border-box;
     }
     textarea { min-height: 160px; font-family: inherit; }
+    fieldset { border: 0; padding: 0; margin: 24px 0 0; }
+    legend { font-family: Georgia, serif; font-size: 17px; font-weight: 700; }
+    .vitality-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
     .hint { font-size: 11.5px; color: #888; margin-top: 3px; }
     button {
       margin-top: 26px; background: #373436; color: #fff; border: none; padding: 12px 22px;
@@ -74,6 +77,31 @@
     <label>Provider's Consultation Note</label>
     <textarea name="note_text" placeholder="Paste the provider's note here, exactly as written."></textarea>
     <div class="hint">Paste the full note as-is.</div>
+
+    <fieldset>
+      <legend>Vitality Index</legend>
+      <div class="vitality-grid">
+        {% for field, label in (
+          ("energy", "Energy"),
+          ("sleep", "Sleep"),
+          ("mental_clarity_focus", "Mental Clarity & Focus"),
+          ("mood_emotional_balance", "Mood & Emotional Balance"),
+          ("cravings", "Cravings"),
+          ("sexual_desire", "Sexual Desire"),
+          ("sexual_function", "Sexual Function")
+        ) %}
+          <div>
+            <label for="vitality_{{ field }}">{{ label }}</label>
+            <select id="vitality_{{ field }}" name="vitality_{{ field }}" required>
+              <option selected>Not Assessed</option>
+              <option>No Concern</option>
+              <option>Some Concern</option>
+              <option>Significant Concern</option>
+            </select>
+          </div>
+        {% endfor %}
+      </div>
+    </fieldset>
 
     <button type="submit">Generate Report</button>
   </form>

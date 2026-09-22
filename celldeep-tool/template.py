@@ -22,6 +22,7 @@ from playwright.sync_api import sync_playwright
 
 from schema import PatientRecord, DexaReading
 import scoring
+from dexa_reference import dexa_percent_optimized
 from markers_reference import DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
 
 AQUA = "#81CADF"
@@ -101,6 +102,18 @@ def fmt_patient_name(raw):
         last, first = (part.strip() for part in name.split(",", 1))
         name = " ".join(part for part in (first, last) if part)
     return " ".join(part.capitalize() for part in name.split())
+
+
+def _join_sentences(*parts: str) -> str:
+    """Join sentence fragments without creating duplicate terminal punctuation."""
+    cleaned = []
+    for part in parts:
+        text = (part or "").strip()
+        if text:
+            cleaned.append(text.rstrip(" ."))
+    if not cleaned:
+        return ""
+    return ". ".join(cleaned) + "."
 
 
 def _load_logo_traced_path() -> str | None:
@@ -340,14 +353,26 @@ def build_rollups(record: PatientRecord, structure_now: int | None, structure_th
         roll[cat] = scoring.category_rollup(rows)
     has_dexa = bool(record.dexa_history)
     if has_dexa:
+        first_dexa = record.dexa_history[0]
+        latest_dexa = record.dexa_history[-1]
+        structure_now = dexa_percent_optimized(
+            latest_dexa.body_fat_pct, latest_dexa.visceral_fat_area_cm2, record.sex
+        )
+        structure_then = dexa_percent_optimized(
+            first_dexa.body_fat_pct, first_dexa.visceral_fat_area_cm2, record.sex
+        ) if len(record.dexa_history) > 1 else None
+        structure_zone = ("optimal" if structure_now is not None and structure_now >= 88
+                          else "moderate" if structure_now is not None and structure_now >= 50
+                          else "flag")
         roll["Structure"] = dict(now=structure_now, then=structure_then,
-                                  now_zone="optimal" if structure_now and structure_now >= 88 else "moderate",
+                                  now_zone=structure_zone,
                                   then_zone=None, improved=structure_improved, weak=[])
     grid_cats = patient_cats  # Structure is never in the uniform grid — same rule as V23
     order = sorted(grid_cats, key=lambda c: roll[c]["now"])
-    all_cats = grid_cats + (["Structure"] if has_dexa else [])
-    overall_now = round(sum(roll[c]["now"] for c in all_cats) / len(all_cats))
-    then_vals = [roll[c]["then"] for c in all_cats if roll[c]["then"] is not None]
+    bloodwork_now = round(sum(roll[c]["now"] for c in grid_cats) / len(grid_cats))
+    symptom_now = scoring.symptom_percent_optimized(record.vitality_index)
+    overall_now = round(scoring.overall_percent_optimized(bloodwork_now, symptom_now, structure_now))
+    then_vals = [roll[c]["then"] for c in grid_cats if roll[c]["then"] is not None]
     overall_then = round(sum(then_vals) / len(then_vals)) if then_vals else None
     return roll, order, overall_now, overall_then, has_dexa
 
@@ -438,13 +463,21 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
         quote_html = f'<div class="dexa-quote"><span class="lbl">At first visit:</span> {pain.text} {maint}</div>'
     img_html = (f'<img src="data:image/png;base64,{dexa_img_b64}" class="dexa-scan-img" '
                 f'alt="{record.name} DEXA scan comparison"/>') if dexa_img_b64 else ""
-    history_rows = "".join(
-        f'<div class="dexa-hist-row"><span class="d">{fmt_date(d.date_display)}</span>'
-        f'<span class="v">{fmt(d.total_mass_lb)} lb total</span><span class="v">{fmt(d.fat_mass_lb)} lb fat</span>'
-        f'<span class="v">{fmt(d.lean_mass_lb)} lb lean</span><span class="v">{fmt(d.body_fat_pct)} fat</span>'
-        f'<span class="v">{fmt(d.vat_fat_mass_lb)} lb VAT</span></div>'
-        for d in record.dexa_history
-    )
+    def _history_row(d: DexaReading) -> str:
+        if d.vat_fat_mass_lb is not None:
+            vat_col = f'<span class="v">{d.vat_fat_mass_lb} lb VAT</span>'
+        elif d.visceral_fat_area_cm2 is not None:
+            vat_col = f'<span class="v">{d.visceral_fat_area_cm2} cm&sup2; VAT</span>'
+        else:
+            vat_col = ""
+        return (
+            f'<div class="dexa-hist-row"><span class="d">{fmt_date(d.date_display)}</span>'
+            f'<span class="v">{fmt(d.total_mass_lb)} lb total</span><span class="v">{fmt(d.fat_mass_lb)} lb fat</span>'
+            f'<span class="v">{fmt(d.lean_mass_lb)} lb lean</span><span class="v">{fmt(d.body_fat_pct)} fat</span>'
+            f'{vat_col}</div>'
+        )
+
+    history_rows = "".join(_history_row(d) for d in record.dexa_history)
     structure_now = roll.get("Structure", {}).get("now", "")
     delta = copy.get("dexa_delta", "")
     note = copy.get("box_stories", {}).get("Structure", "")
@@ -454,15 +487,12 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     # real headline must always render when real DEXA data exists (see generation prompt), so an
     # empty AI response falls back to a deterministic real-data sentence instead of a blank dash
     structure_headline = copy.get("headlines", {}).get("Structure") or _default_structure_headline(record)
-    return f'''<div class="dexa-panel">
-      <div class="dexa-top">
-        <div><div class="dexa-eyebrow">STRUCTURE &middot; DEXA BODY COMPOSITION SCAN</div>
-        <div class="dexa-title">{structure_headline}</div></div>
-        <div class="dexa-badge">{CHECK}</div>
-      </div>
-      <div class="dexa-body">
-        <div class="dexa-figure">{img_html}</div>
-        <div class="dexa-stat-block">
+    # only a genuine 2+ scan comparison earns the before/after layout and improvement badge -
+    # a single scan on file has nothing to compare against, so it gets one "current scan" box
+    has_comparison = len(record.dexa_history) > 1
+    badge_html = f'<div class="dexa-badge">{CHECK}</div>' if has_comparison else ""
+    if has_comparison:
+        stat_block_html = f'''<div class="dexa-stat-block">
           <div class="dexa-row">
             <div class="dexa-row-lbl">When you came in &middot; {fmt_date(first.date_display)}</div>
             <div class="dexa-row-stats dim">
@@ -480,7 +510,28 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
               <div class="dexa-stat"><div class="num" style="color:{color};">{fmt(structure_now)}%</div><div class="cap">Optimized</div></div>
             </div>
           </div>
-        </div>
+        </div>'''
+    else:
+        stat_block_html = f'''<div class="dexa-stat-block">
+          <div class="dexa-row">
+            <div class="dexa-row-lbl bright">Current scan &middot; {fmt_date(latest.date_display)}</div>
+            <div class="dexa-row-stats">
+              <div class="dexa-stat"><div class="num">{fmt(latest.body_fat_pct)}</div><div class="cap">Body fat</div></div>
+              <div class="dexa-stat"><div class="num">{fmt(latest.fat_mass_lb)}</div><div class="cap">Fat mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{fmt(latest.lean_mass_lb)}</div><div class="cap">Lean mass, lb</div></div>
+              <div class="dexa-stat"><div class="num" style="color:{color};">{fmt(structure_now)}%</div><div class="cap">Optimized</div></div>
+            </div>
+          </div>
+        </div>'''
+    return f'''<div class="dexa-panel">
+      <div class="dexa-top">
+        <div><div class="dexa-eyebrow">STRUCTURE &middot; DEXA BODY COMPOSITION SCAN</div>
+        <div class="dexa-title">{structure_headline}</div></div>
+        {badge_html}
+      </div>
+      <div class="dexa-body">
+        <div class="dexa-figure">{img_html}</div>
+        {stat_block_html}
       </div>
     {delta_html}
       <div class="dexa-history">
@@ -558,8 +609,9 @@ def bio_row_tr(m, copy, color_override=None):
     now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{fmt(m.disp_now)}</span>{unit}{now_date}'
     note_html = ""
     if note:
-        what_html = f'<b style="font-style:normal; color:{INK};">What this is:</b> {what}. ' if what else ""
-        note_html = f'<div class="bio-note">{what_html}{note}</div>'
+        note_text = _join_sentences(what, note)
+        note_html = (f'<div class="bio-note"><b style="font-style:normal; color:{INK};">What this is:</b> '
+                     f'{note_text}</div>') if note_text else ""
     row = f'''<div class="bio-table-row bio-tr" style="--c:{color};">
       <div class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span>{note_html}</div>
       <div class="td-range">{m.disp_range}</div>

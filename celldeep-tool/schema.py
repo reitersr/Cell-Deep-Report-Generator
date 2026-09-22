@@ -82,6 +82,7 @@ class DexaReading:
     lean_mass_lb: Optional[float] = None
     body_fat_pct: Optional[str] = None   # pre-formatted, e.g. "34.4%"
     vat_fat_mass_lb: Optional[float] = None   # None if this visit didn't measure VAT
+    visceral_fat_area_cm2: Optional[float] = None  # None if this visit didn't report VAT area
     scan_image_b64: Optional[str] = None      # rendered body-composition scan page, if present in the source PDF
 
 
@@ -132,6 +133,9 @@ class PatientRecord:
 
     # CNS Vital Signs — entirely optional, premium-tier only. None means "not applicable," not "missing."
     cns_domains: Optional[list] = None   # list of (domain_name, patient_pct, tier) or None entirely
+
+    # Seven provider-selected Vitality Index domains, normalized to 0/1/2/None.
+    vitality_index: dict = field(default_factory=dict)
 
     # raw provider note text, kept for reference/traceability — not directly rendered
     provider_note_raw: Optional[str] = None

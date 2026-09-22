@@ -299,6 +299,41 @@ def test_structure_headline_uses_real_generated_text_when_present():
     assert "Visceral fat cut by more than half." in html
 
 
+def test_single_dexa_scan_renders_current_scan_box_no_before_after_no_checkmark():
+    """A patient with exactly one DEXA scan has nothing to compare against, so the panel must
+    show one "current scan" box (not a duplicated before/after) and no improvement checkmark."""
+    record = PatientRecord(
+        name="Single Scan Patient",
+        dexa_history=[DexaReading(
+            date_display="Sep 1, 2026", total_mass_lb=180.0, fat_mass_lb=27.0,
+            lean_mass_lb=146.0, body_fat_pct="15.0%", visceral_fat_area_cm2=80.0,
+        )],
+    )
+    roll = {"Structure": {"now": 96}}
+    html = template.dexa_panel(record, _copy_for_render(headlines={"Structure": "Tracked."}), roll, None)
+    assert "Current scan" in html
+    assert "When you came in" not in html
+    assert "Where you are now" not in html
+    assert "dexa-badge" not in html
+    # exactly one set of body-composition stats, not a duplicated before/after pair
+    assert html.count('class="cap">Body fat</div>') == 1
+
+
+def test_single_dexa_scan_vat_area_shown_in_history_table_not_blank():
+    """VAT unit mismatch: a scan with only a cm2 VAT area (no lb VAT) must still show that
+    value in the Full Scan History table instead of leaving the VAT cell blank."""
+    record = PatientRecord(
+        name="VAT Area Only Patient",
+        dexa_history=[DexaReading(
+            date_display="Sep 1, 2026", total_mass_lb=180.0, fat_mass_lb=27.0,
+            lean_mass_lb=146.0, body_fat_pct="15.0%", visceral_fat_area_cm2=80.0,
+        )],
+    )
+    roll = {"Structure": {"now": 96}}
+    html = template.dexa_panel(record, _copy_for_render(headlines={"Structure": "Tracked."}), roll, None)
+    assert "80.0 cm" in html and "VAT" in html
+
+
 # ---------------------------------------------------------------------------
 # Issue C: DEXA "current scan" selection picked a corrupted/partial trailing scan instead of the
 # real most recent complete one. Distinct from Issue 2 (a partial scan rendering fabricated

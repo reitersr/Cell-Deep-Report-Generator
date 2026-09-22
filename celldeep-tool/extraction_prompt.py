@@ -131,11 +131,19 @@ age, labs, protocol items, or one condition alone.
 active testosterone therapy, or testosterone injections as current/starting. Otherwise set it to false. A \
 testosterone mention in a protocol list or as a future goal is not sufficient.
 
+EXTRACTING THE VITALITY INDEX — literal structured selections only:
+- Copy each of the seven values only from its explicitly labeled Vitality Index field in the provider note. \
+The only allowed values are "No Concern", "Some Concern", "Significant Concern", and "Not Assessed".
+- Never infer a Vitality Index selection from consultation prose, symptoms, diagnoses, lab values, goals, or \
+any other surrounding free text. If a labeled field is absent or blank, output "Not Assessed" for that field.
+- Physical Performance is not a scored Vitality Index field. Ignore it if it appears anywhere in the note.
+
 EXTRACTING DEXA:
 - Extract every distinct scan date found, with total mass, fat mass, lean mass, and body fat percentage for \
-each. If a given scan includes a visceral fat (VAT) reading, include it for that date specifically — if a \
-scan does NOT include VAT (many follow-up scans skip it), leave that field null for that date. Never carry a \
-VAT number forward from an earlier scan to a later one that didn't measure it.
+each. Extract visceral fat mass in pounds and visceral fat area in cm² into their separate fields only when \
+the source explicitly reports that metric. If a scan does NOT include one of those readings, leave that field \
+null for that date. Never convert between VAT mass and VAT area, and never carry either number forward from \
+an earlier scan to a later one that didn't measure it.
 - Some scans are themselves partial: a follow-up visit's DEXA report may print ONLY a subset of metrics (for \
 example, only a visceral-fat re-check, with no total/fat/lean mass reported for that same visit). "total_mass_lb", \
 "fat_mass_lb", and "lean_mass_lb" cannot be JSON null (a schema constraint, not a data one, exactly like \
@@ -190,6 +198,15 @@ OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
     "sex": "female",
     "postmenopausal_bhrt": false,
     "on_trt": false,
+    "vitality_index": {
+        "Energy": "Not Assessed",
+        "Sleep": "Not Assessed",
+        "Mental Clarity & Focus": "Not Assessed",
+        "Mood & Emotional Balance": "Not Assessed",
+        "Cravings": "Not Assessed",
+        "Sexual Desire": "Not Assessed",
+        "Sexual Function": "Not Assessed"
+    },
     "first_draw_date": "exact date as printed on the earliest lab draw, or empty string if only one draw exists",
     "latest_draw_date": "exact date as printed on the most recent lab draw, or empty string if unavailable",
     "marker_occurrences": [
@@ -213,7 +230,8 @@ OUTPUT FORMAT — return a single JSON object with EXACTLY these top-level keys:
             "fat_mass_lb": 56.5,
             "lean_mass_lb": 107.6,
             "body_fat_pct": "34.4%",
-            "vat_fat_mass_lb": 1.01
+            "vat_fat_mass_lb": 1.01,
+            "visceral_fat_area_cm2": 82.4
         }
     ],
     "protocol": [
@@ -231,7 +249,7 @@ CRITICAL RULES, apply to every patient this runs on, not just the current one:
 - Include one entry in "marker_occurrences" for EVERY occurrence of a recognized marker found anywhere in the source material, including every repeat mention across different reports, sections, or dates — never collapse, merge, or skip an occurrence because another one for the same marker already exists. Do not summarize or sample — every occurrence goes in.
 - If TWO DEXA PDFs are provided, they must both be read, and dexa_history must contain every distinct scan date found across BOTH documents, not just the first one. A DEXA PDF may itself contain multiple historical scan dates in a table — extract every row, not just the most recent.
 - Read the ENTIRE provider's note for both protocol items and pain points — do not stop after the first paragraph. Every compound the note names goes into "protocol". Any patient-stated concern or goal, anywhere in the note, produces a "pain_points" entry.
-- "value", "is_good", "vat_fat_mass_lb", "first_draw_date" are the only marker-occurrence/dexa fields that may be JSON null, and each is null exactly when that specific occurrence/scan genuinely has no result for that field (or, for "first_draw_date", when no earlier draw exists at all) — never fill one from the other, and every other field must be filled from the actual source material when that material was provided.
+- "value", "is_good", "vat_fat_mass_lb", "visceral_fat_area_cm2", "first_draw_date" are the only marker-occurrence/dexa fields that may be JSON null, and each is null exactly when that specific occurrence/scan genuinely has no result for that field (or, for "first_draw_date", when no earlier draw exists at all) — never fill one from the other, and every other field must be filled from the actual source material when that material was provided.
 - "total_mass_lb", "fat_mass_lb", and "lean_mass_lb" use the sentinel -1 (never 0, never null) when a partial scan genuinely didn't report that metric; "body_fat_pct" uses "" the same way. This is the same required-field-with-sentinel pattern as "disp_value" — it exists because the API's strict structured-output grammar compiler rejects this schema once too many fields are nullable unions, so real nullability is reserved only for fields in this list.
 - "disp_value" cannot be JSON null (a schema constraint, not a data one): when "value" is null, set "disp_value" to an empty string "" rather than null or a fabricated display value. A missing lab range uses the same empty-display sentinel with its two numeric range fields set to 0.
 - "marker_overrides" should be an empty list in the ordinary case — it is only ever populated when the provider's note states an explicit, unambiguous numeric range tied to a specific recognized marker (see rules above). Do not populate it from a vague mention or from the lab's own printed reference range.
@@ -265,6 +283,21 @@ EXTRACTION_OUTPUT_SCHEMA = {
         "sex": {"type": "string"},
         "postmenopausal_bhrt": {"type": "boolean"},
         "on_trt": {"type": "boolean"},
+        "vitality_index": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "Energy": {"type": "string", "enum": ["No Concern", "Some Concern", "Significant Concern", "Not Assessed"]},
+                "Sleep": {"type": "string", "enum": ["No Concern", "Some Concern", "Significant Concern", "Not Assessed"]},
+                "Mental Clarity & Focus": {"type": "string", "enum": ["No Concern", "Some Concern", "Significant Concern", "Not Assessed"]},
+                "Mood & Emotional Balance": {"type": "string", "enum": ["No Concern", "Some Concern", "Significant Concern", "Not Assessed"]},
+                "Cravings": {"type": "string", "enum": ["No Concern", "Some Concern", "Significant Concern", "Not Assessed"]},
+                "Sexual Desire": {"type": "string", "enum": ["No Concern", "Some Concern", "Significant Concern", "Not Assessed"]},
+                "Sexual Function": {"type": "string", "enum": ["No Concern", "Some Concern", "Significant Concern", "Not Assessed"]},
+            },
+            "required": ["Energy", "Sleep", "Mental Clarity & Focus", "Mood & Emotional Balance",
+                         "Cravings", "Sexual Desire", "Sexual Function"],
+        },
         "first_draw_date": {"type": "string"},
         "latest_draw_date": {"type": "string"},
         # Raw, per-occurrence sightings only - deliberately NOT pre-reconciled into a then/now
@@ -314,9 +347,10 @@ EXTRACTION_OUTPUT_SCHEMA = {
                     "lean_mass_lb": {"type": "number"},
                     "body_fat_pct": {"type": "string"},
                     "vat_fat_mass_lb": _NULLABLE_NUMBER,
+                    "visceral_fat_area_cm2": _NULLABLE_NUMBER,
                 },
                 "required": ["date_display", "total_mass_lb", "fat_mass_lb", "lean_mass_lb",
-                             "body_fat_pct", "vat_fat_mass_lb"],
+                             "body_fat_pct", "vat_fat_mass_lb", "visceral_fat_area_cm2"],
             },
         },
         "protocol": {
@@ -375,7 +409,8 @@ EXTRACTION_OUTPUT_SCHEMA = {
         },
         "other_notes": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["name", "age", "sex", "postmenopausal_bhrt", "on_trt", "first_draw_date", "latest_draw_date",
+    "required": ["name", "age", "sex", "postmenopausal_bhrt", "on_trt", "vitality_index",
+                 "first_draw_date", "latest_draw_date",
                  "marker_occurrences", "dexa_history", "protocol", "pain_points", "marker_overrides",
                  "unrecognized_markers", "other_notes"],
 }
