@@ -180,7 +180,11 @@ def test_platform_change_footnote_date_is_not_required_marker_occurrence():
     source = (
         "Collection Date: 04/24/2026\n"
         "HbA1c 5.6 %\n"
-        "HbA1c: Effective 3/5/2024, a change in test platforms updated this methodology.\n"
+        "This test was performed on the Roche c503 platform. Effective 3/5/2024, a change in "
+        "test platforms from the Abbott Architect to the Roche c503 may have shifted HbA1c results "
+        "compared to historical results. Based on laboratory validation testing conducted at Quest, "
+        "the Roche platform relative to the Abbott platform had an average increase in HbA1c value "
+        "of <0.3%.\n"
     )
     extracted = {"marker_occurrences": [_occurrence("HbA1c", "04/24/2026", 5.6, "5.6")]}
 
