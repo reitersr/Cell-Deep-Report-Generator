@@ -481,12 +481,22 @@ _DATE_HEADER_RE = re.compile(
 _BIRTH_DATE_RE = re.compile(r"\b(?:date of birth|birth date|dob)\b", re.IGNORECASE)
 
 
+def _has_numeric_result_with_unit(result_text: str, unit: str) -> bool:
+    if not unit:
+        return False
+    result_pattern = re.compile(
+        r"(?:[<>]=?\s*)?\d+(?:\.\d+)?\s*" + re.escape(unit) + r"(?!\w)",
+        re.IGNORECASE,
+    )
+    return bool(result_pattern.search(result_text))
+
+
 def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
     """Return conservative source evidence for marker/date pairs.
 
-    A marker must appear on a result-bearing line. Dates count when printed on that line or in
-    the nearest preceding collection/current/historical header block. This deliberately avoids
-    treating unrelated demographics dates as draw dates.
+    A marker must appear beside a numeric result in its configured unit. Dates count when printed
+    on that line or in the nearest preceding collection/current/historical header block. This
+    deliberately avoids treating footnote, methodology, or demographics dates as draw dates.
     """
     lines = lab_text.splitlines()
     dated_header_lines = []
@@ -512,6 +522,8 @@ def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
             result_text = line[:match.start()] + line[match.end():]
             result_text = re.split(r"\breference\s+range\b", result_text, maxsplit=1,
                                    flags=re.IGNORECASE)[0]
+            if not _has_numeric_result_with_unit(result_text, config.get("unit", "")):
+                continue
             result_tokens = _RESULT_TOKEN_RE.findall(result_text)
             if not result_tokens:
                 continue

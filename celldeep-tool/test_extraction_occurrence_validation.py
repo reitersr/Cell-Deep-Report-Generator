@@ -74,7 +74,8 @@ def _source_text():
         "Historical Previous Current Draw Dates: 01/07/2026 01/27/2026 04/24/2026",
     ]
     for name, values in EVAN_THREE_DRAW_PANEL.items():
-        rows.append(f"{name} " + " ".join(display for _value, display in values))
+        unit = pipeline.MARKER_LIBRARY[name]["unit"]
+        rows.append(f"{name} " + " ".join(f"{display} {unit}" for _value, display in values))
     return "\n".join(rows)
 
 
@@ -169,7 +170,29 @@ def test_repeated_omission_fails_with_exact_marker_date_and_audit_path(monkeypat
 def test_multiple_date_header_does_not_invent_dates_for_single_result_row():
     source = (
         "Historical Previous Current Draw Dates: 01/07/2026 01/27/2026 04/24/2026\n"
-        "DHEA-S 250 Reference range 100-500\n"
+        "DHEA-S 250 µg/dL Reference range 100-500\n"
     )
 
     assert pipeline._source_marker_dates(source).get("DHEA-S") is None
+
+
+def test_platform_change_footnote_date_is_not_required_marker_occurrence():
+    source = (
+        "Collection Date: 04/24/2026\n"
+        "HbA1c 5.6 %\n"
+        "HbA1c: Effective 3/5/2024, a change in test platforms updated this methodology.\n"
+    )
+    extracted = {"marker_occurrences": [_occurrence("HbA1c", "04/24/2026", 5.6, "5.6")]}
+
+    assert pipeline._source_marker_dates(source)["HbA1c"] == {
+        (2026, 4, 24): "04/24/2026",
+    }
+    assert pipeline._missing_source_marker_dates(extracted, source) == []
+
+
+def test_inline_dated_result_with_unit_remains_required_occurrence():
+    source = "HbA1c 5.6 % Collection Date: 04/24/2026\n"
+
+    assert pipeline._missing_source_marker_dates({"marker_occurrences": []}, source) == [
+        ("HbA1c", "04/24/2026"),
+    ]
