@@ -62,3 +62,26 @@ def test_anthropic_timeout_log_includes_configured_timeout(capsys):
     assert "start_time=" in output
     assert "end_time=" in output
     assert "duration_seconds=" in output
+
+
+def test_run_configures_anthropic_timeout_and_retry_limit(monkeypatch):
+    configured = {}
+
+    class CapturingAnthropic:
+        def __init__(self, **kwargs):
+            configured.update(kwargs)
+
+    class StopAfterClientConstruction(RuntimeError):
+        pass
+
+    def stop_after_client_construction(_path):
+        raise StopAfterClientConstruction
+
+    monkeypatch.setattr(pipeline, "Anthropic", CapturingAnthropic)
+    monkeypatch.setattr(pipeline, "_pdf_text", stop_after_client_construction)
+
+    with pytest.raises(StopAfterClientConstruction):
+        pipeline.run(None, [], None, "Test Patient", None, None, "unused.pdf")
+
+    assert configured["timeout"] == 240.0
+    assert configured["max_retries"] == 1

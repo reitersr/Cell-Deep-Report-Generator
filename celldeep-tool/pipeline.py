@@ -55,6 +55,7 @@ if os.path.exists(".env"):
 
 MODEL = "claude-sonnet-4-6"
 ANTHROPIC_CALL_TIMEOUT_SECONDS = 240.0
+ANTHROPIC_MAX_RETRIES = 1
 
 
 class ExtractionOccurrenceValidationError(RuntimeError):
@@ -1136,6 +1137,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     client = Anthropic(
         api_key=os.environ["ANTHROPIC_API_KEY"],
         timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS,
+        max_retries=ANTHROPIC_MAX_RETRIES,
     )
     raw_lab_text = _pdf_text(labs_pdf)
     raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
