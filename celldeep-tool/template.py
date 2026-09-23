@@ -633,7 +633,9 @@ def protocol_section(record: PatientRecord, roll, copy):
 
 
 def bio_row_tr(m, copy, color_override=None):
-    not_retested = m.now is None  # no result for this marker on the latest draw, not a real comparison
+    # A capped/inequality result (e.g. "<0.7") is a real current reading even with now=None,
+    # so all three of now/now_tier/disp_now must be empty before calling this "not retested".
+    not_retested = m.now is None and m.now_tier is None and not m.disp_now
     unscored = m.unscored_reason == "missing_threshold"
     if unscored:
         color = MUTE

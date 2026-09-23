@@ -754,11 +754,10 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         raw_path = audit_dir / f"attempt-{attempt}-raw-response.txt"
         occurrences_path = audit_dir / f"attempt-{attempt}-marker-occurrences.json"
         raw_path.write_text(raw_text, encoding="utf-8")
-        occurrences_path.write_text(
-            json.dumps(parsed.get("marker_occurrences", []), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        occurrences_json = json.dumps(parsed.get("marker_occurrences", []), indent=2, ensure_ascii=False)
+        occurrences_path.write_text(occurrences_json, encoding="utf-8")
         print(f"Extraction audit saved: {occurrences_path}")
+        print(occurrences_json)
 
         if labs_pdf:
             _attach_report_collection_dates(parsed, lab_text)

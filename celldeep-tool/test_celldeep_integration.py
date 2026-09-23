@@ -300,3 +300,13 @@ def test_rendered_retest_status_uses_current_value_not_score_tier():
     html = template.bio_row_tr(marker, {})
     assert "Not retested" not in html
     assert "Current result needs review" in html
+
+
+def test_capped_inequality_result_is_not_rendered_as_not_retested():
+    marker = Marker(
+        name="FSH", category="Hormones", unit="mIU/mL", kind="range", disp_range="1.4 - 12.8",
+        now=None, disp_now="<0.7", now_tier="flag",
+    )
+    html = template.bio_row_tr(marker, {})
+    assert "Not retested" not in html
+    assert "<0.7" in html
