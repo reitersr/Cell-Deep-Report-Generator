@@ -762,6 +762,55 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         if not missing:
             return parsed
 
+        source_evidence = _source_marker_dates(lab_text)
+        source_evidence_path = audit_dir / f"attempt-{attempt}-source-evidence.json"
+        source_evidence_text = json.dumps(
+            {
+                canonical: [
+                    {
+                        "normalized_date": list(normalized_date)
+                        if isinstance(normalized_date, tuple) else normalized_date,
+                        "date_display": date_display,
+                    }
+                    for normalized_date, date_display in dates.items()
+                ]
+                for canonical, dates in source_evidence.items()
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        source_evidence_path.write_text(source_evidence_text, encoding="utf-8")
+        debug_path = audit_dir / f"attempt-{attempt}-occurrence-debug.txt"
+        lab_lines = lab_text.splitlines()
+        debug_blocks = []
+        for canonical, date_display in missing:
+            marker_config = MARKER_LIBRARY.get(canonical, {})
+            marker_names = [canonical, *marker_config.get("aliases", [])]
+            matching_indices = [
+                index for index, line in enumerate(lab_lines)
+                if date_display.lower() in line.lower()
+                or any(name.lower() in line.lower() for name in marker_names)
+            ]
+            context_indices = sorted({
+                context_index
+                for index in matching_indices
+                for context_index in range(max(0, index - 2), min(len(lab_lines), index + 3))
+            })
+            debug_blocks.append(
+                f"Missing occurrence: {canonical} [{date_display}]\n"
+                f"Matching line indices (zero-based): {matching_indices}\n"
+                "Context:\n"
+                + "\n".join(f"{index}: {lab_lines[index]}" for index in context_indices)
+            )
+        debug_text = "\n\n".join(debug_blocks) + "\n"
+        debug_path.write_text(debug_text, encoding="utf-8")
+        print(f"Occurrence debug saved: {audit_dir}")
+        print(f"--- OCCURRENCE DEBUG (attempt {attempt}) ---")
+        print(debug_text, end="")
+        print(f"--- SOURCE EVIDENCE (attempt {attempt}) ---")
+        print(source_evidence_text)
+        print("--- END OCCURRENCE DEBUG ---")
+
         message = _format_missing_occurrences(missing)
         if attempt < attempts:
             print(f"{message}. Retrying extraction once.", file=sys.stderr)
