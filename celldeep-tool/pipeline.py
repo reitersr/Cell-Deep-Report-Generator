@@ -62,6 +62,10 @@ class ExtractionOccurrenceValidationError(RuntimeError):
     """The source contains a dated marker result that extraction omitted."""
 
 
+class ExtractionValueMismatchError(ExtractionOccurrenceValidationError):
+    """A marker_occurrence's disp_value doesn't match any result token on its own source evidence line."""
+
+
 class AnthropicAPIError(RuntimeError):
     """An Anthropic API request could not complete."""
 
@@ -513,12 +517,36 @@ def _is_result_evidence_line(line: str) -> bool:
     )
 
 
-def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
-    """Return conservative source evidence for marker/date pairs.
+def _detect_section_boundaries(lines: list[str]) -> list[tuple[int, str]]:
+    """Find strong, unambiguous report-section starts: a line naming exactly one printed date
+    alongside a collection/specimen/draw/received keyword. A header line listing several dates for
+    several value columns of one single report (e.g. "Historical Previous Current Draw Dates: ...")
+    is deliberately excluded here — that's one report's own column headers, not a new section — so
+    only genuinely separate combined-report boundaries get this treatment. Sorted by line index."""
+    boundaries = []
+    for index, line in enumerate(lines):
+        if _BIRTH_DATE_RE.search(line) or _is_footnote_or_methodology_text(line):
+            continue
+        if len(_PRINTED_DATE_RE.findall(line)) != 1:
+            continue
+        match = _COLLECTION_DATE_RE.search(line)
+        if match:
+            boundaries.append((index, match.group(1)))
+    return boundaries
 
-    A marker must appear beside a numeric result in its configured unit. Dates count when printed
-    on that line or in the nearest preceding collection/current/historical header block. This
-    deliberately avoids treating footnote, methodology, or demographics dates as draw dates.
+
+def _source_marker_evidence(lab_text: str) -> dict[str, dict[object, dict]]:
+    """Return conservative source evidence for marker/date pairs, keyed by canonical marker then
+    normalized draw date, each with the literal printed date_display and the literal result token(s)
+    found on that evidence line.
+
+    A marker must appear beside a numeric result in its configured unit. When a report contains
+    genuine separate section boundaries (see _detect_section_boundaries), every result is attributed
+    to the nearest preceding section's date regardless of line distance — real combined multi-report
+    PDFs print one specimen/collection date near a section's start and never repeat it beside every
+    row below it. Only when the document has no detectable section boundary at all does this fall
+    back to the previous line-window/header-proximity heuristic, so existing single-report formats
+    (e.g. one row printing several dated columns) behave exactly as before.
     """
     lines = lab_text.splitlines()
     dated_header_lines = []
@@ -530,8 +558,9 @@ def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
         if (_DATE_HEADER_RE.search(context) and not _BIRTH_DATE_RE.search(context)
                 and not _is_footnote_or_methodology_text(context)):
             dated_header_lines.append((index, dates))
+    section_boundaries = _detect_section_boundaries(lines)
 
-    evidence: dict[str, dict[object, str]] = {}
+    evidence: dict[str, dict[object, dict]] = {}
     for canonical, config in MARKER_LIBRARY.items():
         aliases = sorted({canonical, *config.get("aliases", [])}, key=len, reverse=True)
         alias_pattern = re.compile(
@@ -554,6 +583,10 @@ def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
                 continue
 
             source_dates = [date.group(0) for date in _PRINTED_DATE_RE.finditer(line)]
+            if not source_dates and section_boundaries:
+                preceding_sections = [item for item in section_boundaries if item[0] <= index]
+                if preceding_sections:
+                    source_dates = [preceding_sections[-1][1]]
             if not source_dates:
                 preceding = [item for item in dated_header_lines if 0 <= index - item[0] <= 40]
                 if preceding:
@@ -565,8 +598,72 @@ def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
             for date_display in source_dates:
                 normalized = _normalize_date_for_matching(date_display)
                 if isinstance(normalized, tuple):
-                    evidence.setdefault(canonical, {}).setdefault(normalized, date_display)
+                    bucket = evidence.setdefault(canonical, {})
+                    if normalized not in bucket:
+                        bucket[normalized] = {"date_display": date_display, "tokens": list(result_tokens)}
     return evidence
+
+
+def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
+    """Backward-compatible view of _source_marker_evidence(): normalized date -> literal date_display."""
+    return {
+        canonical: {normalized: info["date_display"] for normalized, info in dates.items()}
+        for canonical, dates in _source_marker_evidence(lab_text).items()
+    }
+
+
+def _normalize_result_token(token: str):
+    stripped = token.strip()
+    match = re.match(r"^([<>]=?)?\s*(\d+(?:\.\d+)?)$", stripped)
+    if match:
+        prefix, number = match.groups()
+        return (prefix or "", float(number))
+    return stripped.lower()
+
+
+def _disp_value_matches_tokens(disp_value: str, tokens: list[str]) -> bool:
+    """True when disp_value corresponds to one of the literal result tokens found on the source
+    evidence line — as a normalized number (with matching inequality prefix, if any) when both sides
+    parse as numbers, otherwise as exact stripped/lowercased text (e.g. status words)."""
+    if not tokens:
+        return True  # nothing captured on the evidence line to contradict this value
+    target = _normalize_result_token(disp_value)
+    return any(target == _normalize_result_token(token) for token in tokens)
+
+
+def _mismatched_source_marker_values(extracted: dict, lab_text: str) -> list[tuple[str, str, str, list[str]]]:
+    """Marker occurrences whose reported disp_value doesn't match any token on its own source
+    evidence line — the same class of problem as a missing occurrence (something claimed that the
+    source doesn't actually support), just caught on value instead of presence."""
+    evidence = _source_marker_evidence(lab_text)
+    mismatches = []
+    for occurrence in extracted.get("marker_occurrences", []):
+        if occurrence.get("status") != "reported":
+            continue
+        disp_value = occurrence.get("disp_value", "")
+        if not disp_value:
+            continue
+        match = markers_reference_lookup(occurrence.get("name", ""))
+        if match is None:
+            continue
+        normalized = _normalize_date_for_matching(occurrence.get("date_display", ""))
+        if not isinstance(normalized, tuple):
+            continue
+        info = evidence.get(match[0], {}).get(normalized)
+        if info is None:
+            continue  # no source evidence for this marker/date pair at all - the occurrence guard handles that
+        if not _disp_value_matches_tokens(disp_value, info["tokens"]):
+            mismatches.append((match[0], occurrence.get("date_display", ""), disp_value, info["tokens"]))
+    return sorted(mismatches, key=lambda item: (item[0], _normalize_date_for_matching(item[1])))
+
+
+def _format_value_mismatches(mismatches: list[tuple[str, str, str, list[str]]]) -> str:
+    details = "; ".join(
+        f"{marker} [{date_display}]: extracted {disp_value!r} not found among source tokens {tokens}"
+        for marker, date_display, disp_value, tokens in mismatches
+    )
+    return ("Extraction value fidelity validation failed: marker_occurrences contains a disp_value "
+            f"the source PDF does not support: {details}")
 
 
 def _missing_source_marker_dates(extracted: dict, lab_text: str) -> list[tuple[str, str]]:
@@ -762,7 +859,8 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         if labs_pdf:
             _attach_report_collection_dates(parsed, lab_text)
         missing = _missing_source_marker_dates(parsed, lab_text) if labs_pdf else []
-        if not missing:
+        mismatches = _mismatched_source_marker_values(parsed, lab_text) if labs_pdf else []
+        if not missing and not mismatches:
             return parsed
 
         source_evidence = _source_marker_dates(lab_text)
@@ -812,13 +910,33 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
         print(debug_text, end="")
         print(f"--- SOURCE EVIDENCE (attempt {attempt}) ---")
         print(source_evidence_text)
+        if mismatches:
+            mismatches_path = audit_dir / f"attempt-{attempt}-value-mismatches.json"
+            mismatches_text = json.dumps(
+                [
+                    {"marker": marker, "date_display": date_display, "extracted_disp_value": disp_value,
+                     "source_tokens": tokens}
+                    for marker, date_display, disp_value, tokens in mismatches
+                ],
+                indent=2,
+                ensure_ascii=False,
+            )
+            mismatches_path.write_text(mismatches_text, encoding="utf-8")
+            print(f"--- VALUE MISMATCHES (attempt {attempt}) ---")
+            print(mismatches_text)
         print("--- END OCCURRENCE DEBUG ---")
 
-        message = _format_missing_occurrences(missing)
+        message_parts = []
+        if missing:
+            message_parts.append(_format_missing_occurrences(missing))
+        if mismatches:
+            message_parts.append(_format_value_mismatches(mismatches))
+        message = " ".join(message_parts)
         if attempt < attempts:
             print(f"{message}. Retrying extraction once.", file=sys.stderr)
         else:
-            raise ExtractionOccurrenceValidationError(
+            error_cls = ExtractionValueMismatchError if mismatches and not missing else ExtractionOccurrenceValidationError
+            raise error_cls(
                 f"{message}. Audit files: {audit_dir}"
             )
 

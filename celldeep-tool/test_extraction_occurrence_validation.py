@@ -211,3 +211,60 @@ def test_inline_dated_result_with_unit_remains_required_occurrence():
     assert pipeline._missing_source_marker_dates({"marker_occurrences": []}, source) == [
         ("HbA1c", "04/24/2026"),
     ]
+
+
+def test_extracted_disp_value_not_matching_source_token_fails_value_fidelity(monkeypatch, tmp_path):
+    source = "Collected: 04/24/2026\nTestosterone, Total 1193 ng/dL\n"
+    lab_pdf = tmp_path / "mismatch.pdf"
+    lab_pdf.write_bytes(b"synthetic PDF bytes")
+    monkeypatch.setattr(pipeline, "_pdf_text", lambda _path: source)
+    wrong_value = _occurrence("Testosterone, Total", "04/24/2026", 650, "650")
+    client = _SequenceClient([
+        {"marker_occurrences": [wrong_value]},
+        {"marker_occurrences": [wrong_value]},
+    ])
+
+    with pytest.raises(pipeline.ExtractionValueMismatchError) as error:
+        pipeline.extract(
+            client,
+            labs_pdf=str(lab_pdf),
+            dexa_pdfs=[],
+            note_text=None,
+            patient_name="Value fidelity test",
+            audit_root=str(tmp_path),
+        )
+
+    message = str(error.value)
+    assert client.call_count == 2
+    assert "Testosterone, Total [04/24/2026]" in message
+    assert "'650'" in message
+    assert "1193" in message
+
+
+def test_capped_value_on_differently_formatted_page_is_accepted_as_matching():
+    # A capped inequality result ("<0.7") on a plain fixed-width report page, structurally
+    # different from a colored multi-column table - this must not be flagged as a mismatch.
+    source = "Collected: 04/24/2026\nFSH               <0.7    mIU/mL     1.4-12.8\n"
+    occurrence = _occurrence("FSH", "04/24/2026", None, "<0.7")
+
+    assert pipeline._mismatched_source_marker_values({"marker_occurrences": [occurrence]}, source) == []
+
+
+def test_section_scoped_attribution_finds_marker_far_below_its_own_report_date(monkeypatch, tmp_path):
+    # Three combined lab reports concatenated in one PDF, each with its own collection date printed
+    # once near that section's start - a marker appearing only far below the third section's header
+    # must still be attributed to that section's date, not left undated by a fixed line-window.
+    filler = "\n".join(f"Unrelated report boilerplate line {i}" for i in range(60))
+    source = (
+        f"Collected: 01/07/2026\n{filler}\nGlucose (fasting) 90 mg/dL\n\n"
+        f"Collected: 01/27/2026\n{filler}\nGlucose (fasting) 92 mg/dL\n\n"
+        f"Collected: 04/24/2026\n{filler}\nFSH                <0.7    mIU/mL\n"
+    )
+
+    evidence = pipeline._source_marker_dates(source)
+    assert evidence["FSH"] == {(2026, 4, 24): "04/24/2026"}
+    assert pipeline._missing_source_marker_dates({"marker_occurrences": []}, source) == [
+        ("FSH", "04/24/2026"),
+        ("Glucose (fasting)", "01/07/2026"),
+        ("Glucose (fasting)", "01/27/2026"),
+    ]
