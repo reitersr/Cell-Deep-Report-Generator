@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Generating Report | CellDeep</title>
+  <style>
+    body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #373436; }
+    h1 { font-family: Georgia, serif; font-size: 22px; }
+    #status { color: #5A5A5A; font-size: 15px; }
+    .result { border: 1px solid #6FA287; background: #6FA28718; padding: 16px; border-radius: 6px; }
+    .error { border: 1px solid #B75B4E; color: #7a3a30; padding: 16px; border-radius: 6px; }
+    a { color: #3E7C93; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>Generating your report...</h1>
+  <div id="status" data-job-id="{{ job_id }}">Your files are being processed.</div>
+  <script>
+    const statusUrl = {{ url_for('generate_status', job_id=job_id)|tojson }};
+    const statusElement = document.getElementById('status');
+
+    async function checkStatus() {
+      try {
+        const response = await fetch(statusUrl, {cache: 'no-store'});
+        const job = await response.json();
+        if (job.status === 'done') {
+          statusElement.className = 'result';
+          statusElement.innerHTML = '<strong>Report generated.</strong><br><a href="' + job.report_url + '">Download patient report</a><br><a href="' + job.review_notes_url + '">Download internal QA file</a>';
+          return;
+        }
+        if (job.status === 'error') {
+          statusElement.className = 'error';
+          statusElement.textContent = job.error;
+          return;
+        }
+      } catch (_error) {
+        statusElement.textContent = 'Still generating your report...';
+      }
+      window.setTimeout(checkStatus, 1500);
+    }
+
+    checkStatus();
+  </script>
+</body>
+</html>
