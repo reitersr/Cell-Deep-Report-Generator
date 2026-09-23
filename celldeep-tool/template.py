@@ -288,6 +288,10 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .box-tierword{{font-size:10.5px; font-weight:800; letter-spacing:0.03em;}}
 .box-proto{{color:{AQUA_DK}; font-weight:600;}}
 .box-mark{{position:absolute; right:-16px; bottom:-18px; width:76px; height:76px; opacity:0.06; z-index:1;}}
+.vitality-score-missing{{font-family:Georgia,serif; font-size:14px; font-weight:700; color:{MUTE}; text-align:right; max-width:1.25in; line-height:1.15;}}
+.vitality-domains{{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:2px 18px; margin-top:7px; position:relative; z-index:2;}}
+.vitality-domain{{display:flex; justify-content:space-between; gap:8px; font-size:10px; line-height:1.3; border-top:1px solid {LINE}; padding-top:2px;}}
+.vitality-domain .status{{font-weight:700; white-space:nowrap;}}
 
 .protocol-block{{border-left:3px solid var(--c); padding-left:9px; margin:4px 0 5px; break-inside:avoid; page-break-inside:avoid;}}
 .protocol-heading-unit{{break-inside:avoid; page-break-inside:avoid;}}
@@ -426,6 +430,45 @@ def box_html(patient_cat, roll, copy, record, logo_mark):
     </div>'''
 
 
+def vitality_index_box_html(record: PatientRecord, symptom_now: float | None, logo_mark: str):
+    status_by_score = {
+        0: "No Concern",
+        1: "Some Concern",
+        2: "Significant Concern",
+        None: "Not Assessed",
+    }
+    domain_rows = []
+    for label, domain in scoring.VITALITY_LABELS.items():
+        value = record.vitality_index.get(domain)
+        status = status_by_score.get(value, value if isinstance(value, str) else "Not Assessed")
+        status_color = (RED if status == "Significant Concern" else
+                        YELLOW if status == "Some Concern" else
+                        GREEN if status == "No Concern" else MUTE)
+        domain_rows.append(
+            f'<div class="vitality-domain"><span>{label}</span>'
+            f'<span class="status" style="color:{status_color};">{status}</span></div>'
+        )
+    if symptom_now is None:
+        color = MUTE
+        score_html = '<div class="vitality-score-missing">Not assessed this round</div>'
+        tier_word = "NOT ASSESSED"
+    else:
+        score = round(symptom_now)
+        color = GREEN if score >= 88 else YELLOW if score >= 50 else RED
+        score_html = f'<div class="box-score" style="color:{color};">{score}%</div>'
+        tier_word = "OPTIMAL" if color == GREEN else "MODERATE" if color == YELLOW else "FLAGGED"
+    return f'''<div class="box avoid" style="--c:{color}; --c-bg:{color}14;">
+      <div class="box-top">
+        <div class="box-icon">{icon_svg("Repair", 13)}</div>
+        <div class="box-titles"><div class="box-name">Symptom / Vitality Index</div><div class="box-sub">Seven scored domains</div></div>
+        {score_html}
+      </div>
+      <div class="box-why"><span class="box-tierword" style="color:{color}">{tier_word}.</span> Current domain assessments</div>
+      <div class="vitality-domains">{"".join(domain_rows)}</div>
+      <div class="box-mark">{logo_mark}</div>
+    </div>'''
+
+
 def _default_structure_headline(record: PatientRecord) -> str:
     """Deterministic, data-grounded fallback so the DEXA headline is never blank/dashed even if
     the generation step's own headline came back empty - built only from real scan values, never
@@ -547,6 +590,7 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
         {history_rows}
       </div>
     {note_html}
+            <p class="dexa-note">Interim reference ranges use standard medical/athletic body-fat and visceral-fat ranges; CellDeep calibration is pending.</p>
       {quote_html}
     </div>'''
 
@@ -702,11 +746,14 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         if any(cat in visible_systems for cat in pair)
     )
     dexa_html = dexa_panel(record, copy, roll, dexa_img_b64) if has_dexa else ""
+    symptom_now = scoring.symptom_percent_optimized(record.vitality_index)
+    vitality_html = vitality_index_box_html(record, symptom_now, logo_mark)
     protocol_html = protocol_section(record, roll, copy)
     protocol_section_html = protocol_html
     systems_heading = "YOUR SIX SYSTEMS, ATTENTION NEEDED FIRST" if len(visible_systems) == 6 else "YOUR SYSTEMS, ATTENTION NEEDED FIRST"
     systems_html = f'''<div class="systems-flow">
         {f'<div class="sec-title">{systems_heading}</div><div class="grid">{grid_html}</div>' if grid_html else ""}
+        <div class="grid"><div class="grid-row">{vitality_html}</div></div>
         {protocol_section_html}
         <p class="footer-note">Colors: green indicates optimal, yellow indicates moderate, red indicates flagged. Box position, top to bottom, reflects what needs attention first, not severity of illness. Some markers move as an expected result of your current protocol rather than a concern.</p>
     </div>''' if grid_html or protocol_html else ""
