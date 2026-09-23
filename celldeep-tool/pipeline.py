@@ -479,6 +479,17 @@ _DATE_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 _BIRTH_DATE_RE = re.compile(r"\b(?:date of birth|birth date|dob)\b", re.IGNORECASE)
+_MAX_RESULT_EVIDENCE_LINE_LENGTH = 240
+_FOOTNOTE_EXCLUSION_PHRASES = (
+    "effective",
+    "this test was performed",
+    "please refer to",
+    "validated pursuant to",
+    "this assay",
+    "for additional information",
+    "compared to historical results",
+    "developed and its analytical performance",
+)
 
 
 def _has_numeric_result_with_unit(result_text: str, unit: str) -> bool:
@@ -489,6 +500,14 @@ def _has_numeric_result_with_unit(result_text: str, unit: str) -> bool:
         re.IGNORECASE,
     )
     return bool(result_pattern.search(result_text))
+
+
+def _is_result_evidence_line(line: str) -> bool:
+    normalized_line = line.lower()
+    return (
+        len(line) <= _MAX_RESULT_EVIDENCE_LINE_LENGTH
+        and not any(phrase in normalized_line for phrase in _FOOTNOTE_EXCLUSION_PHRASES)
+    )
 
 
 def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
@@ -518,6 +537,8 @@ def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
         for index, line in enumerate(lines):
             match = alias_pattern.search(line)
             if not match:
+                continue
+            if not _is_result_evidence_line(line):
                 continue
             result_text = line[:match.start()] + line[match.end():]
             result_text = re.split(r"\breference\s+range\b", result_text, maxsplit=1,
