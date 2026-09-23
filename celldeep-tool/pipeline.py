@@ -26,7 +26,9 @@ import argparse
 import re
 import sys
 import tempfile
+import time
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 from anthropic import APIConnectionError, APITimeoutError, Anthropic, RateLimitError
@@ -63,21 +65,60 @@ class AnthropicAPIError(RuntimeError):
     """An Anthropic API request could not complete."""
 
 
+def _log_anthropic_call_end(operation: str, outcome: str, start_time: datetime,
+                            start_monotonic: float, configured_timeout, error: Exception | None = None) -> None:
+    end_time = datetime.now(timezone.utc)
+    duration_seconds = time.monotonic() - start_monotonic
+    error_type = type(error).__name__ if error else None
+    print(
+        "ANTHROPIC-API-CALL-END "
+        f"operation={operation!r} outcome={outcome} start_time={start_time.isoformat()} "
+        f"end_time={end_time.isoformat()} duration_seconds={duration_seconds:.3f} "
+        f"configured_timeout={configured_timeout!r} error_type={error_type!r}"
+    )
+
+
 def _create_anthropic_message(client: Anthropic, operation: str, **kwargs):
+    start_time = datetime.now(timezone.utc)
+    start_monotonic = time.monotonic()
+    configured_timeout = getattr(client, "timeout", None)
+    print(
+        "ANTHROPIC-API-CALL-START "
+        f"operation={operation!r} start_time={start_time.isoformat()} "
+        f"configured_timeout={configured_timeout!r}"
+    )
     try:
-        return client.messages.create(**kwargs)
+        response = client.messages.create(**kwargs)
     except APITimeoutError as error:
+        _log_anthropic_call_end(
+            operation, "sdk_timeout", start_time, start_monotonic, configured_timeout, error
+        )
         raise AnthropicAPIError(
             f"Anthropic API timed out during {operation}. Please retry the report."
         ) from error
     except RateLimitError as error:
+        _log_anthropic_call_end(
+            operation, "exception", start_time, start_monotonic, configured_timeout, error
+        )
         raise AnthropicAPIError(
             f"Anthropic API rate limit reached during {operation}. Please retry shortly."
         ) from error
     except APIConnectionError as error:
+        _log_anthropic_call_end(
+            operation, "exception", start_time, start_monotonic, configured_timeout, error
+        )
         raise AnthropicAPIError(
             f"Could not connect to the Anthropic API during {operation}. Please retry the report."
         ) from error
+    except Exception as error:
+        _log_anthropic_call_end(
+            operation, "exception", start_time, start_monotonic, configured_timeout, error
+        )
+        raise
+    _log_anthropic_call_end(
+        operation, "completed", start_time, start_monotonic, configured_timeout
+    )
+    return response
 
 
 def parse_provider_statuses(note_text: str | None) -> tuple[bool | None, bool | None]:
