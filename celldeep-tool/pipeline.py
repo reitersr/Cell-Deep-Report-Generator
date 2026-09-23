@@ -29,7 +29,7 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
-from anthropic import Anthropic
+from anthropic import APIConnectionError, APITimeoutError, Anthropic, RateLimitError
 from json_repair import repair_json
 import fitz
 
@@ -52,10 +52,32 @@ if os.path.exists(".env"):
                 os.environ.setdefault(k, v)
 
 MODEL = "claude-sonnet-4-6"
+ANTHROPIC_CALL_TIMEOUT_SECONDS = 240.0
 
 
 class ExtractionOccurrenceValidationError(RuntimeError):
     """The source contains a dated marker result that extraction omitted."""
+
+
+class AnthropicAPIError(RuntimeError):
+    """An Anthropic API request could not complete."""
+
+
+def _create_anthropic_message(client: Anthropic, operation: str, **kwargs):
+    try:
+        return client.messages.create(**kwargs)
+    except APITimeoutError as error:
+        raise AnthropicAPIError(
+            f"Anthropic API timed out during {operation}. Please retry the report."
+        ) from error
+    except RateLimitError as error:
+        raise AnthropicAPIError(
+            f"Anthropic API rate limit reached during {operation}. Please retry shortly."
+        ) from error
+    except APIConnectionError as error:
+        raise AnthropicAPIError(
+            f"Could not connect to the Anthropic API during {operation}. Please retry the report."
+        ) from error
 
 
 def parse_provider_statuses(note_text: str | None) -> tuple[bool | None, bool | None]:
@@ -638,7 +660,9 @@ def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_
 
     attempts = 2 if labs_pdf else 1
     for attempt in range(1, attempts + 1):
-        resp = client.messages.create(
+        resp = _create_anthropic_message(
+            client,
+            "extraction",
             model=MODEL,
             max_tokens=16000,
             system=EXTRACTION_SYSTEM_PROMPT,
@@ -1020,7 +1044,9 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> tuple[dict, list[
     parsed = {}
     diag_prefix = _diagnostic_path_prefix(record.name)
     for attempt in range(2):
-        resp = client.messages.create(
+        resp = _create_anthropic_message(
+            client,
+            "copy generation",
             model=MODEL,
             max_tokens=16000,
             system=GENERATION_SYSTEM_PROMPT,
@@ -1066,7 +1092,10 @@ def generate_copy(client: Anthropic, record: PatientRecord) -> tuple[dict, list[
 
 
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitality_index=None):
-    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    client = Anthropic(
+        api_key=os.environ["ANTHROPIC_API_KEY"],
+        timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS,
+    )
     raw_lab_text = _pdf_text(labs_pdf)
     raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
     extraction_note = note_text
