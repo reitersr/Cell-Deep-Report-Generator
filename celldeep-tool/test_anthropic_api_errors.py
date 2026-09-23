@@ -18,6 +18,7 @@ class _FailingMessages:
 class _FailingClient:
     def __init__(self, error):
         self.messages = _FailingMessages(error)
+        self.timeout = 240.0
 
 
 def _rate_limit_error():
@@ -47,3 +48,17 @@ def test_anthropic_api_errors_raise_clear_application_error(error, expected_mess
 
     assert operation in str(caught.value)
     assert "Please retry" in str(caught.value)
+
+
+def test_anthropic_timeout_log_includes_configured_timeout(capsys):
+    with pytest.raises(pipeline.AnthropicAPIError):
+        pipeline.extract(_FailingClient(APITimeoutError(request=None)), None, [], None)
+
+    output = capsys.readouterr().out
+    assert "ANTHROPIC-API-CALL-START" in output
+    assert "ANTHROPIC-API-CALL-END" in output
+    assert "outcome=sdk_timeout" in output
+    assert "configured_timeout=240.0" in output
+    assert "start_time=" in output
+    assert "end_time=" in output
+    assert "duration_seconds=" in output
