@@ -180,6 +180,8 @@ def test_platform_change_footnote_date_is_not_required_marker_occurrence():
     source = (
         "Collection Date: 04/24/2026\n"
         "HbA1c 5.6 %\n"
+        "\n"
+        "\n"
         "This test was performed on the Roche c503 platform. Effective 3/5/2024, a change in "
         "test platforms from the Abbott Architect to the Roche c503 may have shifted HbA1c results "
         "compared to historical results. Based on laboratory validation testing conducted at Quest, "
@@ -192,6 +194,15 @@ def test_platform_change_footnote_date_is_not_required_marker_occurrence():
         (2026, 4, 24): "04/24/2026",
     }
     assert pipeline._missing_source_marker_dates(extracted, source) == []
+
+
+def test_guideline_marker_alias_does_not_inherit_platform_change_footnote_date():
+    source = (
+        "Effective 3/5/2024, historical and current results may vary after a platform change.\n"
+        "Hemoglobin A1c interpretive guideline: values below 5.7 % are in the expected range.\n"
+    )
+
+    assert pipeline._missing_source_marker_dates({"marker_occurrences": []}, source) == []
 
 
 def test_inline_dated_result_with_unit_remains_required_occurrence():

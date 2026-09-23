@@ -502,11 +502,14 @@ def _has_numeric_result_with_unit(result_text: str, unit: str) -> bool:
     return bool(result_pattern.search(result_text))
 
 
+def _is_footnote_or_methodology_text(text: str) -> bool:
+    return any(phrase in text.lower() for phrase in _FOOTNOTE_EXCLUSION_PHRASES)
+
+
 def _is_result_evidence_line(line: str) -> bool:
-    normalized_line = line.lower()
     return (
         len(line) <= _MAX_RESULT_EVIDENCE_LINE_LENGTH
-        and not any(phrase in normalized_line for phrase in _FOOTNOTE_EXCLUSION_PHRASES)
+        and not _is_footnote_or_methodology_text(line)
     )
 
 
@@ -524,7 +527,8 @@ def _source_marker_dates(lab_text: str) -> dict[str, dict[object, str]]:
         if not dates:
             continue
         context = " ".join(lines[max(0, index - 2):min(len(lines), index + 3)])
-        if _DATE_HEADER_RE.search(context) and not _BIRTH_DATE_RE.search(context):
+        if (_DATE_HEADER_RE.search(context) and not _BIRTH_DATE_RE.search(context)
+                and not _is_footnote_or_methodology_text(context)):
             dated_header_lines.append((index, dates))
 
     evidence: dict[str, dict[object, str]] = {}
