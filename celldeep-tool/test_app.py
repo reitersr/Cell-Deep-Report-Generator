@@ -73,6 +73,27 @@ def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
     assert Path(captured["labs_pdf"]).read_bytes() == b"synthetic input PDF"
 
 
+def test_unrecognized_lab_layout_fails_the_upload_job_visibly(tmp_path, monkeypatch):
+    import fitz
+
+    monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
+    document = fitz.open()
+    document.new_page().insert_text((40, 60), "Collected: 04/24/2026  hs-CRP 0.3 mg/L  TSH 1.9", fontsize=10)
+    pdf_bytes = document.tobytes()
+    document.close()
+
+    response = app.app.test_client().post("/generate", data={
+        "patient_name": "Pat Synthetic",
+        "labs_pdf": (io.BytesIO(pdf_bytes), "unknown-layout.pdf"),
+    })
+
+    job_id = re.search(r'data-job-id="([a-f0-9]+)"', response.get_data(as_text=True)).group(1)
+    _, status = _wait_for_status(app.app.test_client(), job_id, "error")
+    assert "zero recognized marker rows" in status["error"]
+    assert "report_url" not in status
+    assert not (tmp_path / "jobs" / job_id / "report.pdf").exists()
+
+
 def test_generate_status_surfaces_background_pipeline_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
 

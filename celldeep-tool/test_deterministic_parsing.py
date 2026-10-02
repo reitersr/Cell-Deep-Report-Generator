@@ -196,6 +196,33 @@ def test_progress_summary_is_ignored_and_genetics_page_does_not_interrupt_sectio
     assert unrecognized == []
 
 
+# Unrecognized lab layouts are a hard, named failure ------------------------------------------------
+
+def _free_text_lab_pdf(path, collected_line):
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_textbox(fitz.Rect(36, 36, 560, 780),
+                        f"Patient: Pat Synthetic\n{collected_line}\nhs-CRP 0.3 mg/L (ref 0.0-3.0)\n"
+                        "TSH 1.9 uIU/mL\nComments: specimen received ambient.\n", fontsize=10)
+    document.save(path)
+    document.close()
+    return path
+
+
+def test_unrecognized_layout_without_collected_line_raises(tmp_path):
+    path = _free_text_lab_pdf(tmp_path / "labs.pdf", "Draw Date: 04/24/2026")
+    with fitz.open(path) as document, pytest.raises(pipeline.BloodworkParseError, match="no recognizable 'Collected:'"):
+        pipeline._parse_bloodwork_tables(list(document))
+
+
+def test_collected_line_but_no_matching_table_raises_instead_of_empty_report(tmp_path):
+    path = _free_text_lab_pdf(tmp_path / "labs.pdf", "Collected: 04/24/2026")
+    out = tmp_path / "report.pdf"
+    with pytest.raises(pipeline.BloodworkParseError, match="zero recognized marker rows"):
+        pipeline.run(str(path), [], None, fx.PATIENT, 44, "male", str(out))
+    assert not out.exists()
+
+
 def test_parsed_occurrences_keep_the_extraction_schema_shape(tmp_path):
     page = (fx.section_preamble("SYN500", "04/24/2026") + fx.header_line(100, ("01/27/2026",))
             + fx.row(130, "hs-CRP", "0.3", "TNP", units="mg/L", lab_range="0.0-3.0")

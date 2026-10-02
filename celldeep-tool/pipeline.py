@@ -1058,6 +1058,13 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
                     continue
             if _parse_bloodwork_row(words, state["header"], section, occurrences, unrecognized):
                 state["pending_dates"] = []
+    # An unrecognized layout must stop the job for manual review, never render an empty bloodwork section.
+    if not any(section["dates"] for section in sections):
+        raise BloodworkParseError(
+            "Lab PDF has no recognizable 'Collected:' section - layout not recognized; route for manual review")
+    if not occurrences:
+        raise BloodworkParseError(
+            "Lab PDF produced zero recognized marker rows - layout not recognized; route for manual review")
     return occurrences, unrecognized
 
 
