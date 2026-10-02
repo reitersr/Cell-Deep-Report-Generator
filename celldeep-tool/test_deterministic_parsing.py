@@ -259,6 +259,44 @@ def test_high_side_capped_comparator_alone_in_a_dated_column_is_the_result(tmp_p
     }
 
 
+def _box(x0, x1, y, text, height=7.0):
+    return (x0, y - height, x1, y, text)
+
+
+def test_multi_line_header_assigns_columns_by_the_current_historical_labels_above_them():
+    """Group labels on one line, identically-worded "Result" sub-labels on the next, a tier legend line, then
+    the Historical date (beside an empty second date slot) two lines below the sub-labels."""
+    header = [
+        _box(40, 80, 150, "Order"), _box(82, 95, 150, "ID:"), _box(97, 140, 150, "SYN810"),
+        _box(40, 80, 160, "Collected:"), _box(82, 125, 160, "01/27/2026"),
+        _box(198.2, 227.0, 191.1, "Current"), _box(511.8, 548.3, 191.1, "Historical"),
+        _box(40, 60, 204.0, "Test"),
+        _box(170.4, 194.0, 204.0, "Result"), _box(196.0, 202.0, 204.0, "&"), _box(204.0, 232.0, 204.0, "Relative"),
+        _box(234.0, 254.8, 204.0, "Risk"),
+        _box(487.8, 511.4, 204.0, "Result"), _box(513.4, 519.4, 204.0, "&"), _box(521.4, 549.4, 204.0, "Relative"),
+        _box(551.4, 572.3, 204.0, "Risk"),
+        _box(279.9, 309.7, 209.2, "Optimal"), _box(328.0, 363.6, 209.2, "Moderate"), _box(388.0, 405.7, 209.2, "High"),
+        _box(437.9, 457.9, 209.2, "Units"),
+        _box(170.5, 200.3, 216.9, "Optimal"), _box(213.6, 261.6, 216.9, "Non-Optimal"),
+        _box(484.5, 524.6, 216.9, "01/07/2026"), _box(552.2, 554.5, 216.9, "/"), _box(556.7, 558.9, 216.9, "/"),
+    ]
+    rows = [
+        _box(40, 70, 305, "TMAO"), _box(180.1, 194.0, 305, "4.1"), _box(286.9, 302.7, 305, "<6.2"),
+        _box(333.4, 358.3, 305, "6.2-9.9"), _box(389.0, 404.7, 305, ">9.9"), _box(440.1, 455.7, 305, "uM"),
+        _box(491.9, 517.2, 305, ">20.0"),
+        _box(40, 90, 320, "Fibrinogen"), _box(180.1, 194.0, 320, "310"), _box(286.9, 302.7, 320, "<350"),
+        _box(440.1, 455.7, 320, "mg/dL"),
+    ]
+    occurrences, _ = pipeline._parse_bloodwork_tables([header + rows])
+
+    assert [(o["name"], o["date_display"], o["status"], o["value"], o["disp_value"]) for o in occurrences] == [
+        ("TMAO", "01/27/2026", "final", 4.1, "4.1"),
+        ("TMAO", "01/07/2026", "final", None, ">20.0"),
+        ("Fibrinogen", "01/27/2026", "final", 310.0, "310"),
+        ("Fibrinogen", "01/07/2026", "not_performed", None, ""),
+    ]
+
+
 @pytest.mark.parametrize("cells", [
     [(290, "<1.0"), (315, "1.0-3.0"), (355, ">3.0"), (470, "6.1")],
     [(290, "<75"), (313, "75-125"), (347, ">125"), (380, "nmol/L"), (420, ">200"), (470, "6.1")],

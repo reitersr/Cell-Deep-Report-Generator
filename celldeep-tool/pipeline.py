@@ -887,13 +887,22 @@ def _merge_cell_phrases(words: list[tuple]) -> list[tuple]:
     return merged
 
 
-def _bloodwork_header(words: list[tuple]) -> dict | None:
+def _bloodwork_header(words: list[tuple], group_lines: list[list[tuple]] = ()) -> dict | None:
     if not words or _header_token(words[0][4]) not in _BLOODWORK_NAME_LABELS:
         return None
     columns = _match_header_columns(words, _BLOODWORK_HEADER_LABELS)
     if not columns or columns[0]["kind"] != "name" or not any(
             column["kind"] in ("current", "historical") for column in columns):
         return None
+    # A Current/Historical label printed on a line above decides which section a result column belongs to.
+    groups = [(_header_token(w[4]), w[0], w[2]) for line in group_lines for w in line
+              if _header_token(w[4]) in ("current", "historical")]
+    for column in columns:
+        if column["kind"] not in ("current", "historical"):
+            continue
+        owners = {kind for kind, x0, x1 in groups if x0 <= column["x1"] and column["x0"] <= x1}
+        if len(owners) == 1:
+            column["kind"] = owners.pop()
     logical, value_columns = [], []
     current_index = None
     for column in columns:
@@ -1079,7 +1088,8 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
     by_order: dict[str, dict] = {}
     occurrences: list[dict] = []
     unrecognized: list[dict] = []
-    state = {"section": None, "header": None, "excluded": False, "await_dates": False, "pending_dates": []}
+    state = {"section": None, "header": None, "excluded": False, "await_dates": False, "pending_dates": [],
+             "recent_lines": []}
 
     def new_section(order_id):
         section = {"order_id": order_id, "dates": [], "has_table": False}
@@ -1150,19 +1160,19 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
                 continue
             if state["excluded"]:
                 continue
-            header = _bloodwork_header(words)
+            header = _bloodwork_header(words, state["recent_lines"][-3:])
             if header:
-                state.update(header=header, await_dates=True, pending_dates=[])
+                state.update(header=header, await_dates=True, pending_dates=[], recent_lines=[])
                 section["has_table"] = True
                 continue
+            state["recent_lines"].append(words)
             if state["header"] is None:
                 continue
-            if state["await_dates"]:
-                state["await_dates"] = False
-                if _attach_header_dates(words, state["header"]):
-                    continue
+            # Historical dates may sit a few header lines below the labels; read them until the first row.
+            if state["await_dates"] and _attach_header_dates(words, state["header"]):
+                continue
             if _parse_bloodwork_row(words, state["header"], section, occurrences, unrecognized):
-                state["pending_dates"] = []
+                state.update(pending_dates=[], await_dates=False, recent_lines=[])
     # An unrecognized layout must stop the job for manual review, never render an empty bloodwork section.
     if not any(section["dates"] for section in sections):
         raise BloodworkParseError(
