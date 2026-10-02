@@ -196,6 +196,33 @@ def test_progress_summary_is_ignored_and_genetics_page_does_not_interrupt_sectio
     assert unrecognized == []
 
 
+def _data_page(title, order_id="SYN950"):
+    return ([(40, 30, title)] + fx.section_preamble(order_id, "01/27/2026")
+            + fx.header_line(100, ("01/07/2026",))
+            + fx.row(130, "TMAO", "4.1", ">20.0", units="uM"))
+
+
+def test_narrative_section_after_a_data_table_is_never_scanned_as_its_rows(tmp_path):
+    comment_page = ([(40, 30, "Cardiometabolic Comment Report")] + fx.section_preamble("SYN950", "01/27/2026")
+                    + [(40, 100, "TMAO"), (232, 100, "Lab:"), (252, 100, "SYNLAB"),
+                       (40, 114, "Elevated values were discussed with the ordering provider."),
+                       (40, 128, "Fibrinogen"), (232, 128, "Lab:"), (252, 128, "SYNLAB")])
+    occurrences, _ = _parse(tmp_path, [_data_page("Cardiometabolic Report"), comment_page])
+
+    assert [(o["name"], o["date_display"], o["disp_value"]) for o in occurrences] == [
+        ("TMAO", "01/27/2026", "4.1"), ("TMAO", "01/07/2026", ">20.0")]
+
+
+def test_repeated_identical_section_title_keeps_the_table_on_a_continuation_page(tmp_path):
+    continuation = ([(40, 30, "Cardiometabolic Report")] + fx.section_preamble("SYN950", "01/27/2026")
+                    + fx.row(130, "Fibrinogen", "310", "290", units="mg/dL"))
+    occurrences, _ = _parse(tmp_path, [_data_page("Cardiometabolic Report"), continuation])
+
+    assert [(o["name"], o["date_display"], o["disp_value"]) for o in occurrences] == [
+        ("TMAO", "01/27/2026", "4.1"), ("TMAO", "01/07/2026", ">20.0"),
+        ("Fibrinogen", "01/27/2026", "310"), ("Fibrinogen", "01/07/2026", "290")]
+
+
 # Only tokens inside a dated column's own header span are results; legends/units/codes never are -------
 
 def _legend_table(rows, current_x=250, historical_x=470, units_x=600):

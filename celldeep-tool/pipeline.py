@@ -820,6 +820,8 @@ _ORDER_ID_RE = re.compile(r"\border\s*(?:id|#|number)\s*[:#]?\s*([A-Za-z0-9][A-Z
 _COLLECTED_RE = re.compile(r"\bcollected\s*:?\s*(" + _PRINTED_DATE_RE.pattern + r")", re.IGNORECASE)
 # Quest's own multi-draw restatements of values printed elsewhere - never a source of truth.
 _TREND_TABLE_TITLES = ("progress summary", "trend summary", "cumulative summary")
+# A document section title ("... Report"); a different exact title ends any table above it.
+_SECTION_TITLE_RE = re.compile(r"[A-Za-z][A-Za-z&/-]*(?:\s+[A-Za-z][A-Za-z&/-]*){0,7}\s+Report", re.IGNORECASE)
 _BLOODWORK_NAME_LABELS = {"test", "tests", "analyte"}
 _BLOODWORK_HEADER_LABELS = [
     ("name", ("test", "name")), ("name", ("test",)), ("name", ("tests",)), ("name", ("analyte",)),
@@ -1089,7 +1091,7 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
     occurrences: list[dict] = []
     unrecognized: list[dict] = []
     state = {"section": None, "header": None, "excluded": False, "await_dates": False, "pending_dates": [],
-             "recent_lines": []}
+             "recent_lines": [], "title": None}
 
     def new_section(order_id):
         section = {"order_id": order_id, "dates": [], "has_table": False}
@@ -1157,6 +1159,11 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
             section = state["section"]
             if any(title in text.lower() for title in _TREND_TABLE_TITLES):
                 state.update(excluded=True, header=None)
+                continue
+            if _SECTION_TITLE_RE.fullmatch(text.strip()):
+                if text.strip().lower() != state["title"]:
+                    state.update(title=text.strip().lower(), header=None, excluded=False, await_dates=False,
+                                 recent_lines=[])
                 continue
             if state["excluded"]:
                 continue
