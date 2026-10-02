@@ -4,11 +4,10 @@ CellDeep Report Generator — Pipeline Orchestrator
 This is the actual entry point. Run this with raw patient material and it
 produces the finished PDF, following the locked V23 design end to end.
 
-Every step is deterministic - no model call anywhere: bloodwork tables are
-read from the PDF text layer by row/column position, DEXA tables are OCR'd
-(Tesseract) and read by fixed row label and header column, provider notes
-must follow the structured template, and patient-facing copy is template
-fill (generation_prompt.py).
+Bloodwork tables are read deterministically from the PDF text layer by
+row/column position, provider notes must follow the structured template, and
+patient-facing copy is template fill (generation_prompt.py). DEXA PDFs still
+go through the original Claude extraction call.
 
 Usage:
     python pipeline.py --labs path/to/labs.pdf --dexa path/to/dexa1.pdf path/to/dexa2.pdf \\
@@ -22,17 +21,20 @@ import base64
 import argparse
 import re
 import tempfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
+from anthropic import APIConnectionError, APITimeoutError, Anthropic, RateLimitError
+from json_repair import repair_json
 import fitz
-import pytesseract
-from PIL import Image
 
 from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint
 from schema import normalize_date_for_matching as _normalize_date_for_matching
 from markers_reference import MARKER_LIBRARY, resolve_marker_config, has_missing_thresholds
 from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
 from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
+from extraction_prompt import EXTRACTION_SYSTEM_PROMPT, EXTRACTION_OUTPUT_SCHEMA, build_extraction_user_message
 from generation_prompt import build_copy
 import scoring
 import template
@@ -44,6 +46,10 @@ if os.path.exists(".env"):
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k, v)
+
+MODEL = "claude-sonnet-4-6"
+ANTHROPIC_CALL_TIMEOUT_SECONDS = 240.0
+ANTHROPIC_MAX_RETRIES = 1
 
 
 class ExtractionOccurrenceValidationError(RuntimeError):
@@ -58,21 +64,64 @@ class BloodworkParseError(RuntimeError):
     """A recognized bloodwork row or section could not be read under the column rule."""
 
 
-class DexaParseError(RuntimeError):
-    """A DEXA file did not yield the required BMD and body-composition tables."""
+class AnthropicAPIError(RuntimeError):
+    """An Anthropic API request could not complete."""
 
 
-class DexaPatientMismatchError(DexaParseError):
-    """A DEXA page's printed patient name does not match the patient the file was uploaded for."""
+def _log_anthropic_call_end(operation: str, outcome: str, start_time: datetime,
+                            start_monotonic: float, configured_timeout, error: Exception | None = None) -> None:
+    end_time = datetime.now(timezone.utc)
+    duration_seconds = time.monotonic() - start_monotonic
+    error_type = type(error).__name__ if error else None
+    print(
+        "ANTHROPIC-API-CALL-END "
+        f"operation={operation!r} outcome={outcome} start_time={start_time.isoformat()} "
+        f"end_time={end_time.isoformat()} duration_seconds={duration_seconds:.3f} "
+        f"configured_timeout={configured_timeout!r} error_type={error_type!r}"
+    )
 
-    def __init__(self, pdf_path: str, page_number: int, printed_name: str | None, expected_name: str):
-        self.pdf_path = pdf_path
-        self.page_number = page_number
-        self.printed_name = printed_name
-        self.expected_name = expected_name
-        printed = repr(printed_name) if printed_name else "no printed patient name"
-        super().__init__(f"DEXA page {page_number} of {pdf_path}: {printed} does not match "
-                         f"patient {expected_name!r}")
+
+def _create_anthropic_message(client: Anthropic, operation: str, **kwargs):
+    start_time = datetime.now(timezone.utc)
+    start_monotonic = time.monotonic()
+    configured_timeout = getattr(client, "timeout", None)
+    print(
+        "ANTHROPIC-API-CALL-START "
+        f"operation={operation!r} start_time={start_time.isoformat()} "
+        f"configured_timeout={configured_timeout!r}"
+    )
+    try:
+        response = client.messages.create(**kwargs)
+    except APITimeoutError as error:
+        _log_anthropic_call_end(
+            operation, "sdk_timeout", start_time, start_monotonic, configured_timeout, error
+        )
+        raise AnthropicAPIError(
+            f"Anthropic API timed out during {operation}. Please retry the report."
+        ) from error
+    except RateLimitError as error:
+        _log_anthropic_call_end(
+            operation, "exception", start_time, start_monotonic, configured_timeout, error
+        )
+        raise AnthropicAPIError(
+            f"Anthropic API rate limit reached during {operation}. Please retry shortly."
+        ) from error
+    except APIConnectionError as error:
+        _log_anthropic_call_end(
+            operation, "exception", start_time, start_monotonic, configured_timeout, error
+        )
+        raise AnthropicAPIError(
+            f"Could not connect to the Anthropic API during {operation}. Please retry the report."
+        ) from error
+    except Exception as error:
+        _log_anthropic_call_end(
+            operation, "exception", start_time, start_monotonic, configured_timeout, error
+        )
+        raise
+    _log_anthropic_call_end(
+        operation, "completed", start_time, start_monotonic, configured_timeout
+    )
+    return response
 
 
 class ProviderNoteFormatError(ValueError):
@@ -265,6 +314,44 @@ def _write_review_notes(patient_name: str, notice: ExtractionReviewNotice) -> st
     with open(path, "w", encoding="utf-8") as review_file:
         review_file.write(text or "No internal QA items were generated.\n")
     return path
+
+
+def _parse_json_response(text, patient_name=None):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    if not text:
+        return {}
+    if not text.startswith("{"):
+        # Model prefaced the JSON with reasoning/prose despite instructions not to - salvage the
+        # actual object rather than feeding the whole prose blob to the parser/repair library.
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start:end + 1]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            repaired = repair_json(text)
+            return json.loads(repaired)
+        except ValueError:
+            # json.JSONDecodeError is itself a ValueError, so this also covers a
+            # failed re-parse of the "repaired" text, not just repair_json() itself.
+            log_line = (f"ERROR: JSON parse failure for patient={patient_name or 'unknown'} "
+                        f"raw_length={len(text)} first_200={text[:200]!r}")
+            with open("/tmp/extraction_completeness_log.txt", "a", encoding="utf-8") as log:
+                log.write(log_line + "\n")
+            raise ValueError("Extraction produced unparseable output - please retry") from None
+
+
+def _pdf_content_block(path: str) -> dict:
+    with open(path, "rb") as f:
+        data = base64.standard_b64encode(f.read()).decode("utf-8")
+    return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}}
 
 
 def _pdf_text(path: str | None) -> str:
@@ -645,7 +732,7 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
 
 
 # ---------------------------------------------------------------------------
-# Shared word-position helpers (used for both PDF text-layer words and OCR words)
+# Word-position helpers for the bloodwork text layer
 # ---------------------------------------------------------------------------
 
 def _page_words(page) -> list[tuple]:
@@ -1069,295 +1156,44 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
 
 
 # ---------------------------------------------------------------------------
-# Deterministic DEXA parsing (GE Lunar Prodigy, image-only pages -> Tesseract OCR)
+# DEXA extraction (unchanged Claude path from before the deterministic bloodwork change)
 # ---------------------------------------------------------------------------
 
-_DEXA_OCR_DPI = 300
-_DEXA_LINE_TOLERANCE_PX = 15.0
-_DEXA_HEADER_LABELS = [
-    ("region", ("region",)), ("date", ("date",)),
-    ("bmd", ("bmd",)),
-    ("t_score", ("ya", "t-score")), ("t_score", ("t-score",)),
-    ("z_score", ("am", "z-score")), ("z_score", ("z-score",)),
-    ("pct_fat", ("%fat",)), ("pct_fat", ("tissue", "%fat")), ("pct_fat", ("%", "fat")),
-    ("total_mass", ("total", "mass")), ("fat_mass", ("fat", "mass")), ("lean_mass", ("lean", "mass")),
-    ("bmc", ("bmc",)), ("ignore", ("centile",)),
-    ("vat_mass", ("mass",)), ("vat_volume", ("volume",)), ("vat_area", ("area",)),
-]
-_DEXA_BMD_ROWS = {
-    "AP Spine L1-L4": ("L1", "L2", "L3", "L4", "L1-L2", "L1-L3", "L1-L4", "L2-L3", "L2-L4", "L3-L4"),
-    "Left Femur": ("Neck", "Total"),
-    "Right Femur": ("Neck", "Total"),
-    "Left Forearm": ("Radius UD", "Ulna UD", "Radius 33%", "Ulna 33%", "Both UD", "Both 33%",
-                     "Radius Total", "Ulna Total", "Both Total"),
-}
-_DEXA_SEGMENT_GROUPS = ("Arms", "Legs")
-_DEXA_SEGMENT_SUBROWS = ("Total", "Right", "Left", "Difference")
-_DEXA_SEGMENT_SINGLES = ("Trunk", "Android", "Gynoid", "Total")
-_DEXA_NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?%?")
-_DEXA_PATIENT_RE = re.compile(r"\b(?:patient(?:\s+name)?|name)\s*:\s*(.+)", re.IGNORECASE)
-_DEXA_PATIENT_STOP_RE = re.compile(
-    r"\s+(?:birth|dob|date|sex|gender|age|height|weight|ethnicity|referring|facility|patient\s*id|id|"
-    r"measured|analyzed|physician)\b.*$", re.IGNORECASE)
+def _marker_library_summary() -> str:
+    lines = []
+    for name, cfg in MARKER_LIBRARY.items():
+        aliases = ", ".join(cfg.get("aliases", []))
+        lines.append(f"- {name} (aliases: {aliases})")
+    return "\n".join(lines)
 
 
-def _dexa_label(text: str) -> str:
-    text = text.translate(str.maketrans({"\u2013": "-", "\u2014": "-", "\u2212": "-"}))
-    return re.sub(r"\s+", " ", text).strip(" :").lower()
+def _protocol_library_summary() -> str:
+    lines = []
+    for name, cfg in PROTOCOL_LIBRARY.items():
+        aliases = ", ".join(cfg.get("aliases", []))
+        cats = ", ".join(cfg["typical_categories"]) or "none (not expected to move labs)"
+        lines.append(f"- {name} (aliases: {aliases}) — typical target(s): {cats}")
+    return "\n".join(lines)
 
 
-def _dexa_number(text: str) -> tuple[float, str] | None:
-    cleaned = text.translate(str.maketrans({"\u2212": "-", "\u2013": "-", "\u2014": "-"}))
-    cleaned = cleaned.strip("()[]{}|,;:'\"*")
-    if not _DEXA_NUMBER_RE.fullmatch(cleaned):
-        return None
-    printed = cleaned.rstrip("%")
-    return float(printed), printed
-
-
-def _name_tokens(name: str) -> set[str]:
-    return {token for token in re.findall(r"[a-z]+", name.lower()) if len(token) > 1}
-
-
-def _ocr_page_words(page) -> list[tuple]:
-    pixmap = page.get_pixmap(dpi=_DEXA_OCR_DPI)
-    image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-    data = pytesseract.image_to_data(image, config="--psm 6", output_type=pytesseract.Output.DICT)
-    words = []
-    for index, text in enumerate(data["text"]):
-        if text and text.strip() and float(data["conf"][index]) >= 0:
-            x, y = data["left"][index], data["top"][index]
-            words.append((float(x), float(y), float(x + data["width"][index]),
-                          float(y + data["height"][index]), text.strip()))
-    return words
-
-
-def _ocr_cell_reader(page):
-    """Re-read one printed cell box (OCR pixel coordinates) on its own, so a stroke drawn near a value
-    (a circled number) can't hide it from the full-page pass."""
-    scale = 72 / _DEXA_OCR_DPI
-
-    def read(box):
-        clip = fitz.Rect(box[0] * scale, box[1] * scale, box[2] * scale, box[3] * scale) & page.rect
-        if clip.is_empty:
-            return None
-        pixmap = page.get_pixmap(dpi=_DEXA_OCR_DPI, clip=clip)
-        image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-        tokens = [t for t in pytesseract.image_to_string(image, config="--psm 7").split()
-                  if _dexa_number(t) is not None]
-        return tokens[0] if len(tokens) == 1 else None
-    return read
-
-
-def _dexa_header(words: list[tuple]) -> dict | None:
-    columns = _match_header_columns(words, _DEXA_HEADER_LABELS)
-    kinds = {column["kind"] for column in columns}
-    if "bmd" in kinds and kinds & {"t_score", "z_score"}:
-        table_type = "bmd"
-    elif {"date", "total_mass", "fat_mass", "lean_mass"} <= kinds:
-        table_type = "history"
-    elif "date" in kinds and kinds & {"vat_mass", "vat_area", "vat_volume"} and "total_mass" not in kinds:
-        table_type = "vat"
-    elif {"total_mass", "fat_mass", "lean_mass"} <= kinds:
-        table_type = "segmental"
-    else:
-        return None
-    for column in columns:
-        if column["kind"] in ("total_mass", "fat_mass", "lean_mass", "vat_mass", "bmc") \
-                and "kg" in _line_text(column["extra"]).lower():
-            raise DexaParseError("DEXA mass columns are printed in kg; only lb is supported")
-    if columns[0]["kind"] not in ("region", "date"):
-        columns.insert(0, {"kind": "region", "x0": columns[0]["x0"] - 1, "x1": columns[0]["x0"] - 1, "extra": []})
-    # Printed cell positions only: anything outside the header's own span (margin notes) is not data.
-    pad = (columns[-1]["x1"] - columns[0]["x0"]) * 0.05
-    left = columns[0]["x0"] - pad if columns[0]["x1"] > columns[0]["x0"] else float("-inf")
-    area_column = next((c for c in columns if c["kind"] == "vat_area"), None)
-    return {
-        "type": table_type, "columns": columns, "left": left, "right": columns[-1]["x1"] + pad,
-        "bounds": _column_bounds(columns),
-        "area_cm2": bool(area_column and "cm" in _line_text(area_column["extra"]).lower()),
-    }
-
-
-def _dexa_row(words: list[tuple], table: dict) -> tuple[str, str, dict]:
-    name_words, cells = [], {}
-    for word in words:
-        center = (word[0] + word[2]) / 2
-        if not table["left"] <= center <= table["right"]:
-            continue
-        column = _column_at(center, table["bounds"])
-        kind = table["columns"][column]["kind"]
-        if kind in ("region", "date"):
-            name_words.append(word[4])
-            continue
-        if kind == "ignore":
-            continue
-        number = _dexa_number(word[4])
-        if number is None:
-            continue  # stroke fragments (e.g. a hand-drawn circle) inside a cell are not data
-        if kind in cells:
-            raise DexaParseError(f"DEXA row {' '.join(name_words)!r}: two numbers in the {kind} cell")
-        cells[kind] = number
-    printed = " ".join(name_words).strip()
-    return _dexa_label(printed), printed, cells
-
-
-def _fill_blank_cells(words: list[tuple], table: dict, cells: dict, read_cell) -> None:
-    """For a recognized row, re-read each declared cell the page pass left blank, inside that cell's
-    printed box only."""
-    if read_cell is None:
-        return
-    top = min(w[1] for w in words) - 6
-    bottom = max(w[3] for w in words) + 6
-    for column, (lo, hi) in zip(table["columns"], table["bounds"]):
-        if column["kind"] in ("region", "date", "ignore") or column["kind"] in cells:
-            continue
-        number = _dexa_number(read_cell((max(lo, table["left"]), top, min(hi, table["right"]), bottom)) or "")
-        if number is not None:
-            cells[column["kind"]] = number
-
-
-def _parse_dexa_page(words: list[tuple], read_cell=None) -> tuple[dict, str | None]:
-    rows = {"bmd": [], "segmental": [], "history": [], "vat": []}
-    printed_name = None
-    table = region = group = None
-    for line in _group_lines(words, _DEXA_LINE_TOLERANCE_PX):
-        text = _line_text(line)
-        patient = _DEXA_PATIENT_RE.search(text)
-        if patient:
-            if printed_name is None:
-                printed_name = _DEXA_PATIENT_STOP_RE.sub("", patient.group(1)).strip()
-            continue
-        label_text = _dexa_label(text)
-        for title in _DEXA_BMD_ROWS:
-            if _dexa_label(title) in label_text:
-                region = title
-        header = _dexa_header(line)
-        if header:
-            table, group = header, None
-            continue
-        if table is None:
-            continue
-        label, printed_label, cells = _dexa_row(line, table)
-        if not label:
-            continue
-        if table["type"] == "bmd":
-            if region is None:
-                continue
-            row = next((r for r in _DEXA_BMD_ROWS[region] if _dexa_label(r) == label), None)
-            if row is None:
-                continue
-            _fill_blank_cells(line, table, cells, read_cell)
-            if "bmd" not in cells:
-                raise DexaParseError(f"DEXA {region} row {row!r}: BMD cell is unreadable")
-            rows["bmd"].append({"region": region, "row": row, "bmd": cells["bmd"][0],
-                                "t_score": cells.get("t_score", (None,))[0],
-                                "z_score": cells.get("z_score", (None,))[0]})
-        elif table["type"] == "segmental":
-            group_names = {g.lower(): g for g in _DEXA_SEGMENT_GROUPS}
-            parts = label.split(" ", 1)
-            if label in group_names and not cells:
-                group = group_names[label]
-                continue
-            if len(parts) == 2 and parts[0] in group_names and parts[1] in {s.lower() for s in _DEXA_SEGMENT_SUBROWS}:
-                group = group_names[parts[0]]
-                row = f"{group} {parts[1].title()}"
-            elif group and label in {s.lower() for s in _DEXA_SEGMENT_SUBROWS}:
-                row = f"{group} {label.title()}"
-            elif label in {s.lower() for s in _DEXA_SEGMENT_SINGLES}:
-                group, row = None, label.title()
-            else:
-                continue
-            if not cells:
-                continue
-            _fill_blank_cells(line, table, cells, read_cell)
-            rows["segmental"].append({"row": row, **{
-                key: cells[kind][0] if kind in cells else None
-                for key, kind in (("pct_fat", "pct_fat"), ("total_mass_lb", "total_mass"),
-                                  ("fat_mass_lb", "fat_mass"), ("lean_mass_lb", "lean_mass"),
-                                  ("bmc_lb", "bmc"))}})
-        elif _PRINTED_DATE_RE.fullmatch(printed_label):
-            date_display = printed_label
-            _fill_blank_cells(line, table, cells, read_cell)
-            if table["type"] == "history":
-                missing = [k for k in ("total_mass", "fat_mass", "lean_mass") if k not in cells]
-                if any(c["kind"] == "pct_fat" for c in table["columns"]) and "pct_fat" not in cells:
-                    missing.append("pct_fat")
-                if missing:
-                    raise DexaParseError(f"DEXA body composition history row {label!r}: unreadable {missing}")
-                rows["history"].append({
-                    "date_display": date_display, "total_mass_lb": cells["total_mass"][0],
-                    "fat_mass_lb": cells["fat_mass"][0], "lean_mass_lb": cells["lean_mass"][0],
-                    "body_fat_pct": f"{cells['pct_fat'][1]}%" if "pct_fat" in cells else "",
-                })
-            elif table["type"] == "vat":
-                area = cells.get("vat_area", (None,))[0] if table["area_cm2"] else None
-                mass = cells.get("vat_mass", (None,))[0]
-                if mass is None and area is None:
-                    continue
-                rows["vat"].append({"date_display": date_display, "vat_fat_mass_lb": mass,
-                                    "visceral_fat_area_cm2": area})
-    return rows, printed_name
-
-
-def _merge_dexa_history(history: list[dict], vat: list[dict]) -> list[dict]:
-    """One reading per scan date: a VAT row merges into that date's composition row, and only a date with
-    no composition row at all becomes a VAT-only reading (sentinel -1 / "" for unmeasured metrics)."""
-    by_date: dict[tuple, dict] = {}
-    for row in history:
-        key = _normalize_date_for_matching(row["date_display"])
-        reading = {**row, "vat_fat_mass_lb": None, "visceral_fat_area_cm2": None}
-        existing = by_date.get(key)
-        if existing is not None:
-            if any(existing[f] != reading[f] for f in ("total_mass_lb", "fat_mass_lb", "lean_mass_lb")):
-                raise DexaParseError(f"DEXA history prints two different compositions for {row['date_display']}")
-            continue
-        by_date[key] = reading
-    for row in vat:
-        key = _normalize_date_for_matching(row["date_display"])
-        reading = by_date.setdefault(key, {
-            "date_display": row["date_display"], "total_mass_lb": -1, "fat_mass_lb": -1,
-            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": None, "visceral_fat_area_cm2": None,
-        })
-        for field_name in ("vat_fat_mass_lb", "visceral_fat_area_cm2"):
-            value = row[field_name]
-            if value is None:
-                continue
-            if reading[field_name] not in (None, value):
-                raise DexaParseError(f"DEXA VAT table prints two different {field_name} values for "
-                                     f"{row['date_display']}")
-            reading[field_name] = value
-    return [by_date[key] for key in sorted(by_date)]
-
-
-def _parse_dexa_tables(dexa_pdfs: list[str], patient_name: str | None) -> dict:
-    """OCR each DEXA page and read the fixed Lunar Prodigy tables by row label and header column."""
-    if not patient_name:
-        raise DexaParseError("A patient name is required to verify DEXA pages")
-    expected = _name_tokens(patient_name)
-    collected = {"bmd": [], "segmental": [], "history": [], "vat": []}
-    ocr_text = []
-    for pdf_path in dexa_pdfs:
-        with fitz.open(pdf_path) as document:
-            for page_number, page in enumerate(document, start=1):
-                words = _ocr_page_words(page)
-                ocr_text.append("\n".join(_line_text(line) for line in _group_lines(words, _DEXA_LINE_TOLERANCE_PX)))
-                rows, printed_name = _parse_dexa_page(words, _ocr_cell_reader(page))
-                if printed_name is not None or any(rows.values()):
-                    if printed_name is None or _name_tokens(printed_name) != expected:
-                        raise DexaPatientMismatchError(pdf_path, page_number, printed_name, patient_name)
-                for key, values in rows.items():
-                    collected[key].extend(values)
-    if not collected["bmd"]:
-        raise DexaParseError(f"DEXA BMD/T-score table came back empty for {dexa_pdfs}")
-    if not collected["history"]:
-        raise DexaParseError(f"DEXA Body Composition History table came back empty for {dexa_pdfs}")
-    return {
-        "dexa_history": _merge_dexa_history(collected["history"], collected["vat"]),
-        "bmd": collected["bmd"],
-        "segmental": collected["segmental"],
-        "ocr_text": "\n".join(ocr_text),
-    }
+def _extract_dexa_with_claude(client: Anthropic, dexa_pdfs: list[str], patient_name: str | None) -> list[dict]:
+    """Same request the original extract() made for DEXA PDFs; only its dexa_history is used."""
+    content = [_pdf_content_block(p) for p in dexa_pdfs]
+    content.append({
+        "type": "text",
+        "text": build_extraction_user_message(_marker_library_summary(), _protocol_library_summary(), None),
+    })
+    resp = _create_anthropic_message(
+        client,
+        "extraction",
+        model=MODEL,
+        max_tokens=16000,
+        system=EXTRACTION_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": content}],
+        output_config={"format": {"type": "json_schema", "schema": EXTRACTION_OUTPUT_SCHEMA}},
+    )
+    raw_text = "".join(block.text for block in resp.content if hasattr(block, "text"))
+    return _parse_json_response(raw_text, patient_name=patient_name).get("dexa_history", [])
 
 
 # ---------------------------------------------------------------------------
@@ -1455,14 +1291,14 @@ def parse_provider_note(note_text: str | None) -> dict:
 
 
 def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
-            patient_name: str | None = None, audit_root: str | None = None) -> dict:
-    """Step 1: deterministic parse of raw material into the extraction shape. No model call."""
+            patient_name: str | None = None, audit_root: str | None = None,
+            client: Anthropic | None = None) -> dict:
+    """Step 1: bloodwork and provider note parsed deterministically; DEXA PDFs (if any) via Claude."""
     occurrences, unrecognized = [], []
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
             occurrences, unrecognized = _parse_bloodwork_tables(list(document))
-    dexa = (_parse_dexa_tables(dexa_pdfs, patient_name) if dexa_pdfs
-            else {"dexa_history": [], "bmd": [], "segmental": [], "ocr_text": ""})
+    dexa_history = _extract_dexa_with_claude(client, dexa_pdfs, patient_name) if dexa_pdfs else []
     note = parse_provider_note(note_text)
 
     dated = [occ for occ in occurrences
@@ -1477,10 +1313,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "first_draw_date": "" if single_draw else first["date_display"],
         "latest_draw_date": latest["date_display"] if latest else "",
         "marker_occurrences": occurrences,
-        "dexa_history": dexa["dexa_history"],
-        "dexa_bmd": dexa["bmd"],
-        "dexa_segmental": dexa["segmental"],
-        "dexa_ocr_text": dexa["ocr_text"],
+        "dexa_history": dexa_history,
         "protocol": note["protocol"],
         "pain_points": note["pain_points"],
         "marker_overrides": note["marker_overrides"],
@@ -1743,9 +1576,15 @@ def markers_reference_lookup(raw_name: str):
 
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitality_index=None):
     raw_lab_text = _pdf_text(labs_pdf)
+    raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
+    client = Anthropic(
+        api_key=os.environ["ANTHROPIC_API_KEY"],
+        timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS,
+        max_retries=ANTHROPIC_MAX_RETRIES,
+    ) if dexa_pdfs else None
 
-    print("Step 1/3: parsing source documents (deterministic, no AI)...")
-    extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name)
+    print("Step 1/3: parsing source documents...")
+    extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client)
     extracted["name"] = patient_name
     extracted["age"] = age
     extracted["sex"] = sex
@@ -1753,7 +1592,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
         extracted["vitality_index"] = vitality_index
     # Protocol comes only from the note's structured Protocol section, never from scanning its prose.
     completeness_notice = verify_extraction_completeness(
-        extracted, provider_note_text="", lab_text=raw_lab_text, dexa_text=extracted["dexa_ocr_text"],
+        extracted, provider_note_text="", lab_text=raw_lab_text, dexa_text=raw_dexa_text,
     )
 
     print("Step 2/3: scoring (deterministic, no AI)...")

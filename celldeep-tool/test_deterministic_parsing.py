@@ -239,50 +239,60 @@ def test_parsed_occurrences_keep_the_extraction_schema_shape(tmp_path):
     assert {m.name for m in record.markers} == {"hs-CRP", "Urinalysis \u2014 Occult Blood"}
 
 
-# (7) DEXA page whose printed patient doesn't match the file's patient ----------------------------
+# DEXA stays on the original Claude extraction path ------------------------------------------------
 
-def test_dexa_page_for_another_patient_raises_named_error(tmp_path):
-    path = fx.write_image_only_pdf(tmp_path / "dexa.pdf", [
-        fx.bmd_page(), fx.composition_page(printed_name="Robin Placeholder", annotations=False)])
-    with pytest.raises(pipeline.DexaPatientMismatchError) as error:
-        pipeline._parse_dexa_tables([str(path)], fx.PATIENT)
-    assert error.value.page_number == 2
-    assert error.value.printed_name == "Robin Placeholder"
-
-
-def test_dexa_without_a_bmd_table_is_a_hard_failure(tmp_path):
-    path = fx.write_image_only_pdf(tmp_path / "dexa.pdf", [fx.composition_page(annotations=False)])
-    with pytest.raises(pipeline.DexaParseError, match="BMD/T-score table came back empty"):
-        pipeline._parse_dexa_tables([str(path)], fx.PATIENT)
+CLAUDE_DEXA_HISTORY = [
+    {"date_display": "05/21/2025", "total_mass_lb": 170.5, "fat_mass_lb": 56.5, "lean_mass_lb": 107.6,
+     "body_fat_pct": "34.4%", "vat_fat_mass_lb": 1.01, "visceral_fat_area_cm2": 82.4},
+    {"date_display": "01/27/2026", "total_mass_lb": 165.0, "fat_mass_lb": 49.5, "lean_mass_lb": 109.0,
+     "body_fat_pct": "30.0%", "vat_fat_mass_lb": 0.85, "visceral_fat_area_cm2": 70.1},
+]
 
 
-# (8) OCR'd DEXA rows matched against the fixed Lunar Prodigy schema -------------------------------
+class _FakeClaude:
+    calls = []
 
-def test_dexa_rows_match_fixed_schema_with_blank_scores_and_ignore_handwriting(tmp_path):
-    path = fx.write_image_only_pdf(tmp_path / "dexa.pdf", [fx.bmd_page(), fx.composition_page()])
-    with fitz.open(path) as document:
-        assert all(not page.get_text().strip() for page in document)
+    def __init__(self, **kwargs):
+        self.timeout = kwargs.get("timeout")
+        self.messages = self
 
-    parsed = pipeline._parse_dexa_tables([str(path)], fx.PATIENT)
+    def create(self, **kwargs):
+        _FakeClaude.calls.append(kwargs)
+        payload = json.dumps({"marker_occurrences": [], "dexa_history": CLAUDE_DEXA_HISTORY})
+        return type("Response", (), {"content": [type("Block", (), {"text": payload})()]})()
 
-    assert [(r["region"], r["row"], r["bmd"], r["t_score"], r["z_score"]) for r in parsed["bmd"]] == [
-        ("AP Spine L1-L4", "L1", 1.101, -0.4, 0.1), ("AP Spine L1-L4", "L2", 1.152, -0.2, 0.3),
-        ("AP Spine L1-L4", "L3", 1.198, 0.1, 0.6), ("AP Spine L1-L4", "L4", 1.204, 0.2, 0.7),
-        ("AP Spine L1-L4", "L1-L4", 1.166, -0.1, 0.4),
-        ("Left Forearm", "Radius UD", 0.456, -1.1, -0.8), ("Left Forearm", "Radius 33%", 0.789, None, None),
-        ("Left Forearm", "Both Total", 0.612, -0.9, -0.6)]
-    assert [r["row"] for r in parsed["segmental"]] == ["Arms Total", "Legs Total", "Trunk", "Total"]
-    assert parsed["segmental"][-1]["lean_mass_lb"] == 107.6
-    # The circled 34.4 is still read from its printed cell; the margin note "recheck 42" never is.
-    assert parsed["dexa_history"] == [
-        {"date_display": "05/21/2025", "total_mass_lb": 170.5, "fat_mass_lb": 56.5, "lean_mass_lb": 107.6,
-         "body_fat_pct": "34.4%", "vat_fat_mass_lb": 1.01, "visceral_fat_area_cm2": 82.4},
-        {"date_display": "01/27/2026", "total_mass_lb": 165.0, "fat_mass_lb": 49.5, "lean_mass_lb": 109.0,
-         "body_fat_pct": "30.0%", "vat_fat_mass_lb": 0.85, "visceral_fat_area_cm2": 70.1},
-        {"date_display": "03/10/2026", "total_mass_lb": -1, "fat_mass_lb": -1, "lean_mass_lb": -1,
-         "body_fat_pct": "", "vat_fat_mass_lb": 0.8, "visceral_fat_area_cm2": 66.0},
-    ]
-    assert "42" not in json.dumps({k: v for k, v in parsed.items() if k != "ocr_text"})
+
+def _dexa_pdf(path):
+    document = fitz.open()
+    document.new_page().insert_text((40, 60), "Synthetic DEXA report for Pat Synthetic", fontsize=10)
+    document.save(path)
+    document.close()
+    return path
+
+
+def test_dexa_pdfs_go_through_the_original_claude_extraction_request(tmp_path):
+    from extraction_prompt import EXTRACTION_SYSTEM_PROMPT
+
+    _FakeClaude.calls = []
+    dexa = _dexa_pdf(tmp_path / "dexa.pdf")
+    extracted = pipeline.extract(None, [str(dexa)], None, patient_name=fx.PATIENT, client=_FakeClaude())
+
+    assert extracted["dexa_history"] == CLAUDE_DEXA_HISTORY
+    [call] = _FakeClaude.calls
+    assert call["model"] == pipeline.MODEL
+    assert call["system"] == EXTRACTION_SYSTEM_PROMPT
+    assert call["output_config"] == {"format": {"type": "json_schema", "schema": EXTRACTION_OUTPUT_SCHEMA}}
+    content = call["messages"][0]["content"]
+    assert content[0] == pipeline._pdf_content_block(str(dexa))
+
+
+def test_reports_without_dexa_make_no_claude_call(tmp_path, monkeypatch):
+    _FakeClaude.calls = []
+    monkeypatch.setattr(pipeline, "Anthropic", _FakeClaude)
+    labs = fx.write_lab_pdf(tmp_path / "labs.pdf", [
+        fx.section_preamble("SYN902", "04/24/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.9")])
+    pipeline.run(str(labs), [], None, fx.PATIENT, 44, "male", str(tmp_path / "report.pdf"))
+    assert _FakeClaude.calls == []
 
 
 # Template fill, priority, provider notes, end to end ----------------------------------------------
@@ -368,12 +378,13 @@ def test_unstructured_provider_note_is_rejected_and_never_read():
     assert any("PROVIDER NOTE REJECTED" in line for line in note["other_notes"])
 
 
-def test_end_to_end_run_is_deterministic_and_renders(tmp_path):
+def test_end_to_end_run_is_deterministic_and_renders(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline, "Anthropic", _FakeClaude)
     labs = fx.write_lab_pdf(tmp_path / "labs.pdf", [
         fx.section_preamble("SYN900", "04/24/2026") + fx.header_line(100, ("01/07/2026",))
         + fx.row(130, "hs-CRP", "4.4H", "2.2", units="mg/L", lab_range="0.0-3.0")
         + fx.row(144, "TSH", "1.9", "2.4", units="uIU/mL")])
-    dexa = fx.write_image_only_pdf(tmp_path / "dexa.pdf", [fx.bmd_page(), fx.composition_page()])
+    dexa = _dexa_pdf(tmp_path / "dexa.pdf")
     out = tmp_path / "report.pdf"
 
     review_path = pipeline.run(str(labs), [str(dexa)], STRUCTURED_NOTE, fx.PATIENT, 44, "male", str(out))
@@ -382,6 +393,7 @@ def test_end_to_end_run_is_deterministic_and_renders(tmp_path):
         text = "\n".join(page.get_text() for page in rendered)
     assert "hs-CRP moved from 2.2 mg/L on 01/07/2026 to 4.4 mg/L on 04/24/2026" in text.replace("\n", " ")
     assert "Afternoon energy dips" in text
+    assert "34.4%" in text and "30.0%" in text
     assert "PROVIDER NOTE REJECTED" not in Path(review_path).read_text(encoding="utf-8")
 
 

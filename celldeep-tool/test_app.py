@@ -98,7 +98,7 @@ def test_generate_status_surfaces_background_pipeline_errors(tmp_path, monkeypat
     monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
 
     def fake_run(**_kwargs):
-        raise pipeline.DexaParseError("DEXA BMD/T-score table came back empty for ['dexa_0.pdf']")
+        raise pipeline.AnthropicAPIError("Anthropic API timed out during extraction. Please retry the report.")
 
     with patch.object(app.pipeline, "run", side_effect=fake_run):
         response = app.app.test_client().post("/generate", data={"patient_name": "Test Patient"})
@@ -107,5 +107,5 @@ def test_generate_status_surfaces_background_pipeline_errors(tmp_path, monkeypat
     _, status = _wait_for_status(app.app.test_client(), job_id, "error")
     assert status == {
         "status": "error",
-        "error": "DEXA BMD/T-score table came back empty for ['dexa_0.pdf']",
+        "error": "Anthropic API timed out during extraction. Please retry the report.",
     }

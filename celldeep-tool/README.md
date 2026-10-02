@@ -1,12 +1,12 @@
 # CellDeep Patient Report Generator
 
 Built from the locked V23 reference design, following the calibration
-framework established over the full design/build conversation. The pipeline
-is fully deterministic: no model call is made anywhere. Bloodwork tables are
-read from the PDF text layer by row/column position, DEXA pages are OCR'd with
-Tesseract and read by fixed Lunar Prodigy row labels and header columns,
-provider notes must follow `templates/provider_notes_template.md`, and
-patient-facing copy is template fill from the scored record.
+framework established over the full design/build conversation. Bloodwork
+tables are read deterministically from the PDF text layer by row/column
+position, provider notes must follow `templates/provider_notes_template.md`,
+and patient-facing copy is template fill from the scored record. DEXA PDFs
+are still extracted by the original Claude call (`ANTHROPIC_API_KEY` required
+when a DEXA PDF is uploaded).
 
 ## What's in this folder
 
@@ -17,7 +17,7 @@ patient-facing copy is template fill from the scored record.
 | `protocol_reference.py` | Known compound library (BPC-157, Retatrutide, Klow, etc.) with typical target systems. |
 | `unknown_marker_policy.py` | What happens when extraction finds a marker not in the library — flagged for human review, never guessed. |
 | `scoring.py` | Pure math. No AI. The exact corrected tier/percentage logic from data.py. |
-| `extraction_prompt.py` | `EXTRACTION_OUTPUT_SCHEMA`, the marker_occurrences shape the deterministic parsers emit and reconciliation/scoring consume. (The prompt text is retained but no longer sent anywhere.) |
+| `extraction_prompt.py` | `EXTRACTION_OUTPUT_SCHEMA`, the marker_occurrences shape the bloodwork parser emits and reconciliation/scoring consume; the prompt and schema are also still used for the Claude DEXA extraction call. |
 | `generation_prompt.py` | Deterministic template fill for every patient-facing sentence, plus `select_priority_marker()`. |
 | `template.py` | The renderer. CSS is copied verbatim from V23 — the design itself is not up for variation. **This has been tested directly and confirmed working** (see below). |
 | `pipeline.py` | The orchestrator that ties it all together — this is the file you actually run. |
@@ -32,9 +32,8 @@ patient-facing copy is template fill from the scored record.
   including the real DEXA scan image and the VAT column
 
 **Not yet verified:**
-- The bloodwork and DEXA parsers are tested against synthetic, pattern-based
-  fixtures (`test_deterministic_parsing.py`), not against real Quest/CHL or
-  Lunar Prodigy files
+- The bloodwork parser is tested against synthetic, pattern-based fixtures
+  (`test_deterministic_parsing.py`), not against real Quest/CHL files
 
 ## First real test to run (do this first, before any new patient)
 
@@ -46,9 +45,10 @@ first proof before testing on any patient whose correct output isn't
 already established.
 
 ```bash
-sudo apt-get install -y tesseract-ocr
 pip install -r requirements.txt
 playwright install chromium
+
+export ANTHROPIC_API_KEY="your-key-here"
 
 python pipeline.py \
   --labs star_labs.pdf \
