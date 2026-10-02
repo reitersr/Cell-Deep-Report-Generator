@@ -58,6 +58,25 @@ def test_digits_running_into_digits_raise_instead_of_guessing_a_boundary(tmp_pat
         _parse(tmp_path, [page])
 
 
+def test_ordinary_unflagged_rows_with_range_between_columns_parse_cleanly(tmp_path):
+    # Shape "88 73-135 ng/mL 70": two plain numbers, no flag, no inequality, range printed mid-row.
+    page = (fx.section_preamble("SYN102", "04/24/2026")
+            + [(40, 100, "Test Name"), (200, 100, "Current"), (250, 100, "Reference Range"),
+               (330, 100, "Units"), (390, 100, "Historical"), (390, 111, "01/27/2026")]
+            + [(40, 130, "SDMA"), (200, 130, "88"), (250, 130, "73-135"), (330, 130, "ng/mL"), (390, 130, "70")]
+            + [(40, 144, "Glucose (fasting)"), (200, 144, "92"), (250, 144, "65-99"), (330, 144, "mg/dL"),
+               (390, 144, "88")]
+            + [(40, 158, "TSH"), (200, 158, "1.9"), (250, 158, "0.40-4.50"), (330, 158, "uIU/mL"), (390, 158, "2.4")])
+    occurrences, _ = _parse(tmp_path, [page])
+
+    assert [(o["name"], o["date_display"], o["value"], o["disp_value"], o["lab_range_lo"], o["lab_range_hi"])
+            for o in occurrences] == [
+        ("SDMA", "04/24/2026", 88.0, "88", 73.0, 135.0), ("SDMA", "01/27/2026", 70.0, "70", 73.0, 135.0),
+        ("Glucose (fasting)", "04/24/2026", 92.0, "92", 65.0, 99.0),
+        ("Glucose (fasting)", "01/27/2026", 88.0, "88", 65.0, 99.0),
+        ("TSH", "04/24/2026", 1.9, "1.9", 0.40, 4.50), ("TSH", "01/27/2026", 2.4, "2.4", 0.40, 4.50)]
+
+
 # (2) directly-appended H/L flag -----------------------------------------------------------------
 
 def test_appended_and_standalone_flags_are_stripped_before_parsing(tmp_path):
