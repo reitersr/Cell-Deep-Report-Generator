@@ -245,6 +245,20 @@ def test_single_comparator_inside_the_dated_column_is_the_result_even_beside_a_l
         ("04/24/2026", None, "<0.3"), ("01/27/2026", 6.1, "6.1")]
 
 
+def test_high_side_capped_comparator_alone_in_a_dated_column_is_the_result(tmp_path):
+    page = _legend_table([
+        ("Myeloperoxidase", [(250, "410"), (470, ">20.0")]),
+        ("Fibrinogen", [(250, ">=900"), (470, "320")]),
+    ])
+    found = _by_key(_parse(tmp_path, [page])[0])
+    assert {key: (occ["status"], occ["value"], occ["disp_value"]) for key, occ in found.items()} == {
+        ("Myeloperoxidase", "04/24/2026"): ("final", 410.0, "410"),
+        ("Myeloperoxidase", "01/27/2026"): ("final", None, ">20.0"),
+        ("Fibrinogen", "04/24/2026"): ("final", None, ">=900"),
+        ("Fibrinogen", "01/27/2026"): ("final", 320.0, "320"),
+    }
+
+
 @pytest.mark.parametrize("cells", [
     [(290, "<1.0"), (315, "1.0-3.0"), (355, ">3.0"), (470, "6.1")],
     [(290, "<75"), (313, "75-125"), (347, ">125"), (380, "nmol/L"), (420, ">200"), (470, "6.1")],
