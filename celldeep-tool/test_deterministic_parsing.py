@@ -196,13 +196,13 @@ def test_progress_summary_is_ignored_and_genetics_page_does_not_interrupt_sectio
     assert unrecognized == []
 
 
-# Threshold legends (<A  A-B  >B) printed in a row are reference metadata, never a result ---------------
+# Only tokens inside a dated column's own header span are results; legends/units/codes never are -------
 
-def _legend_table(rows):
+def _legend_table(rows, current_x=250, historical_x=470, units_x=600):
     """Header: Test Name | Current | Historical (date below) | Units; rows are (name, [(x, text), ...])."""
     items = (fx.section_preamble("SYN700", "04/24/2026")
-             + [(40, 100, "Test Name"), (200, 100, "Current"), (420, 100, "Historical"), (420, 111, "01/27/2026"),
-                (600, 100, "Units")])
+             + [(40, 100, "Test Name"), (current_x, 100, "Current"), (historical_x, 100, "Historical"),
+                (historical_x, 111, "01/27/2026"), (units_x, 100, "Units")])
     for offset, (name, cells) in enumerate(rows):
         y = 130 + 14 * offset
         items += [(40, y, name)] + [(x, y, text) for x, text in cells]
@@ -211,10 +211,10 @@ def _legend_table(rows):
 
 def test_threshold_legend_before_after_or_interleaved_is_never_taken_as_the_result(tmp_path):
     page = _legend_table([
-        ("Myeloperoxidase", [(200, "420"), (240, "<470"), (265, "470-539"), (305, ">539"), (420, "380")]),
-        ("ADMA", [(200, "<100"), (225, "100-120"), (268, ">120"), (300, "95"), (420, "101")]),
-        ("Fibrinogen", [(200, "300"), (420, "290"), (445, "<350"), (470, "350-400"), (508, ">400")]),
-        ("LH", [(200, "<0.2"), (420, "<0.1"), (600, "mIU/mL")]),
+        ("Myeloperoxidase", [(250, "420"), (290, "<470"), (315, "470-539"), (355, ">539"), (470, "380")]),
+        ("ADMA", [(95, "<100"), (120, "100-120"), (160, ">120"), (250, "95"), (470, "101")]),
+        ("Fibrinogen", [(250, "300"), (470, "290"), (520, "<350"), (545, "350-400"), (580, ">400")]),
+        ("LH", [(250, "<0.2"), (470, "<0.1"), (600, "mIU/mL")]),
     ])
     found = _by_key(_parse(tmp_path, [page])[0])
 
@@ -227,13 +227,31 @@ def test_threshold_legend_before_after_or_interleaved_is_never_taken_as_the_resu
     assert all(occ["lab_range_display"] == "" for occ in found.values())
 
 
+def test_reference_token_separated_from_legend_by_a_units_label_is_never_a_result(tmp_path):
+    page = _legend_table([
+        ("Lipoprotein(a)", [(250, "88"), (295, "<75"), (318, "75-125"), (352, ">125"), (380, "nmol/L"),
+                            (420, ">200"), (520, "90")]),
+    ], historical_x=520, units_x=640)
+    occurrences, _ = _parse(tmp_path, [page])
+
+    assert [(o["date_display"], o["value"], o["disp_value"]) for o in occurrences] == [
+        ("04/24/2026", 88.0, "88"), ("01/27/2026", 90.0, "90")]
+
+
+def test_single_comparator_inside_the_dated_column_is_the_result_even_beside_a_legend(tmp_path):
+    page = _legend_table([("TMAO", [(250, "<0.3"), (290, "<1.0"), (315, "1.0-3.0"), (355, ">3.0"), (470, "6.1")])])
+    occurrences, _ = _parse(tmp_path, [page])
+    assert [(o["date_display"], o["value"], o["disp_value"]) for o in occurrences] == [
+        ("04/24/2026", None, "<0.3"), ("01/27/2026", 6.1, "6.1")]
+
+
 @pytest.mark.parametrize("cells", [
-    [(240, "<1.0"), (265, "1.0-3.0"), (305, ">3.0"), (420, "6.1")],
-    [(200, "<0.3"), (230, "<1.0"), (255, "1.0-3.0"), (300, ">3.0"), (420, "6.1")],
-], ids=["legend-only", "comparator-result-adjacent-to-legend"])
+    [(290, "<1.0"), (315, "1.0-3.0"), (355, ">3.0"), (470, "6.1")],
+    [(290, "<75"), (313, "75-125"), (347, ">125"), (380, "nmol/L"), (420, ">200"), (470, "6.1")],
+], ids=["legend-only", "legend-and-units-separated-token-only"])
 def test_threshold_legend_without_a_single_result_is_rejected_not_guessed(tmp_path, cells):
     page = _legend_table([("TMAO", cells)])
-    with pytest.raises(pipeline.BloodworkParseError, match="reference-range legend"):
+    with pytest.raises(pipeline.BloodworkParseError, match="no single result in the dated"):
         _parse(tmp_path, [page])
 
 

@@ -814,6 +814,8 @@ _MULTIWORD_CELLS = (("test", "not", "performed"), ("not", "performed"), ("not", 
 _STANDALONE_FLAGS = {"H", "L", "HH", "LL"}
 _COMPARATOR_TOKEN_RE = re.compile(r"(?:<=|>=|[<>≤≥])\s*(?:\d+(?:\.\d+)?|\.\d+)")
 _BOUNDED_RANGE_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?")
+# How far (pt) a result's center may sit outside its dated column's printed header label.
+_DATE_COLUMN_PAD_PT = 6.0
 _ORDER_ID_RE = re.compile(r"\border\s*(?:id|#|number)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]*)", re.IGNORECASE)
 _COLLECTED_RE = re.compile(r"\bcollected\s*:?\s*(" + _PRINTED_DATE_RE.pattern + r")", re.IGNORECASE)
 # Quest's own multi-draw restatements of values printed elsewhere - never a source of truth.
@@ -861,22 +863,8 @@ def _is_threshold_token(text: str) -> bool:
     return bool(_COMPARATOR_TOKEN_RE.fullmatch(text) or _BOUNDED_RANGE_TOKEN_RE.fullmatch(text))
 
 
-def _threshold_legend(entries: list[tuple]) -> set[int]:
-    """Indexes of row tokens forming a reference-range legend: two or more consecutive threshold-shaped
-    tokens, unless each is a comparator tied to its own distinct date column (e.g. <0.7  <0.5  <0.3)."""
-    legend, run = set(), []
-    for index, (text, kind, logical) in enumerate([*entries, ("", "break", None)]):
-        if kind != "break" and _is_threshold_token(text):
-            run.append(index)
-            continue
-        if len(run) >= 2:
-            tied = (all(entries[i][1] == "value" for i in run)
-                    and len({entries[i][2] for i in run}) == len(run)
-                    and all(_COMPARATOR_TOKEN_RE.fullmatch(entries[i][0]) for i in run))
-            if not tied:
-                legend.update(run)
-        run = []
-    return legend
+def _within_date_column(x: float, column: dict) -> bool:
+    return column["x0"] - _DATE_COLUMN_PAD_PT <= x <= column["x1"] + _DATE_COLUMN_PAD_PT
 
 
 def _merge_cell_phrases(words: list[tuple]) -> list[tuple]:
@@ -987,19 +975,20 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         return False
     match = markers_reference_lookup(raw_name)
 
-    # (text, kind, logical value column) per token in row order; "ignore" tokens (units) end a threshold run.
-    entries: list[tuple] = []
+    # Only a token printed inside a dated column's own header span can be a result; anything else
+    # (reference legends, units, lab codes, stray thresholds) is never eligible, whatever its shape.
+    cells: dict[int, str] = {}
+    stray: dict[int, list[str]] = {}
+    range_words: list[str] = []
+    problems: list[str] = []
     value_columns = header["value_columns"]
     for word in words[len(name_words):]:
         column = _column_at(word[5], header["bounds"])
         kind = header["columns"][column]["kind"]
-        if word[4] in _STANDALONE_FLAGS:
+        if kind == "range":
+            range_words.append(word[4])
             continue
-        if kind in ("range", "ignore"):
-            entries.append((word[4], kind, None))
-            continue
-        if kind == "name":
-            entries.append((word[4], "problem", None))
+        if kind not in ("current", "historical") or word[4] in _STANDALONE_FLAGS:
             continue
         try:
             pieces = _split_cell_word(word[4])
@@ -1009,38 +998,25 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
             raise BloodworkParseError(
                 f"{raw_name} ({_section_label(section)}): {word[4]!r} runs result digits together with no "
                 "flag or inequality between them, so its column boundary cannot be read")
+        result_shaped = pieces is not None or _is_threshold_token(word[4]) or (
+            word[4].lower() in _NOT_PERFORMED_CELLS or word[4].lower() in _QUALITATIVE_CELLS)
         if pieces is None:
-            if (word[4].lower() in _NOT_PERFORMED_CELLS or word[4].lower() in _QUALITATIVE_CELLS
-                    or _is_threshold_token(word[4])):
-                pieces = [word[4]]
-            else:
-                entries.append((word[4], "problem", None))
-                continue
-        start = header["logical"][column]
-        if len(pieces) > 1:
-            first_center = word[0] + (word[2] - word[0]) * len(pieces[0]) / len(word[4]) / 2
-            start_column = _column_at(first_center, header["bounds"])
-            start = header["logical"][start_column] if start_column is not None else None
-        if start is None or start + len(pieces) > len(value_columns):
-            entries.append((word[4], "problem", None))
+            pieces = [word[4]]
+        anchor = word[0] + (word[2] - word[0]) * len(pieces[0]) / len(word[4]) / 2 if len(pieces) > 1 else word[5]
+        anchor_column = _column_at(anchor, header["bounds"])
+        start = header["logical"][anchor_column] if anchor_column is not None else None
+        if start is None or not _within_date_column(anchor, header["columns"][anchor_column]):
+            if result_shaped and header["logical"][column] is not None:
+                stray.setdefault(header["logical"][column], []).append(word[4])
             continue
-        entries.extend((piece, "value", start + offset) for offset, piece in enumerate(pieces))
-
-    legend = _threshold_legend(entries)
-    legend_columns = {entries[i][2] for i in legend if entries[i][1] == "value"}
-    cells: dict[int, str] = {}
-    range_words: list[str] = []
-    problems: list[str] = []
-    for index, (text, kind, logical) in enumerate(entries):
-        if kind == "range":
-            range_words.append(text)
-        elif kind == "problem":
-            problems.append(text)
-        elif kind == "value" and index not in legend:
-            if _BOUNDED_RANGE_TOKEN_RE.fullmatch(text) or logical in cells:
-                problems.append(text)
+        if not result_shaped or start + len(pieces) > len(value_columns):
+            problems.append(word[4])
+            continue
+        for offset, piece in enumerate(pieces):
+            if _BOUNDED_RANGE_TOKEN_RE.fullmatch(piece) or start + offset in cells:
+                problems.append(piece)
             else:
-                cells[logical] = text
+                cells[start + offset] = piece
 
     if match is None:
         if cells and not problems and len(raw_name) <= 60:
@@ -1051,14 +1027,14 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         return False
     if problems:
         raise BloodworkParseError(
-            f"{raw_name} ({_section_label(section)}): {problems} sits in a result column but is not a "
+            f"{raw_name} ({_section_label(section)}): {problems} sits in a dated result column but is not a "
             "readable result")
-    unresolved = sorted(i for i in legend_columns if i not in cells)
+    unresolved = sorted(i for i in stray if i not in cells)
     if unresolved:
         raise BloodworkParseError(
-            f"{raw_name} ({_section_label(section)}): only a reference-range legend "
-            f"{[entries[i][0] for i in sorted(legend)]} sits where the result for "
-            f"{[value_columns[i]['kind'] for i in unresolved]} column(s) should be - no single result to read")
+            f"{raw_name} ({_section_label(section)}): no single result in the dated "
+            f"{[value_columns[i]['kind'] for i in unresolved]} column(s); tokens printed outside those columns "
+            f"{[t for i in unresolved for t in stray[i]]} are never read as a result")
 
     canonical, config = match
     lab_lo, lab_hi, lab_display = _printed_lab_range(range_words)
