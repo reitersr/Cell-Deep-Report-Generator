@@ -812,6 +812,8 @@ _QUALITATIVE_CELLS = {"negative", "positive", "detected", "not detected", "none 
 _EXPECTED_QUALITATIVE = {"negative", "not detected", "none detected", "normal", "non-reactive", "nonreactive"}
 _MULTIWORD_CELLS = (("test", "not", "performed"), ("not", "performed"), ("not", "detected"), ("none", "detected"))
 _STANDALONE_FLAGS = {"H", "L", "HH", "LL"}
+_COMPARATOR_TOKEN_RE = re.compile(r"(?:<=|>=|[<>≤≥])\s*(?:\d+(?:\.\d+)?|\.\d+)")
+_BOUNDED_RANGE_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?")
 _ORDER_ID_RE = re.compile(r"\border\s*(?:id|#|number)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]*)", re.IGNORECASE)
 _COLLECTED_RE = re.compile(r"\bcollected\s*:?\s*(" + _PRINTED_DATE_RE.pattern + r")", re.IGNORECASE)
 # Quest's own multi-draw restatements of values printed elsewhere - never a source of truth.
@@ -853,6 +855,28 @@ def _is_cell_token(text: str) -> bool:
         return _split_cell_word(text) is not None
     except _AmbiguousCell:
         return True
+
+
+def _is_threshold_token(text: str) -> bool:
+    return bool(_COMPARATOR_TOKEN_RE.fullmatch(text) or _BOUNDED_RANGE_TOKEN_RE.fullmatch(text))
+
+
+def _threshold_legend(entries: list[tuple]) -> set[int]:
+    """Indexes of row tokens forming a reference-range legend: two or more consecutive threshold-shaped
+    tokens, unless each is a comparator tied to its own distinct date column (e.g. <0.7  <0.5  <0.3)."""
+    legend, run = set(), []
+    for index, (text, kind, logical) in enumerate([*entries, ("", "break", None)]):
+        if kind != "break" and _is_threshold_token(text):
+            run.append(index)
+            continue
+        if len(run) >= 2:
+            tied = (all(entries[i][1] == "value" for i in run)
+                    and len({entries[i][2] for i in run}) == len(run)
+                    and all(_COMPARATOR_TOKEN_RE.fullmatch(entries[i][0]) for i in run))
+            if not tied:
+                legend.update(run)
+        run = []
+    return legend
 
 
 def _merge_cell_phrases(words: list[tuple]) -> list[tuple]:
@@ -955,7 +979,7 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
     first_value_center = min(value_centers)
     name_words = []
     for word in words:
-        if _is_cell_token(word[4]) or word[5] >= first_value_center:
+        if _is_cell_token(word[4]) or _is_threshold_token(word[4]) or word[5] >= first_value_center:
             break
         name_words.append(word)
     raw_name = _line_text(name_words).strip()
@@ -963,20 +987,19 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         return False
     match = markers_reference_lookup(raw_name)
 
-    cells: dict[int, str] = {}
-    range_words: list[str] = []
-    problems: list[str] = []
+    # (text, kind, logical value column) per token in row order; "ignore" tokens (units) end a threshold run.
+    entries: list[tuple] = []
     value_columns = header["value_columns"]
     for word in words[len(name_words):]:
         column = _column_at(word[5], header["bounds"])
         kind = header["columns"][column]["kind"]
-        if kind == "range":
-            range_words.append(word[4])
+        if word[4] in _STANDALONE_FLAGS:
             continue
-        if kind == "ignore" or word[4] in _STANDALONE_FLAGS:
+        if kind in ("range", "ignore"):
+            entries.append((word[4], kind, None))
             continue
         if kind == "name":
-            problems.append(word[4])
+            entries.append((word[4], "problem", None))
             continue
         try:
             pieces = _split_cell_word(word[4])
@@ -987,10 +1010,11 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
                 f"{raw_name} ({_section_label(section)}): {word[4]!r} runs result digits together with no "
                 "flag or inequality between them, so its column boundary cannot be read")
         if pieces is None:
-            if word[4].lower() in _NOT_PERFORMED_CELLS or word[4].lower() in _QUALITATIVE_CELLS:
+            if (word[4].lower() in _NOT_PERFORMED_CELLS or word[4].lower() in _QUALITATIVE_CELLS
+                    or _is_threshold_token(word[4])):
                 pieces = [word[4]]
             else:
-                problems.append(word[4])
+                entries.append((word[4], "problem", None))
                 continue
         start = header["logical"][column]
         if len(pieces) > 1:
@@ -998,13 +1022,25 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
             start_column = _column_at(first_center, header["bounds"])
             start = header["logical"][start_column] if start_column is not None else None
         if start is None or start + len(pieces) > len(value_columns):
-            problems.append(word[4])
+            entries.append((word[4], "problem", None))
             continue
-        for offset, piece in enumerate(pieces):
-            if start + offset in cells:
-                problems.append(piece)
+        entries.extend((piece, "value", start + offset) for offset, piece in enumerate(pieces))
+
+    legend = _threshold_legend(entries)
+    legend_columns = {entries[i][2] for i in legend if entries[i][1] == "value"}
+    cells: dict[int, str] = {}
+    range_words: list[str] = []
+    problems: list[str] = []
+    for index, (text, kind, logical) in enumerate(entries):
+        if kind == "range":
+            range_words.append(text)
+        elif kind == "problem":
+            problems.append(text)
+        elif kind == "value" and index not in legend:
+            if _BOUNDED_RANGE_TOKEN_RE.fullmatch(text) or logical in cells:
+                problems.append(text)
             else:
-                cells[start + offset] = piece
+                cells[logical] = text
 
     if match is None:
         if cells and not problems and len(raw_name) <= 60:
@@ -1017,6 +1053,12 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         raise BloodworkParseError(
             f"{raw_name} ({_section_label(section)}): {problems} sits in a result column but is not a "
             "readable result")
+    unresolved = sorted(i for i in legend_columns if i not in cells)
+    if unresolved:
+        raise BloodworkParseError(
+            f"{raw_name} ({_section_label(section)}): only a reference-range legend "
+            f"{[entries[i][0] for i in sorted(legend)]} sits where the result for "
+            f"{[value_columns[i]['kind'] for i in unresolved]} column(s) should be - no single result to read")
 
     canonical, config = match
     lab_lo, lab_hi, lab_display = _printed_lab_range(range_words)

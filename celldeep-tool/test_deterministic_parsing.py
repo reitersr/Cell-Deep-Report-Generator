@@ -196,6 +196,47 @@ def test_progress_summary_is_ignored_and_genetics_page_does_not_interrupt_sectio
     assert unrecognized == []
 
 
+# Threshold legends (<A  A-B  >B) printed in a row are reference metadata, never a result ---------------
+
+def _legend_table(rows):
+    """Header: Test Name | Current | Historical (date below) | Units; rows are (name, [(x, text), ...])."""
+    items = (fx.section_preamble("SYN700", "04/24/2026")
+             + [(40, 100, "Test Name"), (200, 100, "Current"), (420, 100, "Historical"), (420, 111, "01/27/2026"),
+                (600, 100, "Units")])
+    for offset, (name, cells) in enumerate(rows):
+        y = 130 + 14 * offset
+        items += [(40, y, name)] + [(x, y, text) for x, text in cells]
+    return items
+
+
+def test_threshold_legend_before_after_or_interleaved_is_never_taken_as_the_result(tmp_path):
+    page = _legend_table([
+        ("Myeloperoxidase", [(200, "420"), (240, "<470"), (265, "470-539"), (305, ">539"), (420, "380")]),
+        ("ADMA", [(200, "<100"), (225, "100-120"), (268, ">120"), (300, "95"), (420, "101")]),
+        ("Fibrinogen", [(200, "300"), (420, "290"), (445, "<350"), (470, "350-400"), (508, ">400")]),
+        ("LH", [(200, "<0.2"), (420, "<0.1"), (600, "mIU/mL")]),
+    ])
+    found = _by_key(_parse(tmp_path, [page])[0])
+
+    assert {key: (occ["value"], occ["disp_value"]) for key, occ in found.items()} == {
+        ("Myeloperoxidase", "04/24/2026"): (420.0, "420"), ("Myeloperoxidase", "01/27/2026"): (380.0, "380"),
+        ("ADMA", "04/24/2026"): (95.0, "95"), ("ADMA", "01/27/2026"): (101.0, "101"),
+        ("Fibrinogen", "04/24/2026"): (300.0, "300"), ("Fibrinogen", "01/27/2026"): (290.0, "290"),
+        ("LH", "04/24/2026"): (None, "<0.2"), ("LH", "01/27/2026"): (None, "<0.1"),
+    }
+    assert all(occ["lab_range_display"] == "" for occ in found.values())
+
+
+@pytest.mark.parametrize("cells", [
+    [(240, "<1.0"), (265, "1.0-3.0"), (305, ">3.0"), (420, "6.1")],
+    [(200, "<0.3"), (230, "<1.0"), (255, "1.0-3.0"), (300, ">3.0"), (420, "6.1")],
+], ids=["legend-only", "comparator-result-adjacent-to-legend"])
+def test_threshold_legend_without_a_single_result_is_rejected_not_guessed(tmp_path, cells):
+    page = _legend_table([("TMAO", cells)])
+    with pytest.raises(pipeline.BloodworkParseError, match="reference-range legend"):
+        _parse(tmp_path, [page])
+
+
 # Unrecognized lab layouts are a hard, named failure ------------------------------------------------
 
 def _free_text_lab_pdf(path, collected_line):
