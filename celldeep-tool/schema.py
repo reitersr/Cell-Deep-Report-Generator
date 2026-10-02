@@ -15,7 +15,44 @@ web framework — it's the shape of the JSON that flows from extraction -> gener
 """
 
 from dataclasses import dataclass, field
+import re
 from typing import Optional, Literal
+
+_MONTH_NAMES = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3, "apr": 4, "april": 4,
+    "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9, "oct": 10, "october": 10,
+    "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+
+def normalize_date_for_matching(date_str: str):
+    """Best-effort normalization so the same real draw date printed differently across two
+    reports (e.g. "04/24/2026" vs "April 24, 2026") is recognized as one draw for reconciliation.
+    Falls back to the raw stripped/lowercased string when the format isn't recognized - this only
+    affects whether two occurrences get grouped together, it never invents or alters a date used
+    for display."""
+    if not date_str:
+        return ""
+    s = date_str.strip().lower().rstrip(".")
+    m = re.search(r"(?<!\d)(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?!\d)", s)
+    if m:
+        mm, dd, yy = m.groups()
+        yy = int(yy)
+        if yy < 100:
+            yy += 2000
+        return (yy, int(mm), int(dd))
+    m = re.search(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)", s)
+    if m:
+        yy, mm, dd = m.groups()
+        return (int(yy), int(mm), int(dd))
+    m = re.search(r"\b([a-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})\b", s)
+    if m:
+        month_name, dd, yy = m.groups()
+        month = _MONTH_NAMES.get(month_name)
+        if month:
+            return (int(yy), month, int(dd))
+    return s
 
 Direction = Literal["lower", "higher"]  # for a bounded marker: which direction is optimal
 MarkerKind = Literal["bounded", "range", "categorical"]  # matches data.py's three scoring modes

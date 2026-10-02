@@ -107,7 +107,7 @@ MARKER_LIBRARY = {
     # ---- Hormones ----
     "Cortisol, Total (AM)": dict(category="Hormones", unit="\u00b5g/dL", kind="range",
         lo=None, hi=None, disp_range="lab-specific reference range",
-        aliases=["cortisol", "cortisol, am", "cortisol total"]),
+        aliases=["cortisol", "cortisol, am", "cortisol total", "cortisol, total"]),
     "DHEA-S": dict(category="Hormones", unit="\u00b5g/dL", kind="range",
         lo=None, hi=None, disp_range="lab-specific reference range",
         aliases=["dhea-s", "dhea sulfate"]),
@@ -261,6 +261,78 @@ DATA_TO_PATIENT_CATEGORY = {
 # summaries even though its lab category is Inflammation. This is a fixed rule, not per-patient judgment.
 NARRATIVE_CATEGORY_OVERRIDE = {
     "Lp-PLA2 Activity": "Flow",
+}
+
+# Full-panel order (matches template.py's breakdown order); also the final tiebreak for priority.
+SYSTEM_ORDER = ["Inflammation", "Lipids", "Metabolic", "Hormones", "Thyroid", "Foundational", "Also Monitored"]
+
+# Fixed, value-free "What this is" lines used by the template-fill copy step.
+MARKER_DESCRIPTIONS = {
+    "hs-CRP": "A measure of low-grade inflammation throughout your body.",
+    "Myeloperoxidase": "An enzyme released when artery walls are inflamed.",
+    "Lp-PLA2 Activity": "A marker for hidden inflammation in your arteries.",
+    "ADMA": "A compound that limits how well your blood vessels can relax.",
+    "SDMA": "A compound cleared by your kidneys, used as a kidney-function check.",
+    "Oxidized LDL": "LDL cholesterol that has been damaged and is more likely to build up in arteries.",
+    "Fibrinogen": "A clotting protein that rises with inflammation.",
+    "Total Cholesterol": "All the cholesterol carried in your blood.",
+    "HDL Cholesterol": "The cholesterol that helps clear excess cholesterol from your arteries.",
+    "Triglycerides": "Fat carried in your blood, closely tied to diet and blood sugar.",
+    "LDL Cholesterol": "The cholesterol most associated with plaque in your arteries.",
+    "Non-HDL Cholesterol": "All the cholesterol carriers that can contribute to plaque.",
+    "LDL-P (particle count)": "The number of LDL particles carrying cholesterol through your arteries.",
+    "HDL-P": "The number of HDL particles available to clear cholesterol.",
+    "Apolipoprotein B": "A count of the particles that can carry cholesterol into artery walls.",
+    "Lipoprotein(a)": "An inherited cholesterol particle linked to cardiovascular risk.",
+    "Glucose (fasting)": "Your blood sugar after an overnight fast.",
+    "HbA1c": "Your average blood sugar over roughly the last three months.",
+    "Estimated Average Glucose": "Your HbA1c expressed as an average blood sugar level.",
+    "TMAO": "A gut-derived compound linked to cardiovascular risk.",
+    "Insulin Resistance Score": "How hard your body has to work to keep blood sugar in range.",
+    "Fasting Insulin": "The insulin your body needs to manage blood sugar at rest.",
+    "C-Peptide": "A measure of how much insulin your body is producing.",
+    "Cortisol, Total (AM)": "Your main stress hormone, measured in the morning.",
+    "DHEA-S": "A hormone building block made by your adrenal glands.",
+    "Estradiol": "The primary estrogen hormone.",
+    "Testosterone, Total": "All the testosterone circulating in your blood.",
+    "LH": "A pituitary signal that tells the body to make sex hormones.",
+    "FSH": "A pituitary signal involved in reproductive hormone production.",
+    "TSH": "The signal your brain sends to your thyroid to set your metabolic pace.",
+    "Free T4": "The thyroid hormone available to your tissues.",
+    "Total T4": "All the main thyroid hormone in your blood.",
+    "Free T3": "The active thyroid hormone your cells actually use.",
+    "Total T3": "All of the active thyroid hormone in your blood.",
+    "Thyroid Peroxidase Ab": "An antibody that can signal the immune system targeting the thyroid.",
+    "Thyroglobulin Ab": "An antibody that can signal the immune system targeting the thyroid.",
+    "Vitamin D": "A vitamin that supports bones, immunity, and mood.",
+    "Vitamin B12": "A vitamin your nerves and red blood cells depend on.",
+    "CoQ10": "A nutrient your cells use to produce energy.",
+    "Folate": "A B vitamin needed to build new cells.",
+    "Omega-3 Index": "The share of omega-3 fats in your cell membranes.",
+    "Ferritin": "Your body's stored iron.",
+    "eGFR": "An estimate of how well your kidneys filter your blood.",
+    "Phosphorus": "A mineral that works with calcium in bones and energy use.",
+    "Magnesium": "A mineral involved in muscle, nerve, and energy function.",
+    "Uric Acid": "A waste product that can build up in joints and blood vessels.",
+    "Progesterone": "A hormone that balances estrogen.",
+    "Free Testosterone": "The testosterone available for your tissues to use.",
+    "Bioavailable Testosterone": "The testosterone your body can readily use.",
+    "SHBG": "A protein that binds sex hormones and controls how much is available.",
+    "PSA Total": "A prostate health screening marker.",
+    "Creatinine": "A muscle waste product used to check kidney function.",
+    "Troponin T, HS": "A sensitive marker of strain on the heart muscle.",
+    "Urinalysis \u2014 Occult Blood": "A check for blood in the urine that is not visible.",
+}
+
+# Fixed, value-free one-line framing per data category.
+CATEGORY_TAGLINES = {
+    "Inflammation": "How much background inflammation your body is managing.",
+    "Lipids": "How cholesterol and fats are moving through your arteries.",
+    "Metabolic": "How your body handles blood sugar and insulin.",
+    "Hormones": "The hormones behind energy, drive, and mood.",
+    "Thyroid": "The signals that set your metabolic pace.",
+    "Foundational": "The vitamins and nutrients everything else depends on.",
+    "Also Monitored": "General screening markers tracked alongside your systems.",
 }
 
 

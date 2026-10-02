@@ -4,14 +4,11 @@ CellDeep Report Generator — Pipeline Orchestrator
 This is the actual entry point. Run this with raw patient material and it
 produces the finished PDF, following the locked V23 design end to end.
 
-NOTE ON TESTING: this was written and assembled without live API access
-(the build environment used to develop this has no outbound internet). It
-has NOT been run end-to-end yet. The first real test should be: run this
-against Star Hawkins' actual real source material (the same lab PDF, DEXA
-PDFs, and provider note used throughout calibration) and confirm the output
-matches V23 — that's the one case where we already know exactly what
-correct output looks like, so it's the right first proof before testing on
-any new patient.
+Every step is deterministic - no model call anywhere: bloodwork tables are
+read from the PDF text layer by row/column position, DEXA tables are OCR'd
+(Tesseract) and read by fixed row label and header column, provider notes
+must follow the structured template, and patient-facing copy is template
+fill (generation_prompt.py).
 
 Usage:
     python pipeline.py --labs path/to/labs.pdf --dexa path/to/dexa1.pdf path/to/dexa2.pdf \\
@@ -24,24 +21,19 @@ import json
 import base64
 import argparse
 import re
-import sys
 import tempfile
-import time
-from dataclasses import asdict
-from datetime import datetime, timezone
 from pathlib import Path
 
-from anthropic import APIConnectionError, APITimeoutError, Anthropic, RateLimitError
-from json_repair import repair_json
 import fitz
+import pytesseract
+from PIL import Image
 
 from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint
-from markers_reference import (MARKER_LIBRARY, DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE,
-                                resolve_marker_config, has_missing_thresholds)
+from schema import normalize_date_for_matching as _normalize_date_for_matching
+from markers_reference import MARKER_LIBRARY, resolve_marker_config, has_missing_thresholds
 from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
 from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
-from extraction_prompt import EXTRACTION_SYSTEM_PROMPT, EXTRACTION_OUTPUT_SCHEMA, build_extraction_user_message
-from generation_prompt import GENERATION_SYSTEM_PROMPT
+from generation_prompt import build_copy
 import scoring
 import template
 
@@ -53,10 +45,6 @@ if os.path.exists(".env"):
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k, v)
 
-MODEL = "claude-sonnet-4-6"
-ANTHROPIC_CALL_TIMEOUT_SECONDS = 240.0
-ANTHROPIC_MAX_RETRIES = 1
-
 
 class ExtractionOccurrenceValidationError(RuntimeError):
     """The source contains a dated marker result that extraction omitted."""
@@ -66,64 +54,29 @@ class ExtractionValueMismatchError(ExtractionOccurrenceValidationError):
     """A marker_occurrence's disp_value doesn't match any result token on its own source evidence line."""
 
 
-class AnthropicAPIError(RuntimeError):
-    """An Anthropic API request could not complete."""
+class BloodworkParseError(RuntimeError):
+    """A recognized bloodwork row or section could not be read under the column rule."""
 
 
-def _log_anthropic_call_end(operation: str, outcome: str, start_time: datetime,
-                            start_monotonic: float, configured_timeout, error: Exception | None = None) -> None:
-    end_time = datetime.now(timezone.utc)
-    duration_seconds = time.monotonic() - start_monotonic
-    error_type = type(error).__name__ if error else None
-    print(
-        "ANTHROPIC-API-CALL-END "
-        f"operation={operation!r} outcome={outcome} start_time={start_time.isoformat()} "
-        f"end_time={end_time.isoformat()} duration_seconds={duration_seconds:.3f} "
-        f"configured_timeout={configured_timeout!r} error_type={error_type!r}"
-    )
+class DexaParseError(RuntimeError):
+    """A DEXA file did not yield the required BMD and body-composition tables."""
 
 
-def _create_anthropic_message(client: Anthropic, operation: str, **kwargs):
-    start_time = datetime.now(timezone.utc)
-    start_monotonic = time.monotonic()
-    configured_timeout = getattr(client, "timeout", None)
-    print(
-        "ANTHROPIC-API-CALL-START "
-        f"operation={operation!r} start_time={start_time.isoformat()} "
-        f"configured_timeout={configured_timeout!r}"
-    )
-    try:
-        response = client.messages.create(**kwargs)
-    except APITimeoutError as error:
-        _log_anthropic_call_end(
-            operation, "sdk_timeout", start_time, start_monotonic, configured_timeout, error
-        )
-        raise AnthropicAPIError(
-            f"Anthropic API timed out during {operation}. Please retry the report."
-        ) from error
-    except RateLimitError as error:
-        _log_anthropic_call_end(
-            operation, "exception", start_time, start_monotonic, configured_timeout, error
-        )
-        raise AnthropicAPIError(
-            f"Anthropic API rate limit reached during {operation}. Please retry shortly."
-        ) from error
-    except APIConnectionError as error:
-        _log_anthropic_call_end(
-            operation, "exception", start_time, start_monotonic, configured_timeout, error
-        )
-        raise AnthropicAPIError(
-            f"Could not connect to the Anthropic API during {operation}. Please retry the report."
-        ) from error
-    except Exception as error:
-        _log_anthropic_call_end(
-            operation, "exception", start_time, start_monotonic, configured_timeout, error
-        )
-        raise
-    _log_anthropic_call_end(
-        operation, "completed", start_time, start_monotonic, configured_timeout
-    )
-    return response
+class DexaPatientMismatchError(DexaParseError):
+    """A DEXA page's printed patient name does not match the patient the file was uploaded for."""
+
+    def __init__(self, pdf_path: str, page_number: int, printed_name: str | None, expected_name: str):
+        self.pdf_path = pdf_path
+        self.page_number = page_number
+        self.printed_name = printed_name
+        self.expected_name = expected_name
+        printed = repr(printed_name) if printed_name else "no printed patient name"
+        super().__init__(f"DEXA page {page_number} of {pdf_path}: {printed} does not match "
+                         f"patient {expected_name!r}")
+
+
+class ProviderNoteFormatError(ValueError):
+    """A provider note does not follow the structured provider-notes template."""
 
 
 def parse_provider_statuses(note_text: str | None) -> tuple[bool | None, bool | None]:
@@ -159,43 +112,6 @@ def _valid_lab_range(raw: dict, draw: str) -> dict | None:
     if not display or lo > hi:
         return None
     return {"lo": lo, "hi": hi, "display": display}
-
-
-_MONTH_NAMES = {
-    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3, "apr": 4, "april": 4,
-    "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8, "august": 8,
-    "sep": 9, "sept": 9, "september": 9, "oct": 10, "october": 10,
-    "nov": 11, "november": 11, "dec": 12, "december": 12,
-}
-
-
-def _normalize_date_for_matching(date_str: str):
-    """Best-effort normalization so the same real draw date printed differently across two
-    reports (e.g. "04/24/2026" vs "April 24, 2026") is recognized as one draw for reconciliation.
-    Falls back to the raw stripped/lowercased string when the format isn't recognized - this only
-    affects whether two occurrences get grouped together, it never invents or alters a date used
-    for display."""
-    if not date_str:
-        return ""
-    s = date_str.strip().lower().rstrip(".")
-    m = re.search(r"(?<!\d)(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?!\d)", s)
-    if m:
-        mm, dd, yy = m.groups()
-        yy = int(yy)
-        if yy < 100:
-            yy += 2000
-        return (yy, int(mm), int(dd))
-    m = re.search(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)", s)
-    if m:
-        yy, mm, dd = m.groups()
-        return (int(yy), int(mm), int(dd))
-    m = re.search(r"\b([a-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})\b", s)
-    if m:
-        month_name, dd, yy = m.groups()
-        month = _MONTH_NAMES.get(month_name)
-        if month:
-            return (int(yy), month, int(dd))
-    return s
 
 
 def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
@@ -298,28 +214,6 @@ def _sanitize_em_dashes(value):
     return value
 
 
-def _marker_list_placeholders(record: PatientRecord) -> dict[str, str]:
-    """Build marker-list tokens from deterministic scores, never generated prose."""
-    return {
-        "{optimal_markers}": ", ".join(marker.name for marker in record.markers if marker.now_tier == "optimal"),
-        "{moderate_markers}": ", ".join(marker.name for marker in record.markers if marker.now_tier == "moderate"),
-        "{flagged_markers}": ", ".join(marker.name for marker in record.markers if marker.now_tier == "flag"),
-    }
-
-
-def _substitute_marker_list_placeholders(value, placeholders):
-    if isinstance(value, str):
-        for token, marker_list in placeholders.items():
-            value = value.replace(token, marker_list)
-        return value
-    if isinstance(value, dict):
-        return {key: _substitute_marker_list_placeholders(item, placeholders)
-                for key, item in value.items()}
-    if isinstance(value, list):
-        return [_substitute_marker_list_placeholders(item, placeholders) for item in value]
-    return value
-
-
 def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int, str, int]]:
     """Render page 1 of the first DEXA PDF as the scan image."""
     images = []
@@ -371,44 +265,6 @@ def _write_review_notes(patient_name: str, notice: ExtractionReviewNotice) -> st
     with open(path, "w", encoding="utf-8") as review_file:
         review_file.write(text or "No internal QA items were generated.\n")
     return path
-
-
-def _parse_json_response(text, patient_name=None):
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    if not text:
-        return {}
-    if not text.startswith("{"):
-        # Model prefaced the JSON with reasoning/prose despite instructions not to - salvage the
-        # actual object rather than feeding the whole prose blob to the parser/repair library.
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            text = text[start:end + 1]
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        try:
-            repaired = repair_json(text)
-            return json.loads(repaired)
-        except ValueError:
-            # json.JSONDecodeError is itself a ValueError, so this also covers a
-            # failed re-parse of the "repaired" text, not just repair_json() itself.
-            log_line = (f"ERROR: JSON parse failure for patient={patient_name or 'unknown'} "
-                        f"raw_length={len(text)} first_200={text[:200]!r}")
-            with open("/tmp/extraction_completeness_log.txt", "a", encoding="utf-8") as log:
-                log.write(log_line + "\n")
-            raise ValueError("Extraction produced unparseable output - please retry") from None
-
-
-def _pdf_content_block(path: str) -> dict:
-    with open(path, "rb") as f:
-        data = base64.standard_b64encode(f.read()).decode("utf-8")
-    return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}}
 
 
 def _pdf_text(path: str | None) -> str:
@@ -788,159 +644,853 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
     return notice
 
 
-def _marker_library_summary() -> str:
-    lines = []
-    for name, cfg in MARKER_LIBRARY.items():
-        aliases = ", ".join(cfg.get("aliases", []))
-        lines.append(f"- {name} (aliases: {aliases})")
-    return "\n".join(lines)
+# ---------------------------------------------------------------------------
+# Shared word-position helpers (used for both PDF text-layer words and OCR words)
+# ---------------------------------------------------------------------------
+
+def _page_words(page) -> list[tuple]:
+    """(x0, y0, x1, y1, text) for every word on a page; accepts a fitz.Page or a prepared word list."""
+    raw = page.get_text("words") if hasattr(page, "get_text") else page
+    return [(float(w[0]), float(w[1]), float(w[2]), float(w[3]), str(w[4]))
+            for w in raw if str(w[4]).strip()]
 
 
-def _protocol_library_summary() -> str:
-    lines = []
-    for name, cfg in PROTOCOL_LIBRARY.items():
-        aliases = ", ".join(cfg.get("aliases", []))
-        cats = ", ".join(cfg["typical_categories"]) or "none (not expected to move labs)"
-        lines.append(f"- {name} (aliases: {aliases}) — typical target(s): {cats}")
-    return "\n".join(lines)
+def _group_lines(words: list[tuple], tolerance: float) -> list[list[tuple]]:
+    lines: list[tuple[float, list]] = []
+    for word in sorted(words, key=lambda w: ((w[1] + w[3]) / 2, w[0])):
+        center = (word[1] + word[3]) / 2
+        if lines and abs(lines[-1][0] - center) <= tolerance:
+            lines[-1][1].append(word)
+        else:
+            lines.append((center, [word]))
+    return [sorted(line_words, key=lambda w: w[0]) for _, line_words in lines]
 
 
-def extract(client: Anthropic, labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
-        patient_name: str | None = None, audit_root: str | None = None) -> dict:
-    """Step 1: raw material in, structured (but not yet scored or written) JSON out."""
-    lab_text = _pdf_text(labs_pdf) if labs_pdf else ""
-    content = []
-    if labs_pdf:
-        content.append(_pdf_content_block(labs_pdf))
-    for p in dexa_pdfs:
-        content.append(_pdf_content_block(p))
-    if labs_pdf:
-        content.append({
-            "type": "text",
-            "text": (
-                "LITERAL TEXT EXTRACTED FROM THE LAB PDF. Use this as a transcription aid, especially "
-                "for report-level specimen dates and dates printed once in Historical/Current column headers. "
-                "Do not infer or reconcile values from it; copy only what the source prints.\n\n"
-                + lab_text
-            ),
+def _line_text(words) -> str:
+    return " ".join(w[4] for w in words)
+
+
+def _header_token(text: str) -> str:
+    return re.sub(r"[^\w%\-]", "", text.lower())
+
+
+def _match_header_columns(words: list[tuple], label_specs) -> list[dict]:
+    """Greedy longest-phrase match of a header line's words against known column labels. Words that
+    match no label (units, printed dates) attach to the column label they follow."""
+    tokens = [_header_token(w[4]) for w in words]
+    specs = sorted(label_specs, key=lambda spec: -len(spec[1]))
+    columns = []
+    index = 0
+    while index < len(words):
+        for kind, phrase in specs:
+            if tuple(tokens[index:index + len(phrase)]) == phrase:
+                span = words[index:index + len(phrase)]
+                columns.append({"kind": kind, "x0": span[0][0], "x1": span[-1][2], "extra": []})
+                index += len(phrase)
+                break
+        else:
+            if columns:
+                columns[-1]["extra"].append(words[index])
+                columns[-1]["x1"] = max(columns[-1]["x1"], words[index][2])
+            index += 1
+    return columns
+
+
+def _column_bounds(columns: list[dict], left=float("-inf"), right=float("inf")) -> list[tuple[float, float]]:
+    bounds = []
+    for index, column in enumerate(columns):
+        lo = left if index == 0 else (columns[index - 1]["x1"] + column["x0"]) / 2
+        hi = right if index == len(columns) - 1 else (column["x1"] + columns[index + 1]["x0"]) / 2
+        bounds.append((lo, hi))
+    return bounds
+
+
+def _column_at(x: float, bounds) -> int | None:
+    for index, (lo, hi) in enumerate(bounds):
+        if lo <= x < hi:
+            return index
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Deterministic bloodwork parsing
+# ---------------------------------------------------------------------------
+
+_LINE_TOLERANCE_PT = 3.0
+_CELL_VALUE_RE = re.compile(r"(?P<ineq>[<>≤≥]=?)?(?P<num>\d+(?:\.\d+)?|\.\d+)(?P<flag>[HL])?")
+_CELL_PIECE_RE = re.compile(r"[<>≤≥]=?(?:\d+(?:\.\d+)?|\.\d+)[HL]?|(?:\d+(?:\.\d+)?|\.\d+)[HL]?")
+_NOT_PERFORMED_CELLS = {"tnp", "test not performed", "not performed"}
+_QUALITATIVE_CELLS = {"negative", "positive", "detected", "not detected", "none detected", "trace",
+                      "normal", "abnormal", "reactive", "non-reactive", "nonreactive"}
+_EXPECTED_QUALITATIVE = {"negative", "not detected", "none detected", "normal", "non-reactive", "nonreactive"}
+_MULTIWORD_CELLS = (("test", "not", "performed"), ("not", "performed"), ("not", "detected"), ("none", "detected"))
+_STANDALONE_FLAGS = {"H", "L", "HH", "LL"}
+_ORDER_ID_RE = re.compile(r"\border\s*(?:id|#|number)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]*)", re.IGNORECASE)
+_COLLECTED_RE = re.compile(r"\bcollected\s*:?\s*(" + _PRINTED_DATE_RE.pattern + r")", re.IGNORECASE)
+# Quest's own multi-draw restatements of values printed elsewhere - never a source of truth.
+_TREND_TABLE_TITLES = ("progress summary", "trend summary", "cumulative summary")
+_BLOODWORK_NAME_LABELS = {"test", "tests", "analyte"}
+_BLOODWORK_HEADER_LABELS = [
+    ("name", ("test", "name")), ("name", ("test",)), ("name", ("tests",)), ("name", ("analyte",)),
+    ("current", ("current",)), ("current", ("current", "result")), ("current", ("result",)),
+    ("current", ("in", "range")), ("current", ("out", "of", "range")),
+    ("current", ("optimal",)), ("current", ("moderate",)), ("current", ("high",)),
+    ("historical", ("historical",)), ("historical", ("historical", "result")),
+    ("range", ("reference", "range")), ("range", ("range",)),
+    ("ignore", ("units",)), ("ignore", ("unit",)), ("ignore", ("lab",)), ("ignore", ("flag",)),
+]
+
+
+class _AmbiguousCell(ValueError):
+    pass
+
+
+def _split_cell_word(text: str) -> list[str] | None:
+    """Split one extracted word into result tokens. Adjacent columns that ran together are only split
+    where the text itself delimits them (an appended H/L flag or a leading inequality); digits running
+    straight into digits are ambiguous and raise rather than guess a boundary. None = not a result word."""
+    pieces = _CELL_PIECE_RE.findall(text)
+    if not pieces or "".join(pieces) != text:
+        return None
+    for left, right in zip(pieces, pieces[1:]):
+        if not (left[-1] in "HL" or right[0] in "<>≤≥"):
+            raise _AmbiguousCell(text)
+    return pieces
+
+
+def _is_cell_token(text: str) -> bool:
+    low = text.lower()
+    if low in _NOT_PERFORMED_CELLS or low in _QUALITATIVE_CELLS:
+        return True
+    try:
+        return _split_cell_word(text) is not None
+    except _AmbiguousCell:
+        return True
+
+
+def _merge_cell_phrases(words: list[tuple]) -> list[tuple]:
+    """Join multi-word cell phrases ("Test Not Performed") into one word; append each word's anchor x."""
+    merged = []
+    index = 0
+    while index < len(words):
+        for phrase in _MULTIWORD_CELLS:
+            span = words[index:index + len(phrase)]
+            if tuple(w[4].lower().strip(",;") for w in span) == phrase:
+                anchor = (span[0][0] + span[0][2]) / 2
+                merged.append((span[0][0], span[0][1], span[-1][2], span[-1][3],
+                               " ".join(w[4] for w in span), anchor))
+                index += len(phrase)
+                break
+        else:
+            word = words[index]
+            merged.append((*word, (word[0] + word[2]) / 2))
+            index += 1
+    return merged
+
+
+def _bloodwork_header(words: list[tuple]) -> dict | None:
+    if not words or _header_token(words[0][4]) not in _BLOODWORK_NAME_LABELS:
+        return None
+    columns = _match_header_columns(words, _BLOODWORK_HEADER_LABELS)
+    if not columns or columns[0]["kind"] != "name" or not any(
+            column["kind"] in ("current", "historical") for column in columns):
+        return None
+    logical, value_columns = [], []
+    current_index = None
+    for column in columns:
+        if column["kind"] == "current":
+            if current_index is None:
+                current_index = len(value_columns)
+                value_columns.append({"kind": "current", "date": None})
+            logical.append(current_index)
+        elif column["kind"] == "historical":
+            dates = [match.group(0) for match in _PRINTED_DATE_RE.finditer(_line_text(column["extra"]))]
+            if len(dates) > 1:
+                raise BloodworkParseError(f"Historical column header prints more than one date: {dates}")
+            logical.append(len(value_columns))
+            value_columns.append({"kind": "historical", "date": dates[0] if dates else None})
+        else:
+            logical.append(None)
+    return {"columns": columns, "bounds": _column_bounds(columns), "logical": logical,
+            "value_columns": value_columns}
+
+
+def _attach_header_dates(words: list[tuple], header: dict) -> bool:
+    """A Historical column's date may be printed on the line directly under its label."""
+    attached = False
+    for word in words:
+        if not _PRINTED_DATE_RE.fullmatch(word[4]):
+            continue
+        column = _column_at((word[0] + word[2]) / 2, header["bounds"])
+        logical = header["logical"][column] if column is not None else None
+        if logical is not None and header["value_columns"][logical]["kind"] == "historical" \
+                and header["value_columns"][logical]["date"] is None:
+            header["value_columns"][logical]["date"] = word[4]
+            attached = True
+    return attached
+
+
+def _cell_result(token: str) -> tuple[str, float | None, str]:
+    low = token.lower()
+    if low in _NOT_PERFORMED_CELLS:
+        return "not_performed", None, ""
+    if low in _QUALITATIVE_CELLS:
+        return "final", None, token
+    match = _CELL_VALUE_RE.fullmatch(token)
+    if match.group("ineq"):
+        return "final", None, match.group("ineq") + match.group("num")
+    return "final", float(match.group("num")), match.group("num")
+
+
+def _printed_lab_range(range_words: list[str]) -> tuple[float, float, str]:
+    display = " ".join(range_words).strip()
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)", display)
+    if not match:
+        return 0, 0, ""
+    return float(match.group(1)), float(match.group(2)), display
+
+
+def _section_date(section: dict) -> str | None:
+    return section["dates"][0] if section["dates"] else None
+
+
+def _section_label(section: dict) -> str:
+    date = _section_date(section) or "undated"
+    return f"Order {section['order_id']} (collected {date})" if section["order_id"] else f"Collected {date}"
+
+
+def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
+                         occurrences: list[dict], unrecognized: list[dict]) -> bool:
+    """Apply the single extraction rule to one table line. Returns True for a recognized marker row."""
+    words = _merge_cell_phrases(words)
+    value_centers = [(c["x0"] + c["x1"]) / 2 for c, li in zip(header["columns"], header["logical"])
+                     if li is not None]
+    first_value_center = min(value_centers)
+    name_words = []
+    for word in words:
+        if _is_cell_token(word[4]) or word[5] >= first_value_center:
+            break
+        name_words.append(word)
+    raw_name = _line_text(name_words).strip()
+    if not raw_name:
+        return False
+    match = markers_reference_lookup(raw_name)
+
+    cells: dict[int, str] = {}
+    range_words: list[str] = []
+    problems: list[str] = []
+    value_columns = header["value_columns"]
+    for word in words[len(name_words):]:
+        column = _column_at(word[5], header["bounds"])
+        kind = header["columns"][column]["kind"]
+        if kind == "range":
+            range_words.append(word[4])
+            continue
+        if kind == "ignore" or word[4] in _STANDALONE_FLAGS:
+            continue
+        if kind == "name":
+            problems.append(word[4])
+            continue
+        try:
+            pieces = _split_cell_word(word[4])
+        except _AmbiguousCell:
+            if match is None:
+                return False
+            raise BloodworkParseError(
+                f"{raw_name} ({_section_label(section)}): {word[4]!r} runs result digits together with no "
+                "flag or inequality between them, so its column boundary cannot be read")
+        if pieces is None:
+            if word[4].lower() in _NOT_PERFORMED_CELLS or word[4].lower() in _QUALITATIVE_CELLS:
+                pieces = [word[4]]
+            else:
+                problems.append(word[4])
+                continue
+        start = header["logical"][column]
+        if len(pieces) > 1:
+            first_center = word[0] + (word[2] - word[0]) * len(pieces[0]) / len(word[4]) / 2
+            start_column = _column_at(first_center, header["bounds"])
+            start = header["logical"][start_column] if start_column is not None else None
+        if start is None or start + len(pieces) > len(value_columns):
+            problems.append(word[4])
+            continue
+        for offset, piece in enumerate(pieces):
+            if start + offset in cells:
+                problems.append(piece)
+            else:
+                cells[start + offset] = piece
+
+    if match is None:
+        if cells and not problems and len(raw_name) <= 60:
+            unrecognized.append({
+                "raw_name": raw_name, "raw_value": " | ".join(cells[i] for i in sorted(cells)),
+                "raw_unit": "", "raw_range": " ".join(range_words), "source_context": _section_label(section),
+            })
+        return False
+    if problems:
+        raise BloodworkParseError(
+            f"{raw_name} ({_section_label(section)}): {problems} sits in a result column but is not a "
+            "readable result")
+
+    canonical, config = match
+    lab_lo, lab_hi, lab_display = _printed_lab_range(range_words)
+    for index, column in enumerate(value_columns):
+        date = _section_date(section) if column["kind"] == "current" else column["date"]
+        token = cells.get(index)
+        if token is None:
+            status, value, disp_value = ("not_performed", None, "") if date else (None, None, "")
+            if status is None:
+                continue
+        else:
+            if not date:
+                raise BloodworkParseError(
+                    f"{raw_name} ({_section_label(section)}): result {token!r} is in a {column['kind']} "
+                    "column with no governing date")
+            status, value, disp_value = _cell_result(token)
+        is_good = None
+        if config.get("kind") == "categorical" and value is None and disp_value:
+            is_good = disp_value.lower() in _EXPECTED_QUALITATIVE
+        occurrences.append({
+            "name": canonical,
+            "date_display": date,
+            "source_label": _section_label(section),
+            "status": status,
+            "value": value,
+            "disp_value": disp_value,
+            "is_good": is_good,
+            "lab_range_lo": lab_lo,
+            "lab_range_hi": lab_hi,
+            "lab_range_display": lab_display,
         })
-    content.append({
-        "type": "text",
-        "text": build_extraction_user_message(_marker_library_summary(), _protocol_library_summary(), note_text),
-    })
+    return True
+
+
+def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
+    """One rule for every Quest/Cleveland HeartLab section: each result printed in a test-name row is
+    paired with the date governing its column - a Current-style column takes its section's own
+    Collected: date, a Historical column takes the date printed in its own header. Sections are split
+    at Collected:/Order ID lines; pages repeating an Order ID rejoin that section. Returns
+    (marker_occurrences, unrecognized_rows)."""
+    sections: list[dict] = []
+    by_order: dict[str, dict] = {}
+    occurrences: list[dict] = []
+    unrecognized: list[dict] = []
+    state = {"section": None, "header": None, "excluded": False, "await_dates": False, "pending_dates": []}
+
+    def new_section(order_id):
+        section = {"order_id": order_id, "dates": [], "has_table": False}
+        sections.append(section)
+        if order_id:
+            by_order[order_id] = section
+        return section
+
+    def switch(section):
+        if section is not state["section"]:
+            state.update(section=section, header=None, excluded=False, await_dates=False)
+
+    def add_dates(section, dates):
+        for date in dates:
+            known = [_normalize_date_for_matching(d) for d in section["dates"]]
+            key = _normalize_date_for_matching(date)
+            if known and key not in known:
+                raise BloodworkParseError(
+                    f"Order ID {section['order_id']} prints conflicting Collected: dates "
+                    f"{section['dates'][0]!r} and {date!r}")
+            if key not in known:
+                section["dates"].append(date)
+
+    for page in pdf_pages:
+        state["excluded"] = False
+        for words in _group_lines(_page_words(page), _LINE_TOLERANCE_PT):
+            text = _line_text(words)
+            order = _ORDER_ID_RE.search(text)
+            collected = _COLLECTED_RE.search(text)
+            if order:
+                order_id = order.group(1)
+                current = state["section"]
+                existing = by_order.get(order_id)
+                if current is not None and current["order_id"] is None and not current["has_table"]:
+                    if existing is not None and existing is not current:
+                        sections.remove(current)
+                        add_dates(existing, current["dates"])
+                        target = existing
+                    else:
+                        current["order_id"] = order_id
+                        by_order[order_id] = current
+                        target = current
+                else:
+                    target = existing or new_section(order_id)
+                add_dates(target, state["pending_dates"])
+                switch(target)
+            if collected:
+                date = collected.group(1)
+                current = state["section"]
+                known = [_normalize_date_for_matching(d) for d in current["dates"]] if current else []
+                if current is None:
+                    target = new_section(None)
+                elif not known or _normalize_date_for_matching(date) in known or order:
+                    target = current
+                else:
+                    target = new_section(None)
+                add_dates(target, [date])
+                state["pending_dates"].append(date)
+                switch(target)
+            if order or collected:
+                continue
+
+            if state["section"] is None:
+                switch(new_section(None))
+            section = state["section"]
+            if any(title in text.lower() for title in _TREND_TABLE_TITLES):
+                state.update(excluded=True, header=None)
+                continue
+            if state["excluded"]:
+                continue
+            header = _bloodwork_header(words)
+            if header:
+                state.update(header=header, await_dates=True, pending_dates=[])
+                section["has_table"] = True
+                continue
+            if state["header"] is None:
+                continue
+            if state["await_dates"]:
+                state["await_dates"] = False
+                if _attach_header_dates(words, state["header"]):
+                    continue
+            if _parse_bloodwork_row(words, state["header"], section, occurrences, unrecognized):
+                state["pending_dates"] = []
+    return occurrences, unrecognized
+
+
+# ---------------------------------------------------------------------------
+# Deterministic DEXA parsing (GE Lunar Prodigy, image-only pages -> Tesseract OCR)
+# ---------------------------------------------------------------------------
+
+_DEXA_OCR_DPI = 300
+_DEXA_LINE_TOLERANCE_PX = 15.0
+_DEXA_HEADER_LABELS = [
+    ("region", ("region",)), ("date", ("date",)),
+    ("bmd", ("bmd",)),
+    ("t_score", ("ya", "t-score")), ("t_score", ("t-score",)),
+    ("z_score", ("am", "z-score")), ("z_score", ("z-score",)),
+    ("pct_fat", ("%fat",)), ("pct_fat", ("tissue", "%fat")), ("pct_fat", ("%", "fat")),
+    ("total_mass", ("total", "mass")), ("fat_mass", ("fat", "mass")), ("lean_mass", ("lean", "mass")),
+    ("bmc", ("bmc",)), ("ignore", ("centile",)),
+    ("vat_mass", ("mass",)), ("vat_volume", ("volume",)), ("vat_area", ("area",)),
+]
+_DEXA_BMD_ROWS = {
+    "AP Spine L1-L4": ("L1", "L2", "L3", "L4", "L1-L2", "L1-L3", "L1-L4", "L2-L3", "L2-L4", "L3-L4"),
+    "Left Femur": ("Neck", "Total"),
+    "Right Femur": ("Neck", "Total"),
+    "Left Forearm": ("Radius UD", "Ulna UD", "Radius 33%", "Ulna 33%", "Both UD", "Both 33%",
+                     "Radius Total", "Ulna Total", "Both Total"),
+}
+_DEXA_SEGMENT_GROUPS = ("Arms", "Legs")
+_DEXA_SEGMENT_SUBROWS = ("Total", "Right", "Left", "Difference")
+_DEXA_SEGMENT_SINGLES = ("Trunk", "Android", "Gynoid", "Total")
+_DEXA_NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?%?")
+_DEXA_PATIENT_RE = re.compile(r"\b(?:patient(?:\s+name)?|name)\s*:\s*(.+)", re.IGNORECASE)
+_DEXA_PATIENT_STOP_RE = re.compile(
+    r"\s+(?:birth|dob|date|sex|gender|age|height|weight|ethnicity|referring|facility|patient\s*id|id|"
+    r"measured|analyzed|physician)\b.*$", re.IGNORECASE)
+
+
+def _dexa_label(text: str) -> str:
+    text = text.translate(str.maketrans({"\u2013": "-", "\u2014": "-", "\u2212": "-"}))
+    return re.sub(r"\s+", " ", text).strip(" :").lower()
+
+
+def _dexa_number(text: str) -> tuple[float, str] | None:
+    cleaned = text.translate(str.maketrans({"\u2212": "-", "\u2013": "-", "\u2014": "-"}))
+    cleaned = cleaned.strip("()[]{}|,;:'\"*")
+    if not _DEXA_NUMBER_RE.fullmatch(cleaned):
+        return None
+    printed = cleaned.rstrip("%")
+    return float(printed), printed
+
+
+def _name_tokens(name: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z]+", name.lower()) if len(token) > 1}
+
+
+def _ocr_page_words(page) -> list[tuple]:
+    pixmap = page.get_pixmap(dpi=_DEXA_OCR_DPI)
+    image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+    data = pytesseract.image_to_data(image, config="--psm 6", output_type=pytesseract.Output.DICT)
+    words = []
+    for index, text in enumerate(data["text"]):
+        if text and text.strip() and float(data["conf"][index]) >= 0:
+            x, y = data["left"][index], data["top"][index]
+            words.append((float(x), float(y), float(x + data["width"][index]),
+                          float(y + data["height"][index]), text.strip()))
+    return words
+
+
+def _ocr_cell_reader(page):
+    """Re-read one printed cell box (OCR pixel coordinates) on its own, so a stroke drawn near a value
+    (a circled number) can't hide it from the full-page pass."""
+    scale = 72 / _DEXA_OCR_DPI
+
+    def read(box):
+        clip = fitz.Rect(box[0] * scale, box[1] * scale, box[2] * scale, box[3] * scale) & page.rect
+        if clip.is_empty:
+            return None
+        pixmap = page.get_pixmap(dpi=_DEXA_OCR_DPI, clip=clip)
+        image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+        tokens = [t for t in pytesseract.image_to_string(image, config="--psm 7").split()
+                  if _dexa_number(t) is not None]
+        return tokens[0] if len(tokens) == 1 else None
+    return read
+
+
+def _dexa_header(words: list[tuple]) -> dict | None:
+    columns = _match_header_columns(words, _DEXA_HEADER_LABELS)
+    kinds = {column["kind"] for column in columns}
+    if "bmd" in kinds and kinds & {"t_score", "z_score"}:
+        table_type = "bmd"
+    elif {"date", "total_mass", "fat_mass", "lean_mass"} <= kinds:
+        table_type = "history"
+    elif "date" in kinds and kinds & {"vat_mass", "vat_area", "vat_volume"} and "total_mass" not in kinds:
+        table_type = "vat"
+    elif {"total_mass", "fat_mass", "lean_mass"} <= kinds:
+        table_type = "segmental"
+    else:
+        return None
+    for column in columns:
+        if column["kind"] in ("total_mass", "fat_mass", "lean_mass", "vat_mass", "bmc") \
+                and "kg" in _line_text(column["extra"]).lower():
+            raise DexaParseError("DEXA mass columns are printed in kg; only lb is supported")
+    if columns[0]["kind"] not in ("region", "date"):
+        columns.insert(0, {"kind": "region", "x0": columns[0]["x0"] - 1, "x1": columns[0]["x0"] - 1, "extra": []})
+    # Printed cell positions only: anything outside the header's own span (margin notes) is not data.
+    pad = (columns[-1]["x1"] - columns[0]["x0"]) * 0.05
+    left = columns[0]["x0"] - pad if columns[0]["x1"] > columns[0]["x0"] else float("-inf")
+    area_column = next((c for c in columns if c["kind"] == "vat_area"), None)
+    return {
+        "type": table_type, "columns": columns, "left": left, "right": columns[-1]["x1"] + pad,
+        "bounds": _column_bounds(columns),
+        "area_cm2": bool(area_column and "cm" in _line_text(area_column["extra"]).lower()),
+    }
+
+
+def _dexa_row(words: list[tuple], table: dict) -> tuple[str, str, dict]:
+    name_words, cells = [], {}
+    for word in words:
+        center = (word[0] + word[2]) / 2
+        if not table["left"] <= center <= table["right"]:
+            continue
+        column = _column_at(center, table["bounds"])
+        kind = table["columns"][column]["kind"]
+        if kind in ("region", "date"):
+            name_words.append(word[4])
+            continue
+        if kind == "ignore":
+            continue
+        number = _dexa_number(word[4])
+        if number is None:
+            continue  # stroke fragments (e.g. a hand-drawn circle) inside a cell are not data
+        if kind in cells:
+            raise DexaParseError(f"DEXA row {' '.join(name_words)!r}: two numbers in the {kind} cell")
+        cells[kind] = number
+    printed = " ".join(name_words).strip()
+    return _dexa_label(printed), printed, cells
+
+
+def _fill_blank_cells(words: list[tuple], table: dict, cells: dict, read_cell) -> None:
+    """For a recognized row, re-read each declared cell the page pass left blank, inside that cell's
+    printed box only."""
+    if read_cell is None:
+        return
+    top = min(w[1] for w in words) - 6
+    bottom = max(w[3] for w in words) + 6
+    for column, (lo, hi) in zip(table["columns"], table["bounds"]):
+        if column["kind"] in ("region", "date", "ignore") or column["kind"] in cells:
+            continue
+        number = _dexa_number(read_cell((max(lo, table["left"]), top, min(hi, table["right"]), bottom)) or "")
+        if number is not None:
+            cells[column["kind"]] = number
+
+
+def _parse_dexa_page(words: list[tuple], read_cell=None) -> tuple[dict, str | None]:
+    rows = {"bmd": [], "segmental": [], "history": [], "vat": []}
+    printed_name = None
+    table = region = group = None
+    for line in _group_lines(words, _DEXA_LINE_TOLERANCE_PX):
+        text = _line_text(line)
+        patient = _DEXA_PATIENT_RE.search(text)
+        if patient:
+            if printed_name is None:
+                printed_name = _DEXA_PATIENT_STOP_RE.sub("", patient.group(1)).strip()
+            continue
+        label_text = _dexa_label(text)
+        for title in _DEXA_BMD_ROWS:
+            if _dexa_label(title) in label_text:
+                region = title
+        header = _dexa_header(line)
+        if header:
+            table, group = header, None
+            continue
+        if table is None:
+            continue
+        label, printed_label, cells = _dexa_row(line, table)
+        if not label:
+            continue
+        if table["type"] == "bmd":
+            if region is None:
+                continue
+            row = next((r for r in _DEXA_BMD_ROWS[region] if _dexa_label(r) == label), None)
+            if row is None:
+                continue
+            _fill_blank_cells(line, table, cells, read_cell)
+            if "bmd" not in cells:
+                raise DexaParseError(f"DEXA {region} row {row!r}: BMD cell is unreadable")
+            rows["bmd"].append({"region": region, "row": row, "bmd": cells["bmd"][0],
+                                "t_score": cells.get("t_score", (None,))[0],
+                                "z_score": cells.get("z_score", (None,))[0]})
+        elif table["type"] == "segmental":
+            group_names = {g.lower(): g for g in _DEXA_SEGMENT_GROUPS}
+            parts = label.split(" ", 1)
+            if label in group_names and not cells:
+                group = group_names[label]
+                continue
+            if len(parts) == 2 and parts[0] in group_names and parts[1] in {s.lower() for s in _DEXA_SEGMENT_SUBROWS}:
+                group = group_names[parts[0]]
+                row = f"{group} {parts[1].title()}"
+            elif group and label in {s.lower() for s in _DEXA_SEGMENT_SUBROWS}:
+                row = f"{group} {label.title()}"
+            elif label in {s.lower() for s in _DEXA_SEGMENT_SINGLES}:
+                group, row = None, label.title()
+            else:
+                continue
+            if not cells:
+                continue
+            _fill_blank_cells(line, table, cells, read_cell)
+            rows["segmental"].append({"row": row, **{
+                key: cells[kind][0] if kind in cells else None
+                for key, kind in (("pct_fat", "pct_fat"), ("total_mass_lb", "total_mass"),
+                                  ("fat_mass_lb", "fat_mass"), ("lean_mass_lb", "lean_mass"),
+                                  ("bmc_lb", "bmc"))}})
+        elif _PRINTED_DATE_RE.fullmatch(printed_label):
+            date_display = printed_label
+            _fill_blank_cells(line, table, cells, read_cell)
+            if table["type"] == "history":
+                missing = [k for k in ("total_mass", "fat_mass", "lean_mass") if k not in cells]
+                if any(c["kind"] == "pct_fat" for c in table["columns"]) and "pct_fat" not in cells:
+                    missing.append("pct_fat")
+                if missing:
+                    raise DexaParseError(f"DEXA body composition history row {label!r}: unreadable {missing}")
+                rows["history"].append({
+                    "date_display": date_display, "total_mass_lb": cells["total_mass"][0],
+                    "fat_mass_lb": cells["fat_mass"][0], "lean_mass_lb": cells["lean_mass"][0],
+                    "body_fat_pct": f"{cells['pct_fat'][1]}%" if "pct_fat" in cells else "",
+                })
+            elif table["type"] == "vat":
+                area = cells.get("vat_area", (None,))[0] if table["area_cm2"] else None
+                mass = cells.get("vat_mass", (None,))[0]
+                if mass is None and area is None:
+                    continue
+                rows["vat"].append({"date_display": date_display, "vat_fat_mass_lb": mass,
+                                    "visceral_fat_area_cm2": area})
+    return rows, printed_name
+
+
+def _merge_dexa_history(history: list[dict], vat: list[dict]) -> list[dict]:
+    """One reading per scan date: a VAT row merges into that date's composition row, and only a date with
+    no composition row at all becomes a VAT-only reading (sentinel -1 / "" for unmeasured metrics)."""
+    by_date: dict[tuple, dict] = {}
+    for row in history:
+        key = _normalize_date_for_matching(row["date_display"])
+        reading = {**row, "vat_fat_mass_lb": None, "visceral_fat_area_cm2": None}
+        existing = by_date.get(key)
+        if existing is not None:
+            if any(existing[f] != reading[f] for f in ("total_mass_lb", "fat_mass_lb", "lean_mass_lb")):
+                raise DexaParseError(f"DEXA history prints two different compositions for {row['date_display']}")
+            continue
+        by_date[key] = reading
+    for row in vat:
+        key = _normalize_date_for_matching(row["date_display"])
+        reading = by_date.setdefault(key, {
+            "date_display": row["date_display"], "total_mass_lb": -1, "fat_mass_lb": -1,
+            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": None, "visceral_fat_area_cm2": None,
+        })
+        for field_name in ("vat_fat_mass_lb", "visceral_fat_area_cm2"):
+            value = row[field_name]
+            if value is None:
+                continue
+            if reading[field_name] not in (None, value):
+                raise DexaParseError(f"DEXA VAT table prints two different {field_name} values for "
+                                     f"{row['date_display']}")
+            reading[field_name] = value
+    return [by_date[key] for key in sorted(by_date)]
+
+
+def _parse_dexa_tables(dexa_pdfs: list[str], patient_name: str | None) -> dict:
+    """OCR each DEXA page and read the fixed Lunar Prodigy tables by row label and header column."""
+    if not patient_name:
+        raise DexaParseError("A patient name is required to verify DEXA pages")
+    expected = _name_tokens(patient_name)
+    collected = {"bmd": [], "segmental": [], "history": [], "vat": []}
+    ocr_text = []
+    for pdf_path in dexa_pdfs:
+        with fitz.open(pdf_path) as document:
+            for page_number, page in enumerate(document, start=1):
+                words = _ocr_page_words(page)
+                ocr_text.append("\n".join(_line_text(line) for line in _group_lines(words, _DEXA_LINE_TOLERANCE_PX)))
+                rows, printed_name = _parse_dexa_page(words, _ocr_cell_reader(page))
+                if printed_name is not None or any(rows.values()):
+                    if printed_name is None or _name_tokens(printed_name) != expected:
+                        raise DexaPatientMismatchError(pdf_path, page_number, printed_name, patient_name)
+                for key, values in rows.items():
+                    collected[key].extend(values)
+    if not collected["bmd"]:
+        raise DexaParseError(f"DEXA BMD/T-score table came back empty for {dexa_pdfs}")
+    if not collected["history"]:
+        raise DexaParseError(f"DEXA Body Composition History table came back empty for {dexa_pdfs}")
+    return {
+        "dexa_history": _merge_dexa_history(collected["history"], collected["vat"]),
+        "bmd": collected["bmd"],
+        "segmental": collected["segmental"],
+        "ocr_text": "\n".join(ocr_text),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Structured provider notes (see templates/provider_notes_template.md)
+# ---------------------------------------------------------------------------
+
+_NOTE_SECTIONS = ("consultation note", "patient concerns", "protocol", "marker targets", "vitality index")
+_PATIENT_SYSTEMS = ("Drive", "Pace", "Fuel", "Flow", "Repair", "Reserves", "Structure")
+_VITALITY_VALUES = ("No Concern", "Some Concern", "Significant Concern", "Not Assessed")
+
+
+def _parse_structured_note(note_text: str) -> dict:
+    parsed = {"protocol": [], "pain_points": [], "marker_overrides": [], "vitality_index": {}}
+    text = re.sub(r"<!--.*?-->", "", note_text, flags=re.DOTALL)
+    section = None
+    seen = set()
+    systems = {system.lower(): system for system in _PATIENT_SYSTEMS}
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("## "):
+            name = line[3:].strip().lower()
+            if name not in _NOTE_SECTIONS:
+                raise ProviderNoteFormatError(f"line {number}: unknown section {line[3:].strip()!r}")
+            if name in seen:
+                raise ProviderNoteFormatError(f"line {number}: section {line[3:].strip()!r} appears twice")
+            seen.add(name)
+            section = name
+            continue
+        if section is None:
+            if line.startswith("# "):
+                continue
+            raise ProviderNoteFormatError(f"line {number}: text outside a '## ' section")
+        if section == "consultation note":
+            continue
+        if not line.startswith("- "):
+            raise ProviderNoteFormatError(f"line {number}: expected a '- ' item under {section!r}")
+        item = line[2:].strip()
+        if section == "patient concerns":
+            match = re.fullmatch(r"(?P<text>[^|\"]+?)\s*\|\s*Systems?:\s*(?P<systems>[^|]+)", item)
+            names = [s.strip().lower() for s in match.group("systems").split(",")] if match else []
+            if not match or not names or any(s not in systems for s in names):
+                raise ProviderNoteFormatError(f"line {number}: concern must read '<concern> | Systems: <system>, ...'")
+            parsed["pain_points"].append({"text": match.group("text"), "categories": [systems[s] for s in names]})
+        elif section == "protocol":
+            match = re.fullmatch(r"(?P<name>[^|]+?)(?:\s*\|\s*Cadence:\s*(?P<cadence>[^|]+?))?", item)
+            if not match:
+                raise ProviderNoteFormatError(f"line {number}: protocol item must read '<compound> | Cadence: <cadence>'")
+            known = lookup_protocol_item(match.group("name"))
+            config = known[1] if known else {}
+            parsed["protocol"].append({
+                "name": known[0] if known else match.group("name"),
+                "cadence": match.group("cadence"),
+                "target_categories": list(config.get("typical_categories", [])),
+                "lab_visible": config.get("lab_visible", True),
+            })
+        elif section == "marker targets":
+            match = re.fullmatch(r"(?P<marker>[^:]+):\s*(?P<lo>\d+(?:\.\d+)?)\s*[-–]\s*(?P<hi>\d+(?:\.\d+)?)", item)
+            marker = markers_reference_lookup(match.group("marker")) if match else None
+            if not marker:
+                raise ProviderNoteFormatError(f"line {number}: target must read '<recognized marker>: <lo>-<hi>'")
+            parsed["marker_overrides"].append({"marker": marker[0], "lo": float(match.group("lo")),
+                                               "hi": float(match.group("hi"))})
+        elif section == "vitality index":
+            match = re.fullmatch(r"(?P<label>[^:]+):\s*(?P<value>.+)", item)
+            label = match.group("label").strip() if match else ""
+            if label == "Physical Performance":
+                continue
+            if label not in scoring.VITALITY_LABELS or match.group("value").strip() not in _VITALITY_VALUES:
+                raise ProviderNoteFormatError(f"line {number}: unrecognized Vitality Index entry {item!r}")
+            parsed["vitality_index"][label] = match.group("value").strip()
+    if not seen:
+        raise ProviderNoteFormatError("no structured '## ' sections found")
+    if "vitality index" in seen:
+        for label in scoring.VITALITY_LABELS:
+            parsed["vitality_index"].setdefault(label, "Not Assessed")
+    return parsed
+
+
+def parse_provider_note(note_text: str | None) -> dict:
+    """A note that doesn't follow the structured template is rejected and flagged for manual entry -
+    its content is never read any other way."""
+    result = {"accepted": False, "protocol": [], "pain_points": [], "marker_overrides": [],
+              "vitality_index": {}, "other_notes": []}
+    if not note_text or not note_text.strip():
+        return result
+    try:
+        result.update(_parse_structured_note(note_text), accepted=True)
+    except ProviderNoteFormatError as error:
+        result["other_notes"].append(
+            f"PROVIDER NOTE REJECTED - {error} - NOTE WAS NOT READ; ENTER PROTOCOL, CONCERNS, TARGETS, AND "
+            "STATUS MANUALLY USING THE PROVIDER NOTES TEMPLATE")
+    return result
+
+
+def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
+            patient_name: str | None = None, audit_root: str | None = None) -> dict:
+    """Step 1: deterministic parse of raw material into the extraction shape. No model call."""
+    occurrences, unrecognized = [], []
+    if labs_pdf:
+        with fitz.open(labs_pdf) as document:
+            occurrences, unrecognized = _parse_bloodwork_tables(list(document))
+    dexa = (_parse_dexa_tables(dexa_pdfs, patient_name) if dexa_pdfs
+            else {"dexa_history": [], "bmd": [], "segmental": [], "ocr_text": ""})
+    note = parse_provider_note(note_text)
+
+    dated = [occ for occ in occurrences
+             if isinstance(_normalize_date_for_matching(occ["date_display"]), tuple)
+             and (occ["value"] is not None or occ["disp_value"])]
+    first = min(dated, key=lambda occ: _normalize_date_for_matching(occ["date_display"]), default=None)
+    latest = max(dated, key=lambda occ: _normalize_date_for_matching(occ["date_display"]), default=None)
+    single_draw = first is None or (_normalize_date_for_matching(first["date_display"])
+                                    == _normalize_date_for_matching(latest["date_display"]))
+    extracted = {
+        "name": patient_name or "",
+        "first_draw_date": "" if single_draw else first["date_display"],
+        "latest_draw_date": latest["date_display"] if latest else "",
+        "marker_occurrences": occurrences,
+        "dexa_history": dexa["dexa_history"],
+        "dexa_bmd": dexa["bmd"],
+        "dexa_segmental": dexa["segmental"],
+        "dexa_ocr_text": dexa["ocr_text"],
+        "protocol": note["protocol"],
+        "pain_points": note["pain_points"],
+        "marker_overrides": note["marker_overrides"],
+        "vitality_index": note["vitality_index"],
+        "provider_note_raw": note_text if note["accepted"] else None,
+        "unrecognized_markers": unrecognized,
+        "other_notes": note["other_notes"],
+    }
 
     safe_patient = re.sub(r"[^A-Za-z0-9._-]+", "_", (patient_name or "patient")).strip("._") or "patient"
     audit_base = Path(audit_root or tempfile.gettempdir()) / "celldeep_extraction_audits"
     audit_base.mkdir(parents=True, exist_ok=True)
     audit_dir = Path(tempfile.mkdtemp(prefix=f"{safe_patient}_", dir=audit_base))
-
-    attempts = 2 if labs_pdf else 1
-    for attempt in range(1, attempts + 1):
-        resp = _create_anthropic_message(
-            client,
-            "extraction",
-            model=MODEL,
-            max_tokens=16000,
-            system=EXTRACTION_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": content}],
-            output_config={"format": {"type": "json_schema", "schema": EXTRACTION_OUTPUT_SCHEMA}},
-        )
-        text_blocks = [block.text for block in resp.content if hasattr(block, "text")]
-        raw_text = "".join(text_blocks)
-        parsed = _parse_json_response(raw_text, patient_name=patient_name)
-        raw_path = audit_dir / f"attempt-{attempt}-raw-response.txt"
-        occurrences_path = audit_dir / f"attempt-{attempt}-marker-occurrences.json"
-        raw_path.write_text(raw_text, encoding="utf-8")
-        occurrences_json = json.dumps(parsed.get("marker_occurrences", []), indent=2, ensure_ascii=False)
-        occurrences_path.write_text(occurrences_json, encoding="utf-8")
-        print(f"Extraction audit saved: {occurrences_path}")
-        print(occurrences_json)
-
-        if labs_pdf:
-            _attach_report_collection_dates(parsed, lab_text)
-        missing = _missing_source_marker_dates(parsed, lab_text) if labs_pdf else []
-        mismatches = _mismatched_source_marker_values(parsed, lab_text) if labs_pdf else []
-        if not missing and not mismatches:
-            return parsed
-
-        source_evidence = _source_marker_dates(lab_text)
-        source_evidence_path = audit_dir / f"attempt-{attempt}-source-evidence.json"
-        source_evidence_text = json.dumps(
-            {
-                canonical: [
-                    {
-                        "normalized_date": list(normalized_date)
-                        if isinstance(normalized_date, tuple) else normalized_date,
-                        "date_display": date_display,
-                    }
-                    for normalized_date, date_display in dates.items()
-                ]
-                for canonical, dates in source_evidence.items()
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-        source_evidence_path.write_text(source_evidence_text, encoding="utf-8")
-        debug_path = audit_dir / f"attempt-{attempt}-occurrence-debug.txt"
-        lab_lines = lab_text.splitlines()
-        debug_blocks = []
-        for canonical, date_display in missing:
-            marker_config = MARKER_LIBRARY.get(canonical, {})
-            marker_names = [canonical, *marker_config.get("aliases", [])]
-            matching_indices = [
-                index for index, line in enumerate(lab_lines)
-                if date_display.lower() in line.lower()
-                or any(name.lower() in line.lower() for name in marker_names)
-            ]
-            context_indices = sorted({
-                context_index
-                for index in matching_indices
-                for context_index in range(max(0, index - 2), min(len(lab_lines), index + 3))
-            })
-            debug_blocks.append(
-                f"Missing occurrence: {canonical} [{date_display}]\n"
-                f"Matching line indices (zero-based): {matching_indices}\n"
-                "Context:\n"
-                + "\n".join(f"{index}: {lab_lines[index]}" for index in context_indices)
-            )
-        debug_text = "\n\n".join(debug_blocks) + "\n"
-        debug_path.write_text(debug_text, encoding="utf-8")
-        print(f"Occurrence debug saved: {audit_dir}")
-        print(f"--- OCCURRENCE DEBUG (attempt {attempt}) ---")
-        print(debug_text, end="")
-        print(f"--- SOURCE EVIDENCE (attempt {attempt}) ---")
-        print(source_evidence_text)
-        if mismatches:
-            mismatches_path = audit_dir / f"attempt-{attempt}-value-mismatches.json"
-            mismatches_text = json.dumps(
-                [
-                    {"marker": marker, "date_display": date_display, "extracted_disp_value": disp_value,
-                     "source_tokens": tokens}
-                    for marker, date_display, disp_value, tokens in mismatches
-                ],
-                indent=2,
-                ensure_ascii=False,
-            )
-            mismatches_path.write_text(mismatches_text, encoding="utf-8")
-            print(f"--- VALUE MISMATCHES (attempt {attempt}) ---")
-            print(mismatches_text)
-        print("--- END OCCURRENCE DEBUG ---")
-
-        message_parts = []
-        if missing:
-            message_parts.append(_format_missing_occurrences(missing))
-        if mismatches:
-            message_parts.append(_format_value_mismatches(mismatches))
-        message = " ".join(message_parts)
-        if attempt < attempts:
-            print(f"{message}. Retrying extraction once.", file=sys.stderr)
-        else:
-            error_cls = ExtractionValueMismatchError if mismatches and not missing else ExtractionOccurrenceValidationError
-            raise error_cls(
-                f"{message}. Audit files: {audit_dir}"
-            )
-
-    raise AssertionError("extraction attempt loop exited unexpectedly")
+    occurrences_path = audit_dir / "marker-occurrences.json"
+    occurrences_path.write_text(json.dumps(occurrences, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"Extraction audit saved: {occurrences_path}")
+    return extracted
 
 
 _LAB_RANGE_TRIOS = [
@@ -1184,196 +1734,29 @@ def markers_reference_lookup(raw_name: str):
     return lookup_marker(raw_name)
 
 
-# An LLM occasionally degrades mid-response and drops spaces between words for a stretch of text
-# (never a data-value corruption, always prose) - a real word essentially never runs this long
-# with no space, so this is a reliable enough signal to catch it without false-positiving on
-# legitimate long marker/compound names.
-_RUN_ON_WORD_RE = re.compile(r"[A-Za-z]{24,}")
-
-# A single glued-together word is only the easy case: real corrupted text (see the actual Evan
-# Walker report) is often broken back up into <24-char chunks by ordinary punctuation the text
-# still contains ("hormone-binding", "globulin, a protein"), so a run-on passage can dodge the
-# word-length check entirely while still having no spaces between its actual words. Real English
-# prose runs roughly one space per 5-6 letters; anything this sparse over a long-enough sample is
-# corrupted regardless of where the letter-runs happen to be broken by punctuation.
-_MIN_SAMPLE_LETTERS = 40
-_MAX_LETTERS_PER_SPACE = 12
-
-
-def _is_run_on_text(text: str) -> bool:
-    if _RUN_ON_WORD_RE.search(text):
-        return True
-    letters = sum(1 for c in text if c.isalpha())
-    if letters < _MIN_SAMPLE_LETTERS:
-        return False
-    spaces = text.count(" ")
-    return spaces == 0 or (letters / spaces) > _MAX_LETTERS_PER_SPACE
-
-
-def _find_corrupted_text_paths(value, path: str = "") -> list[str]:
-    """Recursively find generated string fields that look like they lost their spacing."""
-    found = []
-    if isinstance(value, str):
-        if _is_run_on_text(value):
-            found.append(path)
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            found.extend(_find_corrupted_text_paths(item, f"{path}.{key}" if path else str(key)))
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            found.extend(_find_corrupted_text_paths(item, f"{path}[{index}]"))
-    return found
-
-
-def _clear_path(data, path: str) -> None:
-    """Blank out one corrupted field by its dotted/bracketed path rather than rendering garbled
-    run-on text - used only as a last resort after retries have already failed."""
-    parts = re.findall(r"[^.\[\]]+|\[\d+\]", path)
-    node = data
-    for part in parts[:-1]:
-        node = node[int(part[1:-1])] if part.startswith("[") else node[part]
-    last = parts[-1]
-    if last.startswith("["):
-        node[int(last[1:-1])] = ""
-    else:
-        node[last] = ""
-
-
-def _narrative_marker_payload(marker: Marker) -> dict:
-    """Expose only values that survived deterministic reconciliation to the copywriter."""
-    history = [entry for entry in marker.full_history
-               if entry.get("date_display") and
-               (entry.get("value") is not None or entry.get("disp_value"))]
-    return {
-        "name": marker.name,
-        "category": marker.category,
-        "unit": marker.unit,
-        "kind": marker.kind,
-        "disp_range": marker.disp_range,
-        "then_value": marker.then,
-        "then_display": marker.disp_then,
-        "then_date_display": marker.then_date_display,
-        "now_value": marker.now,
-        "now_display": marker.disp_now,
-        "now_date_display": marker.now_date_display,
-        "history": history,
-        "then_tier": marker.then_tier,
-        "then_pct": marker.then_pct,
-        "now_tier": marker.now_tier,
-        "now_pct": marker.now_pct,
-        "is_good_then": marker.is_good_then,
-        "is_good_now": marker.is_good_now,
-        "unscored_reason": marker.unscored_reason,
-    }
-
-
-def generate_copy(client: Anthropic, record: PatientRecord) -> tuple[dict, list[str]]:
-    """Step 3: the interpretive writing pass. Takes the fully-scored PatientRecord (all numbers,
-    all tiers already fixed by deterministic code) and generates the sentences that go around them,
-    in V23's locked voice."""
-    category_membership = {
-        patient_category: [marker.name for marker in record.markers
-                           if DATA_TO_PATIENT_CATEGORY.get(marker.category) == patient_category
-                           or NARRATIVE_CATEGORY_OVERRIDE.get(marker.name) == patient_category]
-        for patient_category in DATA_TO_PATIENT_CATEGORY.values()
-    }
-    # Structure isn't derived from any marker category (it comes from DEXA, not bloodwork), so
-    # without an explicit entry the model has no membership signal for it at all - unlike every
-    # other category, which at least gets an explicit empty list telling it "no markers here."
-    category_membership["Structure"] = (["DEXA body composition scan"] if record.dexa_history else [])
-    record_payload = asdict(record)
-    record_payload["markers"] = [_narrative_marker_payload(marker) for marker in record.markers]
-    payload = json.dumps({"record": record_payload, "patient_facing_category_membership": category_membership},
-                         default=str, indent=2)
-    warnings = []
-    parsed = {}
-    diag_prefix = _diagnostic_path_prefix(record.name)
-    for attempt in range(2):
-        resp = _create_anthropic_message(
-            client,
-            "copy generation",
-            model=MODEL,
-            max_tokens=16000,
-            system=GENERATION_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": f"Here is the fully scored patient record and its category membership:\n\n{payload}\n\n"
-                                                     "Generate the interpretive copy per the instructions."}],
-        )
-        text_blocks = [b.text for b in resp.content if hasattr(b, "text")]
-        raw_text = "".join(text_blocks)
-        with open("/tmp/pre_sanitize_copy.json", "w", encoding="utf-8") as f:
-            f.write(raw_text)
-        # per-attempt, per-patient, never overwritten by a concurrent request for a different
-        # patient - the exact raw API response text, untouched by parsing or detection, so a
-        # real-data corruption case can be inspected after the fact instead of reconstructed
-        with open(f"{diag_prefix}_generate_copy_attempt{attempt}_raw.txt", "w", encoding="utf-8") as f:
-            f.write(raw_text)
-        parsed = _parse_json_response(raw_text, patient_name=record.name)
-        corrupted_paths = _find_corrupted_text_paths(parsed)
-        # printed (not just written to /tmp, which is ephemeral per-dyno and not user-visible on
-        # Render) so this shows up in the live service's actual log stream for every real request,
-        # and stop_reason is included since a truncated response (hit max_tokens mid-generation)
-        # is a distinct, rule-out-able cause of malformed text that isn't a spacing bug at all
-        detection_line = (f"COPY-CORRUPTION-DETECTION patient={record.name!r} attempt={attempt} "
-                           f"stop_reason={getattr(resp, 'stop_reason', None)!r} "
-                           f"response_chars={len(raw_text)} corrupted_paths={corrupted_paths!r}")
-        print(detection_line)
-        with open(f"{diag_prefix}_generate_copy_detection_log.txt", "a", encoding="utf-8") as log:
-            log.write(detection_line + "\n")
-        if not corrupted_paths:
-            # deliberately NOT added to `warnings`/other_notes: that drives the "a few items need
-            # review" banner in the downloadable notes, and a clean detection pass is not an item
-            # needing review - the stdout/print line above is the trace for this case, visible in
-            # Render's log stream, without turning every ordinary clean report into a false flag
-            return parsed, warnings
-        if attempt == 0:
-            continue  # one resample is usually enough to clear a stochastic formatting glitch
-        for path in corrupted_paths:
-            _clear_path(parsed, path)
-        warnings.append(
-            "WARNING: GENERATED COPY HAD RUN-ON/UNSPACED TEXT THAT SURVIVED A RETRY - FIELDS "
-            f"BLANKED RATHER THAN RENDERED GARBLED: {', '.join(corrupted_paths)} - NEEDS HUMAN REVIEW"
-        )
-    return parsed, warnings
-
-
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitality_index=None):
-    client = Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS,
-        max_retries=ANTHROPIC_MAX_RETRIES,
-    )
     raw_lab_text = _pdf_text(labs_pdf)
-    raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
-    extraction_note = note_text
-    if vitality_index:
-        vitality_block = "VITALITY INDEX (structured selections):\n" + "\n".join(
-            f"{label}: {value}" for label, value in vitality_index.items()
-        )
-        extraction_note = f"{note_text}\n\n{vitality_block}" if note_text else vitality_block
 
-    print("Step 1/3: extracting raw material...")
-    extracted = extract(client, labs_pdf, dexa_pdfs, extraction_note, patient_name=patient_name)
-    extracted.setdefault("name", patient_name)
-    extracted.setdefault("age", age)
-    extracted.setdefault("sex", sex)
+    print("Step 1/3: parsing source documents (deterministic, no AI)...")
+    extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name)
+    extracted["name"] = patient_name
+    extracted["age"] = age
+    extracted["sex"] = sex
     if vitality_index:
         extracted["vitality_index"] = vitality_index
-    extracted["provider_note_raw"] = note_text
+    # Protocol comes only from the note's structured Protocol section, never from scanning its prose.
     completeness_notice = verify_extraction_completeness(
-        extracted, provider_note_text=note_text or extracted.get("provider_note_raw", ""),
-        lab_text=raw_lab_text, dexa_text=raw_dexa_text,
+        extracted, provider_note_text="", lab_text=raw_lab_text, dexa_text=extracted["dexa_ocr_text"],
     )
 
     print("Step 2/3: scoring (deterministic, no AI)...")
     record, notice = score_and_build_record(extracted)
+    notice.unrecognized_markers.extend(UnrecognizedMarker(**raw) for raw in extracted["unrecognized_markers"])
     notice.other_notes.extend(completeness_notice.other_notes)
 
-    print("Step 3/3: generating interpretive copy...")
-    raw_copy, generation_warnings = generate_copy(client, record)
-    notice.other_notes.extend(generation_warnings)
-    copy = _sanitize_em_dashes(raw_copy)
-    copy = _substitute_marker_list_placeholders(copy, _marker_list_placeholders(record))
-    with open("/tmp/post_sanitize_copy.json", "w", encoding="utf-8") as f:
+    print("Step 3/3: filling report templates (deterministic, no AI)...")
+    copy = _sanitize_em_dashes(build_copy(record))
+    with open(f"{_diagnostic_path_prefix(patient_name)}_report_copy.json", "w", encoding="utf-8") as f:
         json.dump(copy, f, indent=2, ensure_ascii=False)
 
     dexa_images = _extract_dexa_scan_images(dexa_pdfs)

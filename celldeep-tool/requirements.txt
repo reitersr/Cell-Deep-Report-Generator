@@ -1,6 +1,6 @@
-anthropic==1.5.0
 playwright
 flask
 gunicorn
-json-repair
 PyMuPDF
+pytesseract
+Pillow

@@ -1,158 +1,281 @@
 """
-CellDeep Report Generator — Interpretive Copy Generation Prompt
-===================================================================
-This step takes the structured PatientRecord (already extracted, already
-scored deterministically by data.py-equivalent logic — no AI involved in
-scoring) and generates the actual sentences that appear in the report: the
-per-system box story, the marker-level "what this is" + interpretation
-notes, the protocol-to-marker reasoning, the group narratives, the DEXA
-delta line, and the Optimization Summary bullets.
-
-This is the piece that was entirely hand-written for Star during
-calibration. This prompt is the attempt to make that same quality of
-writing reproducible for any patient's real data, without a human writing
-it turn by turn.
+CellDeep Report Generator — Patient-Facing Copy (deterministic template fill)
+=================================================================================
+Every sentence that states a value, a date, or a priority is filled directly
+from the reconciled, scored Marker objects (.then/.then_date_display/.now/
+.now_date_display) into a fixed template. There is no model call and no
+retained AI phrasing, so there is nothing that could add, drop, or choose a
+fact. "Baseline"/"starting point" claims resolve via min() on normalized date;
+"Next 30/90 Days" priority comes from select_priority_marker().
 """
 
-GENERATION_SYSTEM_PROMPT = """You are the copywriting layer of CellDeep's patient report generator. You \
-receive a patient's fully extracted and scored data — every number, every tier (optimal/moderate/flagged), \
-every real then-vs-now comparison already computed — and your only job is writing the interpretive language \
-that goes around those numbers, in CellDeep's exact established voice. You do not calculate anything, you do \
-not decide colors or tiers (those are already fixed by the data you're given), and you do not restructure the \
-document. You write sentences that slot into a fixed design.
+from markers_reference import (CATEGORY_TAGLINES, DATA_TO_PATIENT_CATEGORY, MARKER_DESCRIPTIONS,
+                               NARRATIVE_CATEGORY_OVERRIDE, SYSTEM_ORDER)
+from schema import normalize_date_for_matching
 
-The marker data in the supplied record is a reconciled narrative scope, not raw lab extraction data. For each \
-marker, cite only "then_value" with "then_date_display", "now_value" with "now_date_display", or entries in \
-"history". Never cite a number, date, or trend value that is not literally present in those fields. Undated \
-source occurrences and values superseded or excluded by deterministic reconciliation are intentionally absent and \
-must never be recovered from memory, source documents, or any other field.
+PATIENT_SYSTEMS = ("Drive", "Pace", "Fuel", "Flow", "Repair", "Reserves")
+_TIER_WORDS = {"optimal": "optimal", "moderate": "moderate", "flag": "flagged"}
+_TIER_RANK = {"flag": 0, "moderate": 1, "optimal": 2}
 
-VOICE RULES, non-negotiable, calibrated over many rounds of real revision:
-- Second person throughout. Always "you," "your" — never "the patient," never third person, never the \
-patient's name inside body copy (the name appears only in the masthead).
-- No em dashes, anywhere, ever. Use periods, colons, or restructure the sentence. This was explicitly \
-corrected during calibration because em-dash-heavy writing reads as generic AI output, not a concierge \
-longevity clinic. Em dashes will be automatically stripped if present — do not rely on this, write without \
-them from the start.
-- Concierge longevity clinic register: composed, precise, warm but not casual. Not clipped ad-copy fragments, \
-not clinical jargon. "That has now fully resolved, not merely improved" — not "That's fixed now, not just \
-better."
-- State real numbers plainly when they exist (then value, now value) — never hide a real number behind vague \
-language like "some improvement." If a marker got worse, say so as plainly as you'd say it improved. Decline \
-is written with the same honesty as progress, never softened, never alarmist.
-- Every marker with a written note should also state its TANGIBLE, real-world stake in one clause — not just \
-"this is a marker for inflammation" but what improving or worsening it actually protects or risks. Never \
-explain the biological mechanism in clinical depth — one plain clause on real-world impact, not a textbook \
-definition.
-- Marker names ARE allowed in copy (this was explicitly reversed during calibration) — the rule is: name the \
-marker, then explain it in a way anyone could understand, never assume clinical literacy.
-- Protocol reasoning must be grounded in THIS patient's actual moderate/flagged markers, not a compound's \
-generic textbook purpose. When a sentence needs a list of markers, use the exact placeholder \
-{moderate_markers} or {flagged_markers} rather than typing marker names. The renderer replaces these \
-placeholders from the deterministically scored record. Never manually enumerate a marker-name list.
-- A synthesized pain point/goal is never presented as a literal quotation. No quotation marks, no "in her own \
-words" framing. It's your plain-language synthesis, labeled simply "At first visit:" — present it as summary, \
-not transcript.
-- The Optimization Summary is bullet points, not a paragraph. Each bullet is one clear fact, front-loaded with \
-a short bold label (e.g. "Starting point:", "Remaining focus:") followed by one concise sentence. No bullet \
-should require re-reading to understand.
 
-STYLE ANCHORS — these are real, locked, approved sentences from the reference patient (Star Hawkins). Match \
-this exact register, do not deviate toward something more generic or more clinical:
+def _date_key(date_display):
+    key = normalize_date_for_matching(date_display or "")
+    return key if isinstance(key, tuple) else None
 
-  "That has now fully resolved, not merely improved."
-  "LDL, LDL-P, and HDL-P remain just outside target. Lp-PLA2 returned flagged this round, the one genuine \
-concern across your entire panel. Omega-3 HP-D is the direct lever on all four."
-  "hs-CRP has fully resolved, moving from 3.1 to 0.7, the clearest result in this file. Klow is what brought \
-you here, and staying on it is what keeps you here."
-  "Down from 138 to 109, real progress, 9 points from the target of under 100. This reduction measurably \
-lowers your cardiovascular risk profile."
-  "Rose from 4.0 to 8.9, the single largest movement in this file, in the wrong direction. This is an early \
-signal for arterial health, not yet symptomatic, and worth close attention next round."
-  "A marker for hidden inflammation in your arteries" (this is the correct register for a "what this is" \
-line — plain, real-world framed, zero jargon)
 
-WHAT YOU GENERATE — return a single JSON object with EXACTLY these top-level keys, nothing more, nothing renamed:
+def _value_text(disp, value, unit) -> str:
+    text = disp if disp not in (None, "") else (f"{value:g}" if value is not None else "")
+    return f"{text} {unit}" if text and unit else text
 
-{
-  "hero_question": "one sentence, in voice, e.g. 'What if you were fully optimized by your next birthday?'",
-  "hero_target_line": "short line, e.g. 'TARGET: FULLY OPTIMIZED BY 38'",
-  "optimization_summary_bullets": ["<b>Starting point:</b> ...", "<b>Remaining focus:</b> ...", "(4-6 bullets total)"],
-  "headlines": {"Drive": "short subtitle", "Pace": "...", "Fuel": "...", "Flow": "...", "Repair": "...", "Reserves": "...", "Structure": "..."},
-  "box_stories": {"Drive": "2-4 sentence story", "Pace": "...", "Fuel": "...", "Flow": "...", "Repair": "...", "Reserves": "...", "Structure": "..."},
-  "box_forward": {"Drive": "Next 90 days: ...", "Pace": "...", "Fuel": "...", "Flow": "...", "Repair": "...", "Reserves": "..."},
-  "next_30_label": "short label e.g. 'Stay the course'",
-  "next_30_sub": "short sub e.g. 'Omega-3 + Klow, daily'",
-  "next_90_label": "short label",
-  "next_90_sub": "short sub with estimated date if reasonable",
-  "by_age_label": "short label e.g. 'Everything, optimized'",
-  "by_age_sub": "short sub",
-  "category_taglines": {"Inflammation": "one short line, e.g. 'The quiet engine behind energy, drive, and mood, holding steady.'", "Lipids": "...", "Metabolic": "...", "Hormones": "...", "Thyroid": "...", "Foundational": "...", "General Screening": "..."},
-  "marker_notes": {"Marker Name": "interpretation sentence, only for markers with something noteworthy"},
-  "marker_what": {"Marker Name": "plain-language definition, only for markers with a marker_notes entry"},
-  "protocol_reasons": {"Compound Name": "one sentence tying it to 1-3 specific markers in this patient's actual data"},
-  "pain_point_maintenance": {"Category": "maintenance clause, only for categories with a real pain point"},
-  "dexa_delta": "one sentence, only if dexa_history has 2+ entries, else empty string",
-  "structure_improved": true
-}
 
-MARKER LIST SAFETY:
-- Never type a list of marker names from memory. Use {optimal_markers}, {moderate_markers}, or
-  {flagged_markers} wherever a sentence needs multiple marker names. Single-marker explanations may
-  continue to use their real marker-name key because that key is validated against the record.
+def is_retested(marker) -> bool:
+    return marker.now is not None or marker.now_tier is not None or bool(marker.disp_now)
 
-PROTOCOL REASONING SAFETY:
-- Each protocol_reasons sentence must name 1-3 specific markers that the compound targets in this patient's data.
-- Never list nearly every marker in the file. More than 3 marker names means the reasoning is unfocused; rewrite it to identify the 1-3 most relevant markers.
-- Use the exact marker names from the patient record, and do not invent targets that are absent from the record.
 
-PROJECTION-ROW CONTENT LOGIC:
-- NEXT 30 DAYS: name the single most time-sensitive action given the patient's actual moderate/flagged markers and current protocol. Only use a generic "stay the course" message if literally nothing needs attention.
-- NEXT 90 DAYS: name which specific system is expected to change tier and why, grounded in real trend direction already in the data. Never invent a specific re-test date the source data doesn't support — describe the expected change without a date if no date is known.
-- BY [target age]: describe the long-range goal state, grounded in the patient's actual target_age field.
-- `patient_facing_category_membership` explicitly maps each report-system name to its real markers. Use it
-  as the authority for whether a system has markers; for example, Thyroid markers belong to Pace. A category
-  may say "No markers in this category this round." only when its membership list is empty.
-- category_taglines is required only for categories actually present in this patient's data — never invent an entry for a category with no markers.
-- box_stories/box_forward/headlines must have an entry for all seven category keys even when a category has \
-zero markers this round — write it as a short, plain statement that there's nothing to report for that \
-system yet (e.g. "No markers in this category this round."). Never output JSON null or omit the key for a \
-category with no markers.
-- Structure is the one category driven by dexa_history, not by markers — `patient_facing_category_membership` \
-still includes a "Structure" entry so you know whether real DEXA data exists (a non-empty list means it \
-does). Whenever dexa_history is non-empty, headlines.Structure MUST be a real sentence grounded in the \
-actual first-vs-latest scan comparison (e.g. visceral fat, body fat %, or lean mass change) — never null, \
-never an empty string, even if some individual scans in the history have partial/missing metrics. Ground the \
-sentence only in the metrics that actually have values; never invent a number for a metric that's null.
+def marker_occurrences(marker) -> list[tuple[str, object, str]]:
+    """Every dated reconciled reading as (date_display, value, disp_value)."""
+    entries = []
+    if marker.then_date_display and (marker.then is not None or marker.disp_then):
+        entries.append((marker.then_date_display, marker.then, marker.disp_then))
+    for entry in marker.full_history:
+        if entry.get("date_display") and entry.get("disp_value"):
+            entries.append((entry["date_display"], entry.get("value"), entry["disp_value"]))
+    if is_retested(marker) and marker.now_date_display:
+        entries.append((marker.now_date_display, marker.now, marker.disp_now))
+    return entries
 
-TRT / HORMONE SUPPRESSION NARRATIVE SAFETY:
-- The record's "on_trt" field is true only when the provider's note explicitly confirmed active testosterone \
-replacement therapy — it is false or null in every other case, including when the patient is simply on a \
-testosterone-related protocol item without an explicit confirmed status.
-- Only write language asserting that LH/FSH suppression is "expected," "normal," or "anticipated" in the \
-context of TRT when on_trt is true in the record you were given. If on_trt is not true and FSH/LH are \
-flagged, describe the flagged result plainly on its own terms — do not assert or imply a TRT explanation you \
-were not given confirmed data for.
 
-RETESTED VS. NOT RETESTED — this is a real distinction in the data, never blur it:
-- A marker was NOT retested on the most recent draw only when its numeric "now", "now_tier", AND "disp_now" \
-are all null or empty (test cancelled, not ordered, or sample rejected). A non-empty "disp_now" is a real \
-current result even when the numeric value is null because the lab printed a threshold result such as "<0.3" \
-or "<0.1"; never call that result null, missing, or not retested. This is different from a marker that WAS \
-retested and happened to come back at the same value or same tier as before.
-- retested_this_round is true whenever "now" or "now_tier" is present, or whenever "disp_now" is non-empty, \
-and false only when all three are absent. Treat this as a real per-marker flag even though it isn't a separately \
-named field in the record you're given.
-- For any marker where retested_this_round is false, you MUST NOT write continuity language that implies a \
-real second measurement was taken — never say it "hasn't changed," "remains unchanged since [date]," "is \
-still elevated," "continues to run low," or anything that asserts the current state was actually observed. \
-The only honest statement is that this marker was not retested this round (or the specific reason if the \
-record states one, e.g. cancelled, no sample, not ordered) — say plainly that there's no current reading to \
-report on it yet, using only the "then" value/tier for historical context if you mention it at all.
-- Only use "hasn't changed," "still," "remains," or any other continuity phrasing for a marker where \
-retested_this_round is true for BOTH the value you're describing and the comparison you're drawing.
+def baseline_occurrence(markers):
+    """The earliest dated reading across one marker or a list of markers - always min(), never chosen."""
+    markers = markers if isinstance(markers, (list, tuple)) else [markers]
+    dated = [entry for marker in markers for entry in marker_occurrences(marker) if _date_key(entry[0])]
+    return min(dated, key=lambda entry: _date_key(entry[0])) if dated else None
 
-CRITICAL: every dictionary above uses REAL data as keys (real category names, real marker names, real compound names, exactly as they appear in the patient record you were given) — never use a field name from this schema itself (like "pain_points" or "compounds") as if it were a real value. If a patient record has no markers, no protocol, or no pain points, output empty objects/lists for those keys — never invent placeholder entries.
 
-Return ONLY this JSON object. No markdown fences, no prose before or after.
-"""
+def marker_sentence(marker) -> str:
+    unit = marker.unit
+    then_text = _value_text(marker.disp_then, marker.then, unit)
+    if is_retested(marker):
+        now_text = _value_text(marker.disp_now, marker.now, unit)
+        now_when = f" on {marker.now_date_display}" if marker.now_date_display else ""
+        if then_text and marker.then_date_display:
+            sentence = (f"{marker.name} moved from {then_text} on {marker.then_date_display} "
+                        f"to {now_text}{now_when}.")
+        else:
+            sentence = f"{marker.name} measured {now_text}{now_when}."
+        tier = _TIER_WORDS.get(marker.now_tier)
+        return f"{sentence} That result is {tier}." if tier else sentence
+    if then_text and marker.then_date_display:
+        return (f"{marker.name} was {then_text} on {marker.then_date_display} "
+                "and was not retested this round.")
+    return f"{marker.name} was not retested this round."
+
+
+def _system_of(marker) -> str | None:
+    return NARRATIVE_CATEGORY_OVERRIDE.get(marker.name) or DATA_TO_PATIENT_CATEGORY.get(marker.category)
+
+
+def _precedence(marker) -> int | None:
+    if not is_retested(marker):
+        return 0 if marker.then_tier == "flag" else None
+    if marker.now_tier == "flag":
+        return 1
+    if marker.now_tier == "moderate":
+        then_rank = _TIER_RANK.get(marker.then_tier)
+        worsening = then_rank is not None and (
+            then_rank > _TIER_RANK["moderate"]
+            or (marker.then_tier == "moderate" and marker.then_pct is not None
+                and marker.now_pct is not None and marker.now_pct < marker.then_pct))
+        return 2 if worsening else 3
+    return None
+
+
+def _priority_sort_key(indexed):
+    index, marker = indexed
+    system_rank = SYSTEM_ORDER.index(marker.category) if marker.category in SYSTEM_ORDER else len(SYSTEM_ORDER)
+    return (_precedence(marker), system_rank, index)
+
+
+def _attention_markers(markers) -> list:
+    """Markers needing attention, in fixed priority order (see select_priority_marker)."""
+    indexed = [(index, m) for index, m in enumerate(markers) if _precedence(m) is not None]
+    return [marker for _, marker in sorted(indexed, key=_priority_sort_key)]
+
+
+def select_priority_marker(markers):
+    """Pure, fixed precedence: flagged-and-not-retested, then flagged, then moderate-and-worsening,
+    then moderate; ties broken by SYSTEM_ORDER and then record order. None when nothing qualifies."""
+    attention = _attention_markers(list(markers))
+    return attention[0] if attention else None
+
+
+def _not_retested_markers(markers) -> list:
+    return [m for m in markers if not is_retested(m) and (m.then is not None or m.disp_then)]
+
+
+def _system_markers(record, system) -> list:
+    return [m for m in record.markers if _system_of(m) == system]
+
+
+def _tier_counts(markers) -> dict[str, int]:
+    return {tier: sum(1 for m in markers if m.now_tier == tier) for tier in ("optimal", "moderate", "flag")}
+
+
+def _is_complete_reading(reading) -> bool:
+    return None not in (reading.total_mass_lb, reading.fat_mass_lb, reading.lean_mass_lb)
+
+
+def _pct_number(text):
+    try:
+        return float(str(text).rstrip("%"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _dexa_comparison(record):
+    complete = [d for d in record.dexa_history if _is_complete_reading(d)]
+    if len(complete) < 2:
+        return None, None
+    return complete[0], complete[-1]
+
+
+def _dexa_delta(record) -> str:
+    first, latest = _dexa_comparison(record)
+    if first is None:
+        return ""
+    parts = []
+    if first.body_fat_pct and latest.body_fat_pct:
+        parts.append(f"Body fat {first.body_fat_pct} on {first.date_display} to "
+                     f"{latest.body_fat_pct} on {latest.date_display}.")
+    parts.append(f"Lean mass {first.lean_mass_lb} lb to {latest.lean_mass_lb} lb.")
+    return " ".join(parts)
+
+
+def _structure_improved(record) -> bool:
+    first, latest = _dexa_comparison(record)
+    if first is None:
+        return False
+    before, after = _pct_number(first.body_fat_pct), _pct_number(latest.body_fat_pct)
+    return before is not None and after is not None and after < before
+
+
+def _count_phrase(count: int, singular: str, plural: str) -> str:
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _box_story(markers) -> str:
+    if not markers:
+        return "No markers in this category this round."
+    attention = _attention_markers(markers) + [m for m in _not_retested_markers(markers)
+                                               if _precedence(m) is None]
+    if not attention:
+        scored = [m for m in markers if m.now_tier is not None]
+        return f"All {_count_phrase(len(scored), 'scored marker', 'scored markers')} in this system are optimal."
+    sentences = [marker_sentence(m) for m in attention[:3]]
+    if len(attention) > 3:
+        sentences.append(f"{_count_phrase(len(attention) - 3, 'more marker', 'more markers')} in this system "
+                         "need attention.")
+    return " ".join(sentences)
+
+
+def _headline(markers) -> str:
+    if not markers:
+        return "No markers in this category this round."
+    counts = _tier_counts(markers)
+    parts = [f"{counts[tier]} {_TIER_WORDS[tier]}" for tier in ("optimal", "moderate", "flag") if counts[tier]]
+    return ", ".join(parts) if parts else "Results need review."
+
+
+def _protocol_reason(item, record) -> str:
+    if not item.lab_visible:
+        return "Not expected to show up in bloodwork."
+    categories = list(item.target_categories or [])
+    targets = [m for m in _attention_markers(record.markers) if _system_of(m) in categories][:3]
+    if targets:
+        return f"Aimed at {', '.join(m.name for m in targets)} in your {', '.join(categories)} results."
+    if categories:
+        return f"Supports your {', '.join(categories)} system."
+    return "Part of your provider's current plan."
+
+
+def build_copy(record) -> dict:
+    """Fill every copy slot template.render() reads, directly from the scored record."""
+    markers = list(record.markers)
+    priority = select_priority_marker(markers)
+    attention = _attention_markers(markers)
+    not_retested = _not_retested_markers(markers)
+    counts = _tier_counts(markers)
+
+    bullets = []
+    baseline = baseline_occurrence(markers)
+    if baseline:
+        bullets.append(f"<b>Starting point:</b> Your earliest bloodwork on file is from {baseline[0]}.")
+    scored = sum(counts.values())
+    if scored:
+        bullets.append(f"<b>Where you are now:</b> {counts['optimal']} optimal, {counts['moderate']} moderate, "
+                       f"{counts['flag']} flagged across {_count_phrase(scored, 'scored marker', 'scored markers')}.")
+    if priority:
+        bullets.append(f"<b>Remaining focus:</b> {marker_sentence(priority)}")
+    if not_retested:
+        bullets.append(f"<b>Not retested this round:</b> {', '.join(m.name for m in not_retested)}.")
+    dexa_delta = _dexa_delta(record)
+    if dexa_delta:
+        bullets.append(f"<b>Body composition:</b> {dexa_delta}")
+
+    if priority is None:
+        next_30_label, next_30_sub = "Stay the course", "No flagged or moderate markers"
+    elif is_retested(priority):
+        next_30_label = priority.name
+        next_30_sub = _value_text(priority.disp_now, priority.now, priority.unit)
+        if priority.now_date_display:
+            next_30_sub = f"{next_30_sub} on {priority.now_date_display}"
+    else:
+        next_30_label = priority.name
+        next_30_sub = (f"Not retested since {priority.then_date_display}" if priority.then_date_display
+                       else "Not retested this round")
+    if attention:
+        next_90_label = "Retest and reassess"
+        next_90_sub = f"{_count_phrase(len(attention), 'marker', 'markers')} to recheck"
+    else:
+        next_90_label, next_90_sub = "Maintain", "All scored markers optimal"
+
+    headlines, box_stories, box_forward = {}, {}, {}
+    for system in PATIENT_SYSTEMS:
+        system_markers = _system_markers(record, system)
+        headlines[system] = _headline(system_markers)
+        box_stories[system] = _box_story(system_markers)
+        recheck = _attention_markers(system_markers)
+        box_forward[system] = ("" if not system_markers else
+                               f"Next 90 days: retest {', '.join(m.name for m in recheck)}." if recheck
+                               else "Next 90 days: maintain your current approach.")
+    latest_scan = next((d for d in reversed(record.dexa_history) if _is_complete_reading(d)), None)
+    if latest_scan and latest_scan.body_fat_pct:
+        headlines["Structure"] = f"Body fat {latest_scan.body_fat_pct} on {latest_scan.date_display}."
+    box_stories["Structure"] = ""
+
+    noteworthy = attention + [m for m in not_retested if m not in attention]
+    marker_notes = {m.name: marker_sentence(m) for m in noteworthy}
+    marker_what = {m.name: MARKER_DESCRIPTIONS[m.name] for m in noteworthy if m.name in MARKER_DESCRIPTIONS}
+
+    return {
+        "hero_question": "What if you were fully optimized by your next birthday?",
+        "hero_target_line": "TARGET: FULLY OPTIMIZED BY YOUR NEXT BIRTHDAY",
+        "optimization_summary_bullets": bullets,
+        "headlines": headlines,
+        "box_stories": box_stories,
+        "box_forward": box_forward,
+        "next_30_label": next_30_label,
+        "next_30_sub": next_30_sub,
+        "next_90_label": next_90_label,
+        "next_90_sub": next_90_sub,
+        "by_age_sub": "Everything, optimized",
+        "category_taglines": {c: CATEGORY_TAGLINES[c] for c in {m.category for m in markers}
+                              if c in CATEGORY_TAGLINES},
+        "marker_notes": marker_notes,
+        "marker_what": marker_what,
+        "protocol_reasons": {item.name: _protocol_reason(item, record) for item in record.protocol},
+        "pain_point_maintenance": {},
+        "dexa_delta": dexa_delta,
+        "structure_improved": _structure_improved(record),
+    }
+

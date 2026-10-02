@@ -1,11 +1,8 @@
 """Capture immutable scored JSON baselines before composite scoring changes."""
 
 import json
-import os
 from dataclasses import asdict
 from pathlib import Path
-
-from anthropic import Anthropic
 
 import pipeline
 import template
@@ -48,10 +45,8 @@ def scored_payload(record):
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     for patient_id, filename, patient_name, age, sex in REFERENCE_PATIENTS:
         extracted = pipeline.extract(
-            client,
             str(ROOT / "synthetic_fixtures" / filename),
             [],
             None,

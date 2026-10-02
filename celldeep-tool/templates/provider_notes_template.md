@@ -1,12 +1,30 @@
 # CellDeep Provider Notes
 
+<!-- Every line below a "## " heading must follow that section's format exactly. A note that doesn't
+is rejected and flagged for manual entry; it is never read any other way. Text inside these comment
+markers is ignored. -->
+
 ## Consultation Note
 
-Record the patient's stated concerns and goals, current treatment status, active protocol and cadence, action plan, and any explicit patient-specific marker target ranges. Do not use implied values.
+<!-- Free text for the record. Treatment status (e.g. "on testosterone replacement therapy",
+"postmenopausal and on BHRT") is only recognized when stated explicitly here. -->
+
+## Patient Concerns
+
+<!-- One per line: - <plain synthesized concern, no quotation marks> | Systems: <Drive, Pace, Fuel, Flow, Repair, Reserves, Structure> -->
+
+## Protocol
+
+<!-- One per line: - <compound name> | Cadence: <daily / weekly / as directed> (the Cadence part is optional) -->
+
+## Marker Targets
+
+<!-- Only explicit patient-specific targets, one per line: - <recognized marker name>: <lo>-<hi> -->
 
 ## Vitality Index
 
-Select exactly one value for every field: `No Concern`, `Some Concern`, `Significant Concern`, or `Not Assessed`. Use `Not Assessed` when the domain was not directly assessed.
+<!-- Exactly one of: No Concern, Some Concern, Significant Concern, Not Assessed.
+Physical Performance is intentionally excluded from scoring. -->
 
 - Energy: Not Assessed
 - Sleep: Not Assessed
@@ -15,5 +33,3 @@ Select exactly one value for every field: `No Concern`, `Some Concern`, `Signifi
 - Cravings: Not Assessed
 - Sexual Desire: Not Assessed
 - Sexual Function: Not Assessed
-
-Physical Performance is intentionally excluded from scoring.
