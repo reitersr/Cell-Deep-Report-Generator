@@ -822,6 +822,8 @@ _COLLECTED_RE = re.compile(r"\bcollected\s*:?\s*(" + _PRINTED_DATE_RE.pattern + 
 _TREND_TABLE_TITLES = ("progress summary", "trend summary", "cumulative summary")
 # A document section title ("... Report"); a different exact title ends any table above it.
 _SECTION_TITLE_RE = re.compile(r"[A-Za-z][A-Za-z&/-]*(?:\s+[A-Za-z][A-Za-z&/-]*){0,7}\s+Report", re.IGNORECASE)
+# Words further apart than this on one baseline are separate printed phrases (e.g. title vs. page number).
+_PHRASE_GAP_PT = 12.0
 _BLOODWORK_NAME_LABELS = {"test", "tests", "analyte"}
 _BLOODWORK_HEADER_LABELS = [
     ("name", ("test", "name")), ("name", ("test",)), ("name", ("tests",)), ("name", ("analyte",)),
@@ -1080,6 +1082,22 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
     return True
 
 
+def _section_title(words: list[tuple]) -> str | None:
+    """The section title printed on this line, if one of its separately spaced phrases is a title."""
+    phrases, current = [], []
+    for word in words:
+        if current and word[0] - current[-1][2] > _PHRASE_GAP_PT:
+            phrases.append(current)
+            current = []
+        current.append(word)
+    phrases.append(current)
+    for phrase in phrases:
+        text = _line_text(phrase).strip()
+        if _SECTION_TITLE_RE.fullmatch(text):
+            return text.lower()
+    return None
+
+
 def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
     """One rule for every Quest/Cleveland HeartLab section: each result printed in a test-name row is
     paired with the date governing its column - a Current-style column takes its section's own
@@ -1121,6 +1139,12 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
             text = _line_text(words)
             order = _ORDER_ID_RE.search(text)
             collected = _COLLECTED_RE.search(text)
+            title = _section_title(words)
+            if title is not None:
+                if title != state["title"]:
+                    state.update(title=title, header=None, excluded=False, await_dates=False, recent_lines=[])
+                if not (order or collected):
+                    continue
             if order:
                 order_id = order.group(1)
                 current = state["section"]
@@ -1159,11 +1183,6 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
             section = state["section"]
             if any(title in text.lower() for title in _TREND_TABLE_TITLES):
                 state.update(excluded=True, header=None)
-                continue
-            if _SECTION_TITLE_RE.fullmatch(text.strip()):
-                if text.strip().lower() != state["title"]:
-                    state.update(title=text.strip().lower(), header=None, excluded=False, await_dates=False,
-                                 recent_lines=[])
                 continue
             if state["excluded"]:
                 continue

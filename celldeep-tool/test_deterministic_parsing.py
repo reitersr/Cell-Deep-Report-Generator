@@ -196,18 +196,26 @@ def test_progress_summary_is_ignored_and_genetics_page_does_not_interrupt_sectio
     assert unrecognized == []
 
 
-def _data_page(title, order_id="SYN950"):
-    return ([(40, 30, title)] + fx.section_preamble(order_id, "01/27/2026")
+def _data_page(title, order_id="SYN950", title_extra=()):
+    return ([(40, 30, title), *title_extra] + fx.section_preamble(order_id, "01/27/2026")
             + fx.header_line(100, ("01/07/2026",))
             + fx.row(130, "TMAO", "4.1", ">20.0", units="uM"))
 
 
-def test_narrative_section_after_a_data_table_is_never_scanned_as_its_rows(tmp_path):
-    comment_page = ([(40, 30, "Cardiometabolic Comment Report")] + fx.section_preamble("SYN950", "01/27/2026")
-                    + [(40, 100, "TMAO"), (232, 100, "Lab:"), (252, 100, "SYNLAB"),
+@pytest.mark.parametrize("title_extra", [
+    (), ((500, 30, "Page 1 of 12"),), ((380, 30, "Synthetic, Pat"),),
+    ((380, 30, "Order ID: SYN950"),), ((380, 30, "Collected: 01/27/2026"),),
+], ids=["title-alone", "page-number-on-title-line", "patient-on-title-line", "order-id-on-title-line",
+        "collected-on-title-line"])
+def test_narrative_section_after_a_data_table_is_never_scanned_as_its_rows(tmp_path, title_extra):
+    comment_extra = tuple((x, y, text.replace("1 of", "10 of")) for x, y, text in title_extra)
+    comment_page = ([(40, 30, "Cardiometabolic Comment Report"), *comment_extra]
+                    + fx.section_preamble("SYN950", "01/27/2026")
+                    + [(40, 100, "TMAO"), (232, 100, "Lab:"), (252, 100, "Z4M"),
                        (40, 114, "Elevated values were discussed with the ordering provider."),
-                       (40, 128, "Fibrinogen"), (232, 128, "Lab:"), (252, 128, "SYNLAB")])
-    occurrences, _ = _parse(tmp_path, [_data_page("Cardiometabolic Report"), comment_page])
+                       (40, 128, "Fibrinogen"), (232, 128, "Lab:"), (252, 128, "Z4M")])
+    pages = [_data_page("Cardiometabolic Report", title_extra=title_extra), comment_page]
+    occurrences, _ = _parse(tmp_path, pages)
 
     assert [(o["name"], o["date_display"], o["disp_value"]) for o in occurrences] == [
         ("TMAO", "01/27/2026", "4.1"), ("TMAO", "01/07/2026", ">20.0")]
