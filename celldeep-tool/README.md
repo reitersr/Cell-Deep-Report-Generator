@@ -64,7 +64,7 @@ audit. Conflicting duplicates raise a `BloodworkParseError` naming the pages.
 
 ## Local real-file regression
 
-`test_real_bloodwork.py` uses `real_fixtures/Evan W BW.pdf` when present
+`test_real_bloodwork.py` uses `real_fixtures/bloodwork_fixture_01.pdf` when present
 and skips when absent. Keep this directory git-ignored; never commit
 patient source files. Run `python -m pytest -q test_real_bloodwork.py`.
 The regression checks results on pages 1–8, no extra rows from readable

@@ -8,7 +8,7 @@ import pytest
 import pipeline
 
 
-SOURCE = Path(__file__).parent / "real_fixtures" / "Evan W BW.pdf"
+SOURCE = Path(__file__).parent / "real_fixtures" / "bloodwork_fixture_01.pdf"
 
 
 def _printed_cell_bands(page):
