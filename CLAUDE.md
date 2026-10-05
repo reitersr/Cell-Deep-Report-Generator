@@ -18,8 +18,9 @@ These override any other instruction, convenience or test shortcut.
    provenance, exclusions and review notices go only to the staff review notes.
 4. **Do not change `_extract_dexa_with_claude`** (in `pipeline.py`) or the prompt and schema it
    sends (`extraction_prompt.py`). DEXA changes are proposals only (`docs/open_decisions.md`).
-5. **Deploys stay manual and owned by the clinic.** Nothing pushes to `main` without a pull
-   request the owner merges. Never merge your own PR.
+5. **Deploys stay manual and owned by the clinic.** Never push to `main` directly; every change
+   goes through a pull request. A PR may be merged only as described in "Pull request workflow"
+   below; anything else waits for the owner.
 
 ## Repository layout
 
@@ -87,6 +88,34 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    `template.render` writes the patient PDF.
 7. **Staff notes**: `_write_review_notes` / `format_review_notice` write the staff-only review
    file, downloadable separately from the report.
+
+## Pull request workflow
+
+Standing instruction from the owner for every PR Claude opens:
+
+1. **Wait for the `tests` check** on the PR's latest commit. Never merge while any check is
+   failing, pending or missing, and never with a merge conflict.
+2. **Decide whether the PR is clinical.** It is clinical if it changes any of:
+   - thresholds or scoring rules: `markers_reference.py` (thresholds, sex variants, aliases that
+     route a printed test to a scored marker), `scoring.py`, `dexa_reference.py`, the
+     threshold/scoring logic in `pipeline.score_and_build_record` or `reconcile_marker_occurrences`,
+     or `docs/ranges_audit.md`;
+   - patient-facing wording or templates: `generation_prompt.py`, `template.py` (HTML, CSS, copy),
+     `lab_reported.py` (which tests patients see and how), `protocol_reference.py`,
+     `markers_reference.py` descriptions/taglines;
+   - any golden file under `synthetic_fixtures/golden/` where a scored value, tier, range,
+     lab-reported result or date changed.
+   If unsure, treat it as clinical.
+3. **Not clinical and `tests` passed:** squash-merge it yourself, then report what merged
+   (PR link, squash commit, one-line summary of each change).
+4. **Clinical:** leave it open, do not merge, and tell the owner which files/changes make it
+   clinical and what decision is needed.
+5. **After any merge,** list the exact things the owner should check in the next generated
+   report: which sections, markers, values, flags, ranges, dates or staff-note entries should
+   look different (or must look unchanged), and where to find them (patient PDF vs staff QA
+   file).
+6. **Always:** never include PDFs, images or patient identifiers in commits, PR text or
+   comments; never push to `main` directly; never merge with failing checks.
 
 ## Working rules
 
