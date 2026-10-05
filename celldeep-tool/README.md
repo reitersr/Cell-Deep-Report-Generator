@@ -1,66 +1,116 @@
 # CellDeep Patient Report Generator
 
-Built from the locked V23 reference design, following the calibration
-framework established over the full design/build conversation. Bloodwork
-tables are read deterministically from the PDF text layer by row/column
-position, provider notes must follow `templates/provider_notes_template.md`,
-and patient-facing copy is template fill from the scored record. DEXA PDFs
-are still extracted by the original Claude call (`ANTHROPIC_API_KEY` required
-when a DEXA PDF is uploaded).
+Turns a lab PDF, DEXA PDF(s) and a structured provider note into the CellDeep patient report
+(PDF) plus a staff-only QA file. Built from the locked V23 reference design. Bloodwork tables
+are read deterministically from the PDF text layer by row/column position; scanned pages are
+read twice by a vision model and kept only where both reads agree; patient-facing copy is
+template fill from the scored record. DEXA PDFs are still extracted by the original Claude call
+(`ANTHROPIC_API_KEY` required when a DEXA PDF or a scanned lab page is uploaded).
 
-Each bloodwork page must print its own Current/Historical column header
-(with governing dates), or In Range / Out of Range columns. Table state
-never carries across pages; readable pages without a header contribute no
-rows. Pages without readable text are rendered at 200 dpi and transcribed
-twice in independent Anthropic vision requests using the same model, client
-configuration, and API error handling as DEXA. The existing DEXA call is
-unchanged. An API key is required for scan transcription; without one,
-readable results continue with an explicit staff review notice.
+The non-negotiables (never infer; no real patient data in the repository; no staff QA text in
+the patient PDF; `_extract_dexa_with_claude` unchanged; manual, PR-only deploys) and the data
+flow are in [`../CLAUDE.md`](../CLAUDE.md). Open clinical decisions are in
+[`../docs/open_decisions.md`](../docs/open_decisions.md); the threshold source of every marker
+is in [`../docs/ranges_audit.md`](../docs/ranges_audit.md).
 
-Scan names, results, flags, columns, reference ranges, and section headings
-must agree between reads. Unsupported or illegible results and inconsistent
-numeric flags are excluded with a reason. A row without a printed section
-identity is also excluded to preserve section-scoped matching. Gates are page-
-or specimen-local: malformed transcriptions, unreadable metadata, and missing
-specimen dates/identity exclude only the affected pages. Contradictory patient
-names, a name mismatching the digital header, or conflicting Collected dates
-for the same specimen reject the entire scan batch. A missing digital patient
-header excludes scans with an explicit notice. Never substitute a date or
-infer text. A row absent from one read cannot enter the report.
-The out-of-range cross-check uses only kept pages of each specimen and excludes
-only disagreeing rows, not the batch; summary entries for excluded pages do not
-invalidate other rows.
-Rowful pages require a readable specimen identity; a missing id may be inherited
-only from an adjacent PDF page with the literal same specimen id in its footer
-and consecutive `PAGE n OF m` footers agreeing in both reads. Conflicting
-neighbour ids do not permit inheritance. Dates and printed patient identity
-may come from other kept pages of that specimen. Rowless pages
-without a specimen identity contribute no rows and produce a staff note
-instead of rejecting the batch. Summary blocks still require a specimen
-identity for attribution, including when split across rowless pages.
+## Running the tests
 
-Each scanned page emits one value-free diagnostic line (including rejected
-batches); counts are `null` for reads that could not be validated:
+```bash
+pip install -r requirements.txt pytest
+python -m playwright install chromium
+ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q
+```
+
+Every Anthropic call is mocked; the suite needs no network. CI
+(`.github/workflows/tests.yml`) runs it on every pull request inside a network namespace with no
+interfaces and fails if the network is reachable. Tests needing `real_fixtures/` (git-ignored,
+local only) or `CELLDEEP_LIVE_VISION=1` skip otherwise.
+
+## Upload
+
+Staff enter the patient name, age, sex, the lab PDF, DEXA PDF(s), the provider note, the Vitality
+Index and the bloodwork **Collected date**. The Collected date is required when the lab PDF has
+image-only pages; the upload is rejected on screen before any job starts without it.
+
+## Bloodwork
+
+Each readable bloodwork page must print its own Current/Historical column header (with governing
+dates), or In Range / Out of Range columns. Table state never carries across pages; readable
+pages without a header contribute no rows.
+
+### Scanned (image-only) pages
+
+Pages without readable text are rendered at 200 dpi and transcribed twice in independent
+Anthropic vision requests using the same model, client configuration and API error handling as
+DEXA. Without an API key, readable results continue with an explicit staff notice.
+
+The staff-entered patient name and Collected date identify every scanned page, so printed
+footer, header, specimen, page-number, name and date checks do not apply. A scanned row is kept
+only when:
+
+- both reads contain it once, with the same name (after removing a printed Lab-column code
+  such as `AMD`, which the scan schema transcribes separately as `lab_code`) and section;
+- both reads agree on the value, the H/L flag and the reference range (the same printed range
+  spelled differently, e.g. `> OR = 5.4` vs `>=5.4`, counts as agreement; different numbers,
+  units or wording do not);
+- the value is a readable result (number, inequality, `1+`-`4+` or a known status word), the
+  flag is not glued into the value, and the flag is consistent with a numeric reference range
+  (including `<OR=` notation and ranges with units);
+- the printed out-of-range list does not contradict it. The list only ever excludes a row it
+  contradicts (a value printed with its flag, e.g. `210.0 H`, is split before comparing).
+
+A printed patient name that differs from the staff entry is a prominent staff notice, never a
+rejection. Pages with no rows produce a notice only. Without a staff Collected date (for example
+from the command line), the stricter printed-identity gates in `scan_bloodwork.gate_reads` apply.
+
+Each scanned page emits one value-free, name-free log line, and each excluded row one more:
 
 ```text
-source=scan page=<PDF page> rows_read=<read 1 count>/<read 2 count> specimen_id=<JSON string or null> name_matched=<yes|no> date=<JSON string or null> verdict=<kept|excluded> reason=<JSON string>
+source=scan page=<PDF page> rows_read=<read 1>/<read 2> identity="staff" date=<Collected> rows_kept=<n> verdict=<kept|excluded|notice> reason=<JSON string>
 source=scan page <PDF page> excluded <marker repr>: <reason>
 ```
 
-The second format is emitted for every excluded row. Neither format includes
-patient names or result values; `name_matched` reports the page's own printed
-name match, while specimen/date can reflect verified inheritance.
+Tests mock the vision calls; the optional `CELLDEEP_LIVE_VISION=1` test uses a synthetic
+image-only PDF with invented identity.
 
-Accepted scan rows use the same exact aliases and unknown-marker review
-policy as digital rows. Their `source=scan` provenance, accepted raw values,
-and exclusions are recorded only in staff review notes, not in patient
-copy or patient marker objects. Tests mock the vision calls; the optional
-`CELLDEEP_LIVE_VISION=1` test uses a synthetic image-only PDF with invented
-identity, never the local patient fixture.
-The scan schema uses `anyOf` branches for nullable fields, including flags
-and columns. Offline tests check enum/type compatibility and the strict
-object shape. The opt-in live test double-reads six invented results,
-including H/L flags, a qualitative result, and an out-of-range summary.
+### Every printed result is accounted for
+
+Each printed result row ends in exactly one of these places, and `pipeline.coverage_gaps` puts a
+`COVERAGE GAP` alarm at the top of the staff notes if a row reaches none of them:
+
+- **Scored marker** (`markers_reference.py`): CellDeep tier against CellDeep thresholds, or against
+  the printed lab range where no CellDeep threshold exists (see `docs/ranges_audit.md`).
+- **Lab-reported, not scored** (`lab_reported.py`): CBC with differential, chemistry, iron
+  studies, lipid ratios and sub-fractions, OmegaCheck components, Homocysteine, standard CRP,
+  SARS-CoV-2 and urinalysis rows. Shown in the patient report with the printed value, the lab's
+  reference range and the lab's own H/L flag, never a CellDeep score. hs-CRP and standard CRP stay
+  separate tests; urinalysis rows never map to serum markers.
+- **Any other result the lab flagged H or L** is also shown in the lab-reported section under its
+  printed name, and stays in the staff list so the library can be extended.
+- **Staff review only**: unflagged results in neither library, listed with their printed value
+  and range.
+
+## Staff QA file
+
+Written next to the report and downloadable separately; never rendered into the patient PDF.
+It opens with a **SCANNED BLOODWORK** block (pages, how they were identified, results kept per
+page, every excluded row with page and reason, page outcomes, name-mismatch notices), followed
+by coverage gaps, unrecognized markers and other review items. `template.render` refuses to
+write a patient PDF whose HTML contains any staff-note marker
+(`unknown_marker_policy.STAFF_NOTE_MARKERS`).
+
+A DEXA PDF without a text layer is reported as "DEXA SOURCE IS SCANNED" (values must be compared
+with the image) instead of a verbatim-text mismatch.
+
+## Provider notes
+
+Notes follow `templates/provider_notes_template.md` (downloadable from the upload page). Every
+line that follows its `## ` section's format is read; every other line is listed with its line
+number, text and reason in the staff QA file and by the upload page's **Check note format**
+button. A note with no `## ` sections is not read at all. Free text is never mined for protocol,
+concerns, targets or treatment status; TRT/BHRT status comes only from accepted note content.
+
+## Digital table parsing
 
 Printed horizontal rules, including rules spanning multiple columns,
 delimit results bands. Wrapped names and cells are assembled within a band;
@@ -131,6 +181,11 @@ urinalysis band test in `test_lab_reported.py` follow this workflow.
 | `protocol_reference.py` | Known compound library (BPC-157, Retatrutide, Klow, etc.) with typical target systems. |
 | `unknown_marker_policy.py` | What happens when extraction finds a marker not in the library — flagged for human review, never guessed. |
 | `scoring.py` | Pure math. No AI. The exact corrected tier/percentage logic from data.py. |
+| `scan_bloodwork.py` | Scanned-page double reads and the gates that keep or exclude each row. |
+| `lab_reported.py` | Lab-reported, not-scored tests; exact section-scoped aliases. |
+| `ranges_audit.py` | Read-only threshold-source audit; `--write` regenerates `docs/ranges_audit.md`. |
+| `synthetic_fixtures/` | Invented-data fixture builders (`layouts.py`) and golden files. |
+| `app.py` | Flask upload form, background jobs, note check and template download. |
 | `extraction_prompt.py` | `EXTRACTION_OUTPUT_SCHEMA`, the marker_occurrences shape the bloodwork parser emits and reconciliation/scoring consume; the prompt and schema are also still used for the Claude DEXA extraction call. |
 | `generation_prompt.py` | Deterministic template fill for every patient-facing sentence, plus `select_priority_marker()`. |
 | `template.py` | The renderer. CSS is copied verbatim from V23 — the design itself is not up for variation. **This has been tested directly and confirmed working** (see below). |
@@ -181,6 +236,8 @@ python pipeline.py \
 ```
 
 ## A known open item, found during testing
+
+(Tracked with a proposal as item 11 in `docs/open_decisions.md`.)
 
 The test render showed that a patient-facing category with **zero
 markers** (nothing in that system was tested) currently falls back to a
