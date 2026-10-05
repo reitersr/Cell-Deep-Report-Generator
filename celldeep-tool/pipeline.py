@@ -816,7 +816,9 @@ _CELL_VALUE_RE = re.compile(r"(?P<ineq>[<>≤≥]=?)?(?P<num>\d+(?:\.\d+)?|\.\d+
 _CELL_PIECE_RE = re.compile(r"[<>≤≥]=?(?:\d+(?:\.\d+)?|\.\d+)[HL]?|(?:\d+(?:\.\d+)?|\.\d+)[HL]?")
 _NOT_PERFORMED_CELLS = {"tnp", "test not performed", "not performed"}
 _QUALITATIVE_CELLS = {"negative", "positive", "detected", "not detected", "none detected", "trace",
-                      "normal", "abnormal", "reactive", "non-reactive", "nonreactive"}
+                      "normal", "abnormal", "reactive", "non-reactive", "nonreactive",
+                      # printed urine color/clarity results, read literally
+                      "yellow", "straw", "amber", "colorless", "clear", "hazy", "cloudy", "turbid"}
 _EXPECTED_QUALITATIVE = {"negative", "not detected", "none detected", "normal", "non-reactive", "nonreactive"}
 _MULTIWORD_CELLS = (("test", "not", "performed"), ("not", "performed"), ("not", "detected"), ("none", "detected"))
 _STANDALONE_FLAGS = {"H", "L", "HH", "LL"}
@@ -1226,7 +1228,7 @@ def _parse_table_region(page, lines, header, section, occurrences, unrecognized,
         name_lines = _group_lines(name_words, 4.0)
         text = " ".join(_line_text(line) for line in name_lines).strip()
         band_text = " ".join(_line_text(line) for line in _group_lines(words, 4.0)).strip()
-        if name_words and band_text.isupper() and all(
+        if name_words and band_text.isupper() and _is_single_phrase(words) and all(
                 not _is_cell_token(w[4]) and not _is_threshold_token(w[4]) for w in words):
             section["heading"] = band_text
             continue
@@ -1297,6 +1299,14 @@ def _parse_table_region(page, lines, header, section, occurrences, unrecognized,
                               "y": min(w[1] for w in words),
                               "occurrences": [dict(item) for item in occurrences[occurrence_start:]],
                               "unrecognized": unrecognized[unknown_start:]})
+
+
+def _is_single_phrase(words: list[tuple]) -> bool:
+    """A printed heading is one run of words; a result row's words are spread across columns."""
+    for line in _group_lines(words, 4.0):
+        if any(right[0] - left[2] > _PHRASE_GAP_PT for left, right in zip(line, line[1:])):
+            return False
+    return True
 
 
 def _section_title(words: list[tuple]) -> str | None:
@@ -1553,7 +1563,7 @@ def _scan_summary(numbers: list[int], notes: list[str], collected_date: str | No
             excluded.append(f"page {match[1]}: {match[2]} - {match[3]}")
         elif match := re.match(r"source=scan page (\d+): (.+)$", note):
             pages.append(f"page {match[1]}: {match[2]}")
-        elif note.startswith("source=scan pages"):
+        elif note.startswith("source=scan pages") and "identified by staff-entered" not in note:
             batch.append(note.split(": ", 1)[1] if ": " in note else note)
     identity = (f"staff-entered patient name and Collected {collected_date}" if collected_date
                 else "printed page identity (no staff Collected date)")

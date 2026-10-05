@@ -125,3 +125,19 @@ def test_scanned_flags_reach_the_lab_reported_section(tmp_path):
     scored = {item["name"] for item in extracted["marker_occurrences"]}
     for name in flagged:
         assert name.casefold() in shown or pipeline._match_row_name(name, "ROUTINE PANELS")[0] in scored, name
+
+
+def test_all_caps_text_result_row_is_not_mistaken_for_a_section_heading(tmp_path):
+    """Found by the Quest-style fixture: 'COLOR  YELLOW  YELLOW' (all caps, no numbers) ended the
+    URINALYSIS section, so urine GLUCOSE NEGATIVE was read as serum glucose."""
+    from synthetic_fixtures import layouts
+    path = layouts.quest_digital(tmp_path / "quest.pdf")
+    extracted = pipeline.extract(str(path), [], None, patient_name=fx.PATIENT, audit_root=str(tmp_path))
+    items = _items(extracted)
+    assert items["Urinalysis — Color"]["results"][0]["disp_value"] == "YELLOW"
+    assert items["Urinalysis — Glucose"]["results"][0]["disp_value"] == "NEGATIVE"
+    glucose = [item for item in extracted["marker_occurrences"] if item["name"] == "Glucose (fasting)"]
+    assert [item["disp_value"] for item in glucose] == ["82"]
+    words = [(40, 100, 70, 110, "COLOR"), (230, 100, 260, 110, "YELLOW"), (380, 100, 410, 110, "YELLOW")]
+    assert not pipeline._is_single_phrase(words)
+    assert pipeline._is_single_phrase([(40, 100, 90, 110, "CBC"), (93, 100, 160, 110, "(INCLUDES DIFF/PLT)")])

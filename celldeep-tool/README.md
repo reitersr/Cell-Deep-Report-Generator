@@ -80,6 +80,48 @@ marker/date results are collapsed only when their values agree, with all
 source pages retained in the source label and both rows in the extraction
 audit. Conflicting duplicates raise a `BloodworkParseError` naming the pages.
 
+## Reproducibility and the failure-to-test workflow
+
+`synthetic_fixtures/layouts.py` builds one invented-data lab PDF per layout seen in
+production: Quest-style digital (In Range / Out of Range, printed H/L flags, Lab column,
+urinalysis band), Cleveland HeartLab-style digital (Current + dated Historical columns),
+fully scanned (image-only pages with mocked double reads) and mixed digital + scanned.
+PDFs are generated at test time and never committed.
+
+`test_reproducibility.py` checks, for every fixture:
+
+- **Golden file** (`synthetic_fixtures/golden/<fixture>.json`): every scored value, tier,
+  CellDeep and lab range, draw date, lab-reported result and flag, staff-only row and staff
+  note. Any change fails the test.
+- **Idempotence**: the same inputs render the same report HTML and PDF text twice, and in
+  two interpreters with different `PYTHONHASHSEED` values.
+
+When a change to the output is intended, regenerate and review the JSON diff before
+committing:
+
+```bash
+CELLDEEP_UPDATE_GOLDEN=1 ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q test_reproducibility.py
+git diff synthetic_fixtures/golden/
+```
+
+### Every production failure becomes a fixture and a test before it is fixed
+
+1. **Capture without patient data.** From the staff QA file and the value-free
+   `source=scan ...` log lines, write down the layout feature that failed (column
+   arrangement, print convention, flag/range notation, section band), never the patient's
+   name, IDs, dates or real values.
+2. **Rebuild it synthetically.** Add or extend a builder in `synthetic_fixtures/layouts.py`
+   (or a mocked scan read) with invented values that reproduce the same layout feature.
+3. **Write the failing test first.** Add a test that fails on the current code for the same
+   reason production failed, and run it to see it fail.
+4. **Fix generally,** in the parser, gate or library, not for one patient or one value.
+5. **Prove it.** The new test passes, the full suite passes offline
+   (`ANTHROPIC_API_KEY=offline-mocked-key`), golden diffs are reviewed and regenerated only
+   if intended, and the PR names the failure and the test that now guards it.
+
+`test_scan_april_regressions.py` (four scanned results dropped) and the all-caps
+urinalysis band test in `test_lab_reported.py` follow this workflow.
+
 ## What's in this folder
 
 | File | Purpose |

@@ -1,0 +1,143 @@
+{
+  "first_draw_date": "11/20/2025",
+  "latest_draw_date": "03/02/2026",
+  "scored": [
+    {
+      "name": "hs-CRP",
+      "then": "2.2",
+      "then_date": "11/20/2025",
+      "now": "1.4",
+      "now_date": "03/02/2026",
+      "then_tier": "moderate",
+      "now_tier": "moderate",
+      "celldeep_range": "optimal <1.0",
+      "range_source": null,
+      "unscored": null,
+      "lab_range_now": "0.0-3.0",
+      "history": []
+    },
+    {
+      "name": "LDL Cholesterol",
+      "then": "121",
+      "then_date": "11/20/2025",
+      "now": "96",
+      "now_date": "03/02/2026",
+      "then_tier": "moderate",
+      "now_tier": "optimal",
+      "celldeep_range": "optimal <100",
+      "range_source": null,
+      "unscored": null,
+      "lab_range_now": null,
+      "history": []
+    },
+    {
+      "name": "Apolipoprotein B",
+      "then": "88",
+      "then_date": "11/20/2025",
+      "now": "71",
+      "now_date": "03/02/2026",
+      "then_tier": "optimal",
+      "now_tier": "optimal",
+      "celldeep_range": "optimal <90",
+      "range_source": null,
+      "unscored": null,
+      "lab_range_now": null,
+      "history": []
+    },
+    {
+      "name": "HbA1c",
+      "then": "5.5",
+      "then_date": "11/20/2025",
+      "now": "5.3",
+      "now_date": "03/02/2026",
+      "then_tier": "optimal",
+      "now_tier": "optimal",
+      "celldeep_range": "optimal <5.7%",
+      "range_source": null,
+      "unscored": null,
+      "lab_range_now": null,
+      "history": []
+    },
+    {
+      "name": "Fasting Insulin",
+      "then": "8.4",
+      "then_date": "11/20/2025",
+      "now": "6.1",
+      "now_date": "03/02/2026",
+      "then_tier": "optimal",
+      "now_tier": "optimal",
+      "celldeep_range": "2–10",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": null,
+      "history": []
+    },
+    {
+      "name": "Lp-PLA2 Activity",
+      "then": "131",
+      "then_date": "11/20/2025",
+      "now": "118",
+      "now_date": "03/02/2026",
+      "then_tier": "flag",
+      "now_tier": "optimal",
+      "celldeep_range": "optimal ≤123",
+      "range_source": null,
+      "unscored": null,
+      "lab_range_now": null,
+      "history": []
+    },
+    {
+      "name": "Testosterone, Total",
+      "then": "655",
+      "then_date": "11/20/2025",
+      "now": "702",
+      "now_date": "03/02/2026",
+      "then_tier": "optimal",
+      "now_tier": "optimal",
+      "celldeep_range": "600–900",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": null,
+      "history": []
+    },
+    {
+      "name": "LH",
+      "then": "3.9",
+      "then_date": "11/20/2025",
+      "now": "4.1",
+      "now_date": "03/02/2026",
+      "then_tier": "optimal",
+      "now_tier": "optimal",
+      "celldeep_range": "1.5-9.3",
+      "range_source": "lab",
+      "unscored": null,
+      "lab_range_now": "1.5-9.3",
+      "history": []
+    }
+  ],
+  "lab_reported": [
+    {
+      "name": "Homocysteine",
+      "group": "Cardiovascular",
+      "results": [
+        {
+          "date_display": "11/20/2025",
+          "disp_value": "11.2",
+          "lab_flag": null,
+          "lab_range": null
+        },
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "9.8",
+          "lab_flag": null,
+          "lab_range": null
+        }
+      ]
+    }
+  ],
+  "staff_unrecognized": [],
+  "scan_summary": [],
+  "staff_notes": [
+    "ERROR: missing threshold for LH / male - using printed lab range"
+  ]
+}

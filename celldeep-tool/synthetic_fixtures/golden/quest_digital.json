@@ -1,0 +1,175 @@
+{
+  "first_draw_date": "",
+  "latest_draw_date": "03/02/2026",
+  "scored": [
+    {
+      "name": "TSH",
+      "then": null,
+      "then_date": "",
+      "now": "1.90",
+      "now_date": "03/02/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "0.40–5.50",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": "0.40-4.50",
+      "history": []
+    },
+    {
+      "name": "Ferritin",
+      "then": null,
+      "then_date": "",
+      "now": "20",
+      "now_date": "03/02/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "18–300",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": "38-380",
+      "history": []
+    },
+    {
+      "name": "Glucose (fasting)",
+      "then": null,
+      "then_date": "",
+      "now": "82",
+      "now_date": "03/02/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "70–90",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": "65-99",
+      "history": []
+    },
+    {
+      "name": "Vitamin D",
+      "then": null,
+      "then_date": "",
+      "now": "48",
+      "now_date": "03/02/2026",
+      "then_tier": null,
+      "now_tier": "moderate",
+      "celldeep_range": "60–90",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": "30-100",
+      "history": []
+    }
+  ],
+  "lab_reported": [
+    {
+      "name": "Hemoglobin",
+      "group": "Complete Blood Count",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "17.6",
+          "lab_flag": "H",
+          "lab_range": "13.2-17.1"
+        }
+      ]
+    },
+    {
+      "name": "Platelet Count",
+      "group": "Complete Blood Count",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "250",
+          "lab_flag": null,
+          "lab_range": "140-400"
+        }
+      ]
+    },
+    {
+      "name": "Sodium",
+      "group": "Chemistry",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "140",
+          "lab_flag": null,
+          "lab_range": "135-146"
+        }
+      ]
+    },
+    {
+      "name": "ALT",
+      "group": "Chemistry",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "61",
+          "lab_flag": "H",
+          "lab_range": "9-46"
+        }
+      ]
+    },
+    {
+      "name": "C-Reactive Protein",
+      "group": "Inflammation",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "2.1",
+          "lab_flag": null,
+          "lab_range": "<8.0"
+        }
+      ]
+    },
+    {
+      "name": "Urinalysis — Color",
+      "group": "Urinalysis",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "YELLOW",
+          "lab_flag": null,
+          "lab_range": "YELLOW"
+        }
+      ]
+    },
+    {
+      "name": "Urinalysis — Glucose",
+      "group": "Urinalysis",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "NEGATIVE",
+          "lab_flag": null,
+          "lab_range": "NEGATIVE"
+        }
+      ]
+    },
+    {
+      "name": "SYNTHETIC ASSAY X",
+      "group": "Other Lab-Flagged Results",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "9.9",
+          "lab_flag": "H",
+          "lab_range": "1.0-5.0"
+        }
+      ]
+    }
+  ],
+  "staff_unrecognized": [
+    {
+      "raw_name": "SYNTHETIC ASSAY X",
+      "raw_range": "1.0-5.0",
+      "cells": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "9.9",
+          "lab_flag": "H"
+        }
+      ]
+    }
+  ],
+  "scan_summary": [],
+  "staff_notes": []
+}
