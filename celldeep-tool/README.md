@@ -33,6 +33,10 @@ and exclusions are recorded only in staff review notes, not in patient
 copy or patient marker objects. Tests mock the vision calls; the optional
 `CELLDEEP_LIVE_VISION=1` test uses a synthetic image-only PDF with invented
 identity, never the local patient fixture.
+The scan schema uses `anyOf` branches for nullable fields, including flags
+and columns. Offline tests check enum/type compatibility and the strict
+object shape. The opt-in live test double-reads six invented results,
+including H/L flags, a qualitative result, and an out-of-range summary.
 
 Printed horizontal rules, including rules spanning multiple columns,
 delimit results bands. Wrapped names and cells are assembled within a band;

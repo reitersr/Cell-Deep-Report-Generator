@@ -15,6 +15,59 @@ import scan_bloodwork as scan
 from synthetic_fixtures import deterministic_fixtures as fx
 
 
+def _assert_structured_schema(schema):
+    supported = {"type", "enum", "anyOf", "properties", "required", "additionalProperties", "items"}
+    assert set(schema) <= supported, f"Unsupported keywords: {set(schema) - supported}"
+    types = schema.get("type", [])
+    types = types if isinstance(types, list) else [types]
+    validators = {
+        "string": lambda value: isinstance(value, str),
+        "null": lambda value: value is None,
+        "boolean": lambda value: isinstance(value, bool),
+        "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
+        "array": lambda value: isinstance(value, list),
+        "object": lambda value: isinstance(value, dict),
+    }
+    assert all(kind in validators for kind in types)
+    for value in schema.get("enum", []):
+        assert types and all(validators[kind](value) for kind in types), (
+            f"Enum value {value!r} does not match every declared type {types}")
+    if "object" in types:
+        assert schema["additionalProperties"] is False
+        assert set(schema["required"]) == set(schema["properties"])
+        assert len(schema["required"]) == len(schema["properties"])
+    for child in schema.get("properties", {}).values():
+        _assert_structured_schema(child)
+    for branch in schema.get("anyOf", []):
+        _assert_structured_schema(branch)
+    if "items" in schema:
+        _assert_structured_schema(schema["items"])
+
+
+def test_scan_schema_structured_output_limits():
+    _assert_structured_schema(scan.SCAN_SCHEMA)
+
+
+@pytest.mark.parametrize("invalid", [
+    {"type": ["string", "null"], "enum": ["H", "L"]},
+    {"type": ["string", "null"], "enum": ["H", "L", None]},
+    {"type": "boolean", "enum": ["false"]},
+    {"anyOf": [{"type": "string", "enum": ["in_range", None]}, {"type": "null"}]},
+])
+def test_schema_walker_rejects_enum_type_mismatches(invalid):
+    with pytest.raises(AssertionError, match="Enum value"):
+        _assert_structured_schema(invalid)
+
+
+@pytest.mark.parametrize(("value", "valid"), [("H", True), ("L", True), (None, True), ("X", False), (False, False)])
+def test_nullable_enum_response_validation(value, valid):
+    if valid:
+        scan._validate(value, scan.SCAN_SCHEMA["properties"]["rows"]["items"]["properties"]["flag"])
+    else:
+        with pytest.raises(scan.ScanGateError, match="schema gate:"):
+            scan._validate(value, scan.SCAN_SCHEMA["properties"]["rows"]["items"]["properties"]["flag"])
+
+
 GOLDEN = [
     ("IRON, TOTAL", "59", None, "50-180"), ("IRON BINDING CAPACITY", "295", None, "250-425"),
     ("% SATURATION", "20", None, "20-48"), ("FERRITIN", "32", "L", "38-380"),
@@ -327,23 +380,32 @@ def test_real_digital_rows_merge_with_mocked_golden(tmp_path):
     assert all("source" not in row for row in audit)
 
 
-@pytest.mark.skipif(os.environ.get("CELLDEEP_LIVE_VISION") != "1", reason="Live vision explicitly disabled")
-def test_live_synthetic_scan(tmp_path):
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        pytest.skip("API key absent")
+def _synthetic_live_pdf(tmp_path):
     document = fitz.open()
     digital = document.new_page()
-    for x, y, text in fx.section_preamble("SYN-LIVE", "01/27/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.35"):
+    preamble = [
+        (40, 40, "Order ID: SYN-LIVE"),
+        (40, 54, "Patient Name: TEST, PATIENT"),
+        (40, 68, "Collected: 01/27/2026"),
+    ]
+    for x, y, text in preamble + fx.header_line(100) + fx.row(130, "TSH", "1.35"):
         digital.insert_text((x, y), text, fontsize=9)
     image_doc = fitz.open()
     source = image_doc.new_page()
     for point, text in [
-        ((40, 40), "Patient Name: Synthetic, Pat"), ((40, 60), "Collected: 04/24/2026"),
-        ((40, 80), "SPECIMEN: SYN-LIVE-SCAN"), ((40, 100), "ROUTINE PANELS"),
+        ((40, 40), "Patient Name: TEST, PATIENT"), ((40, 60), "Collected: 04/24/2026"),
+        ((40, 80), "SPECIMEN: SPECIMEN-A"), ((40, 100), "ROUTINE PANELS"),
         ((40, 120), "Test Name"), ((220, 120), "In Range"), ((320, 120), "Out of Range"),
         ((430, 120), "Reference Range"), ((40, 150), "TSH"), ((220, 150), "1.19"),
-        ((430, 150), "0.40-4.50"), ((40, 200), "LIST OF RESULTS PRINTED IN THE OUT OF RANGE COLUMN"),
-        ((40, 220), "None"),
+        ((430, 150), "0.40-4.50"),
+        ((40, 180), "HEMOGLOBIN"), ((320, 180), "18.0 H"), ((430, 180), "13.2-17.1"),
+        ((40, 210), "FERRITIN"), ((320, 210), "20 L"), ((430, 210), "38-380"),
+        ((40, 240), "GLUCOSE"), ((220, 240), "85"), ((430, 240), "65-99"),
+        ((40, 270), "CREATININE"), ((220, 270), "1.00"), ((430, 270), "0.60-1.29"),
+        ((40, 300), "URINALYSIS"),
+        ((40, 330), "GLUCOSE"), ((220, 330), "NEGATIVE"), ((430, 330), "NEGATIVE"),
+        ((40, 400), "LIST OF RESULTS PRINTED IN THE OUT OF RANGE COLUMN"),
+        ((40, 430), "HEMOGLOBIN 18.0 H"), ((40, 460), "FERRITIN 20 L"),
     ]:
         source.insert_text(point, text, fontsize=9)
     document.new_page().insert_image(source.rect, pixmap=source.get_pixmap(dpi=200))
@@ -351,6 +413,29 @@ def test_live_synthetic_scan(tmp_path):
     document.save(path)
     document.close()
     image_doc.close()
+    return path
+
+
+def test_synthetic_live_fixture_has_one_identity_and_image_only_scan(tmp_path):
+    with fitz.open(_synthetic_live_pdf(tmp_path)) as document:
+        assert scan.digital_patient_names([document[0]], pipeline._group_lines, pipeline._page_words) == {
+            "TEST, PATIENT",
+        }
+        assert pipeline._page_words(document[1]) == []
+
+
+@pytest.mark.skipif(os.environ.get("CELLDEEP_LIVE_VISION") != "1", reason="Live vision explicitly disabled")
+def test_live_synthetic_scan(tmp_path):
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        pytest.skip("API key absent")
+    path = _synthetic_live_pdf(tmp_path)
     extracted = pipeline.extract(str(path), [], None, audit_root=str(tmp_path))
+    accepted = [note for note in extracted["other_notes"] if " accepted " in note]
+    excluded = [note for note in extracted["other_notes"] if " excluded " in note or "REJECTED" in note]
+    print(f"Synthetic live result: {len(accepted)} accepted, {len(excluded)} excluded/rejected")
+    for note in accepted + excluded:
+        print(note)
+    assert len(accepted) == 6
+    assert excluded == []
     assert any(row["name"] == "TSH" and row["disp_value"] == "1.19"
                and row["date_display"] == "04/24/2026" for row in extracted["marker_occurrences"])

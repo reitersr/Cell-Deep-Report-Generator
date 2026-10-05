@@ -15,21 +15,25 @@ def _object(properties):
             "properties": properties, "required": list(properties)}
 
 
-_TEXT = {"type": ["string", "null"]}
-_FLAG = {"type": ["string", "null"], "enum": ["H", "L", None]}
+def _nullable(schema):
+    return {"anyOf": [schema, {"type": "null"}]}
+
+
+_TEXT = _nullable({"type": "string"})
+_FLAG = _nullable({"type": "string", "enum": ["H", "L"]})
 _SUMMARY_ROW = _object({
     "name": _TEXT, "result_text": _TEXT, "flag": _FLAG, "illegible": {"type": "boolean"},
 })
 _ROW = _object({
     **_SUMMARY_ROW["properties"],
-    "column": {"type": ["string", "null"], "enum": ["in_range", "out_of_range", None]},
+    "column": _nullable({"type": "string", "enum": ["in_range", "out_of_range"]}),
     "reference_range": _TEXT, "page": {"type": "integer"}, "section": _TEXT,
 })
 SCAN_SCHEMA = _object({
     "page": {"type": "integer"}, "specimen_id": _TEXT, "collected": _TEXT,
     "patient_name": _TEXT, "illegible": {"type": "boolean"},
     "rows": {"type": "array", "items": _ROW},
-    "out_of_range_summary": {"type": ["array", "null"], "items": _SUMMARY_ROW},
+    "out_of_range_summary": _nullable({"type": "array", "items": _SUMMARY_ROW}),
 })
 SCAN_PROMPT = """Transcribe this lab page literally. Never infer, calculate, correct, or complete text.
 Return only the supplied JSON schema. Copy names, result_text, reference_range, section headings,
@@ -50,11 +54,16 @@ _STATUSES = {
 
 
 def _validate(value, schema, location="page"):
-    types = schema["type"]
-    types = types if isinstance(types, list) else [types]
     actual = ("null" if value is None else "boolean" if isinstance(value, bool) else
               "integer" if isinstance(value, int) else "string" if isinstance(value, str) else
               "array" if isinstance(value, list) else "object" if isinstance(value, dict) else "invalid")
+    if "anyOf" in schema:
+        branches = [branch for branch in schema["anyOf"] if branch.get("type") == actual]
+        if len(branches) != 1:
+            raise ScanGateError(f"schema gate: invalid {location}")
+        return _validate(value, branches[0], location)
+    types = schema["type"]
+    types = types if isinstance(types, list) else [types]
     if actual not in types or ("enum" in schema and value not in schema["enum"]):
         raise ScanGateError(f"schema gate: invalid {location}")
     if actual == "object":
