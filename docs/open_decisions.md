@@ -153,6 +153,9 @@ repository.
 
 ## 7. Lab H/L flag that disagrees with the CellDeep tier
 
+> **Status: implemented** (option C): neutral "Lab flag: ..." line, switch
+> `clinic_config.SHOW_LAB_FLAG_WHEN_IT_DIFFERS` (default on), and a staff-notes line.
+
 **Evidence.** Found by the `quest_digital` fixture (`synthetic_fixtures/golden/quest_digital.json`):
 Ferritin 20, printed **L** against the lab range 38-380, scores **optimal** against the male
 CellDeep range 18-300 (`markers_reference.py`, Ferritin `sex_variants`). The patient's scored

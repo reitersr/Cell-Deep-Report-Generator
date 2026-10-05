@@ -14,6 +14,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": "0.0-3.0",
+      "lab_flag_then": null,
+      "lab_flag_now": "H",
       "history": []
     },
     {
@@ -28,6 +30,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -42,6 +46,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -56,6 +62,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": [
         {
           "date_display": "03/02/2026",
@@ -76,6 +84,8 @@
       "range_source": "celldeep",
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": [
         {
           "date_display": "03/02/2026",
@@ -96,6 +106,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -110,6 +122,8 @@
       "range_source": "celldeep",
       "unscored": null,
       "lab_range_now": "250-1100 ng/dL",
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": [
         {
           "date_display": "03/02/2026",
@@ -130,6 +144,8 @@
       "range_source": "lab",
       "unscored": null,
       "lab_range_now": "1.5-9.3",
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -144,6 +160,8 @@
       "range_source": "celldeep",
       "unscored": null,
       "lab_range_now": "0.40-4.50",
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -158,6 +176,8 @@
       "range_source": "celldeep",
       "unscored": null,
       "lab_range_now": "35.0-155.0 pg/mL",
+      "lab_flag_then": null,
+      "lab_flag_now": "H",
       "history": []
     },
     {
@@ -172,6 +192,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -186,6 +208,8 @@
       "range_source": "celldeep",
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     }
   ],

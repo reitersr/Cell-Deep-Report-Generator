@@ -18,3 +18,12 @@ CENSORED_CHIP_LABEL = "Reported as a limit, not scored"
 # Status chip for any other result that cannot be scored as printed (e.g. a text status such as
 # "SEE NOTE"). Shown as printed, no CellDeep tier.
 UNSCORABLE_CHIP_LABEL = "Shown as reported, not scored"
+
+
+# ---- Lab flag that disagrees with the CellDeep status ----------------------------------------------
+
+# When the lab printed H or L for a result that CellDeep scores Optimal (CellDeep ranges can be wider
+# or narrower than the lab's), show a small neutral line under the value, e.g.
+# "Lab flag: Low (lab range 38-380)". The CellDeep status itself never changes. False hides the line;
+# the staff notes list every disagreement either way.
+SHOW_LAB_FLAG_WHEN_IT_DIFFERS = True

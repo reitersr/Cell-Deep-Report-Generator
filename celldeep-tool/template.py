@@ -336,6 +336,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .lab-pill{{background:{MIDGRAY}22; color:{INK};}}
 .lab-flag{{font-weight:700; margin-left:3px;}}
 .dexa-est{{font-size:8px; font-weight:600; color:{MUTE}; text-transform:lowercase; margin-left:2px;}}
+.lab-flag-line{{display:block; font-size:8.5px; color:{MUTE}; margin-top:2px; line-height:1.2;}}
 .lab-flag-words{{font-size:10px; color:{MUTE}; font-weight:600;}}
 .bio-note{{font-size:9.5px; color:{DARKGRAY}; line-height:1.3; font-style:italic; max-width:6.2in;}}
 '''
@@ -661,6 +662,21 @@ def _lab_flag_words(flag) -> str:
     return f'<span class="lab-flag-words"> - lab flag {_html(clinic_config.LAB_FLAG_WORDS.get(flag, flag))}</span>'
 
 
+def lab_flag_differs(m) -> bool:
+    """The lab printed H/L for the current result while CellDeep calls it optimal."""
+    return bool(m.lab_flag_now) and m.lab_flag_now in clinic_config.LAB_FLAG_WORDS and m.now_tier == "optimal"
+
+
+def _lab_flag_line(m) -> str:
+    """'Lab flag: Low (lab range 38-380)' under a scored value whose lab flag disagrees."""
+    if not (clinic_config.SHOW_LAB_FLAG_WHEN_IT_DIFFERS and lab_flag_differs(m)):
+        return ""
+    lab_range = (m.lab_range_now or {}).get("display")
+    range_text = f" (lab range {_html(lab_range)})" if lab_range else ""
+    word = _html(clinic_config.LAB_FLAG_WORDS[m.lab_flag_now])
+    return f'<span class="lab-flag-line">Lab flag: {word}{range_text}</span>'
+
+
 def bio_row_tr(m, copy, color_override=None):
     # A capped/inequality result (e.g. "<0.7") is a real current reading even with now=None,
     # so all three of now/now_tier/disp_now must be empty before calling this "not retested".
@@ -699,7 +715,8 @@ def bio_row_tr(m, copy, color_override=None):
     now_date = f'<span class="bio-date">{fmt_date(m.now_date_display)}</span>' if m.now_date_display else ""
     now_text = _html(m.disp_now) if censored_now else fmt(m.disp_now)
     now_flag = _lab_flag_words(m.lab_flag_now) if censored_now else ""
-    now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{now_text}</span>{now_flag}{unit}{now_date}'
+    now_cell = (f'<span class="bio-pill now" style="background:{bg}; color:{color};">{now_text}</span>'
+                f'{now_flag}{unit}{now_date}{_lab_flag_line(m)}')
     note_html = ""
     if note:
         note_text = _join_sentences(what, note)

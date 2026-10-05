@@ -814,6 +814,8 @@ _QUALITATIVE_CELLS = {"negative", "positive", "detected", "not detected", "none 
 _EXPECTED_QUALITATIVE = {"negative", "not detected", "none detected", "normal", "non-reactive", "nonreactive"}
 _MULTIWORD_CELLS = (("test", "not", "performed"), ("not", "performed"), ("not", "detected"), ("none", "detected"))
 _STANDALONE_FLAGS = {"H", "L", "HH", "LL"}
+# Words a separate "Flag" column prints, mapped to the H/L flag they state. Anything else is ignored.
+_FLAG_COLUMN_WORDS = {"H": "H", "L": "L", "HH": "HH", "LL": "LL", "HIGH": "H", "LOW": "L"}
 _COMPARATOR_TOKEN_RE = re.compile(r"(?:<=|>=|[<>≤≥])\s*(?:\d+(?:\.\d+)?|\.\d+)")
 _BOUNDED_RANGE_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?")
 # How far (pt) a result's center may sit outside its dated column's printed header label.
@@ -833,8 +835,8 @@ _BLOODWORK_HEADER_LABELS = [
     ("current", ("in", "range")), ("current", ("out", "of", "range")),
     ("current", ("optimal",)), ("current", ("moderate",)), ("current", ("high",)),
     ("historical", ("historical",)), ("historical", ("historical", "result")),
-    ("range", ("reference", "range")), ("range", ("range",)),
-    ("ignore", ("units",)), ("ignore", ("unit",)), ("ignore", ("lab",)), ("ignore", ("flag",)),
+    ("range", ("reference", "range")), ("range", ("reference", "interval")), ("range", ("range",)),
+    ("ignore", ("units",)), ("ignore", ("unit",)), ("ignore", ("lab",)), ("flag", ("flag",)),
 ]
 
 
@@ -1049,6 +1051,13 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         kind = header["columns"][column]["kind"]
         if kind == "range":
             range_words.append(word[4])
+            continue
+        if kind == "flag":
+            # A separate printed Flag column (Labcorp-style) belongs to the single current result.
+            printed = _FLAG_COLUMN_WORDS.get(word[4].upper())
+            current = [i for i, c in enumerate(header["value_columns"]) if c["kind"] == "current"]
+            if printed and len(current) == 1:
+                flags[current[0]] = printed
             continue
         if kind in ("current", "historical") and word[4] in _STANDALONE_FLAGS \
                 and header["logical"][column] is not None:
@@ -2111,6 +2120,10 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 for disp, value, date, flag in ((m.disp_then, m.then, m.then_date_display, m.lab_flag_then),
                                                 (m.disp_now, m.now, m.now_date_display, m.lab_flag_now))
                 if scoring.is_censored(disp, value)]
+    differing = [f"{m.name} {m.disp_now!r} (lab flag {m.lab_flag_now}, CellDeep {m.now_tier})"
+                 for m in markers if template.lab_flag_differs(m)]
+    if differing:
+        notice.other_notes.append("LAB FLAG DIFFERS FROM CELLDEEP STATUS: " + "; ".join(differing))
     if censored:
         notice.other_notes.append("CENSORED RESULTS (shown exactly as printed, excluded from every score): "
                                   + "; ".join(censored))

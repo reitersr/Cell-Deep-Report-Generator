@@ -40,6 +40,7 @@ def snapshot(extracted, record, notice):
             "now_date": m.now_date_display, "then_tier": m.then_tier, "now_tier": m.now_tier,
             "celldeep_range": m.disp_range, "range_source": m.range_source, "unscored": m.unscored_reason,
             "lab_range_now": (m.lab_range_now or {}).get("display"),
+            "lab_flag_then": m.lab_flag_then, "lab_flag_now": m.lab_flag_now,
             "history": m.full_history,
         } for m in record.markers],
         "lab_reported": [{"name": item.name, "group": item.group, "results": item.results}

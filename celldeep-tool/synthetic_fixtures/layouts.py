@@ -7,6 +7,8 @@ with the literal transcriptions in SCAN_PAGES (as if a vision model had read the
     quest_digital  Quest-style digital report: In Range / Out of Range columns, printed H/L flags,
                    Reference Range and Lab-code columns, a URINALYSIS band
     chl_digital    Cleveland HeartLab-style digital report: Current plus dated Historical columns
+    labcorp_digital Labcorp-style digital report: Current Result, a separate Flag column (High/Low),
+                   Units and Reference Interval
     scanned        a fully scanned report (image-only pages)
     mixed          digital pages followed by scanned pages of a later draw
 """
@@ -68,6 +70,34 @@ QUEST_ROWS = [
 
 def quest_digital(path):
     return fx.write_lab_pdf(path, [_quest_page("03/02/2026", QUEST_ROWS, "SYN-Q-100")])
+
+
+LABCORP_X = {"name": 40, "result": 230, "flag": 300, "units": 360, "range": 440}
+LABCORP_ROWS = [
+    ("Ferritin", "20", "Low", "ng/mL", "30-400"),
+    ("Vitamin B12", "655", "", "pg/mL", "232-1245"),
+    ("Hemoglobin", "17.6", "High", "g/dL", "13.0-17.0"),
+    ("Hematocrit", "52.3", "High", "%", "37.5-51.0"),
+    ("Platelets", "250", "", "x10E3/uL", "150-450"),
+    ("Potassium", "5.6", "High", "mmol/L", "3.5-5.2"),
+    ("Hemoglobin A1c", "5.4", "", "%", "4.8-5.6"),
+    ("Synthetic Assay Y", "0.2", "Low", "U/L", "0.5-2.0"),
+]
+
+
+def labcorp_digital(path):
+    items = [(40, 40, "Specimen ID: SYN-L-300"), (40, 54, f"Patient: {PATIENT}"),
+             (40, 68, "Date Collected: 03/02/2026"),
+             (LABCORP_X["name"], 100, "Test"), (LABCORP_X["result"], 100, "Current Result"),
+             (LABCORP_X["flag"], 100, "Flag"), (LABCORP_X["units"], 100, "Units"),
+             (LABCORP_X["range"], 100, "Reference Interval")]
+    for index, (name, result, flag, units, reference) in enumerate(LABCORP_ROWS):
+        y = 128 + index * 14
+        items += [(LABCORP_X["name"], y, name), (LABCORP_X["result"], y, result),
+                  (LABCORP_X["units"], y, units), (LABCORP_X["range"], y, reference)]
+        if flag:
+            items.append((LABCORP_X["flag"], y, flag))
+    return fx.write_lab_pdf(path, [items])
 
 
 def chl_digital(path):
@@ -155,6 +185,7 @@ class ScanReader:
 FIXTURES = {
     "quest_digital": (quest_digital, None),
     "chl_digital": (chl_digital, None),
+    "labcorp_digital": (labcorp_digital, None),
     "scanned": (scanned, lambda: ScanReader(_scan_pages(1))),
     "mixed": (mixed, lambda: ScanReader(_scan_pages(2))),
 }
