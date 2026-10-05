@@ -41,6 +41,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/synthetic_fixtures/` | Invented-data fixture builders. |
 | `celldeep-tool/test_*.py` | Test suite (pytest). |
 | `calibration_baselines/` | Synthetic calibration snapshots. |
+| `celldeep-tool/ranges_audit.py` | Read-only audit of each marker's threshold source; `--write` regenerates `docs/ranges_audit.md` (a test keeps it in sync). |
 | `docs/` | Audits and open clinical decisions. |
 | `.github/workflows/tests.yml` | CI: full suite offline on every pull request. |
 
