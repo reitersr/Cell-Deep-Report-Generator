@@ -129,6 +129,7 @@ def payloads():
                 "illegible": False} for row in rows if row["column"] == "out_of_range"]
     return [{
         "page": number, "specimen_id": "SYN-SCAN-001",
+        "footer": f"SPECIMEN: SYN-SCAN-001 PAGE {number - 1} OF 2",
         "collected": "04/24/2026 09:15" if number == 3 else None,
         "patient_name": "Synthetic, Pat", "illegible": False,
         "rows": [row for row in rows if row["page"] == number],
@@ -220,23 +221,27 @@ def test_rowless_page_without_identity_does_not_reject_batch():
     data = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
     continuation = {
         "page": 4, "specimen_id": None, "collected": None, "patient_name": None,
+        "footer": None,
         "illegible": True, "rows": [], "out_of_range_summary": None,
     }
     data.append([copy.deepcopy(continuation), copy.deepcopy(continuation)])
     accepted, notes = gate(data)
     assert len(accepted) == len(GOLDEN)
-    assert len(notes) == 1 and "page 4: rowless page" in notes[0]
+    assert len(notes) == 1 and "rowless page without specimen identity" in notes[0]
 
 
 @pytest.mark.parametrize("reading", [0, 1, None])
-def test_rowful_page_without_specimen_identity_rejects_batch(reading):
+def test_rowful_page_without_verified_footer_is_excluded(reading):
     data = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
     for page in data[0]:
         page["specimen_id"] = None
+        page["footer"] = None
     if reading is not None:
         data[0][1 - reading]["rows"] = []
-    with pytest.raises(scan.ScanGateError, match="specimen gate:.*page 2"):
-        gate(data)
+    accepted, notes = gate(data)
+    assert len(accepted) == len(payloads()[1]["rows"])
+    assert all(row["page"] == 3 for row in accepted)
+    assert any("page 2" in note and "no verified adjacent" in note for note in notes)
 
 
 def test_rowless_specimen_pages_supply_identity_and_split_summary():
@@ -249,6 +254,7 @@ def test_rowless_specimen_pages_supply_identity_and_split_summary():
     for number, block in [(4, summary[:5]), (5, summary[5:])]:
         template.append({
             "page": number, "specimen_id": "SYN-SCAN-001", "collected": "04/24/2026",
+            "footer": None,
             "patient_name": "Synthetic, Pat", "illegible": False,
             "rows": [], "out_of_range_summary": block,
         })
@@ -258,13 +264,14 @@ def test_rowless_specimen_pages_supply_identity_and_split_summary():
     assert notes == []
 
 
-def test_rowless_summary_without_specimen_still_rejects():
+def test_rowless_summary_without_specimen_is_excluded():
     data = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
     for page in data[1]:
         page["rows"] = []
         page["specimen_id"] = None
-    with pytest.raises(scan.ScanGateError, match="summary gate: specimen identity missing"):
-        gate(data)
+    accepted, notes = gate(data)
+    assert accepted == []  # Only this excluded page carried the specimen date.
+    assert any("rowless page without specimen identity" in note for note in notes)
 
 
 def test_rowless_page_preserves_metadata_and_patient_checks():
@@ -275,30 +282,139 @@ def test_rowless_page_preserves_metadata_and_patient_checks():
     with pytest.raises(scan.ScanGateError, match="patient gate: name mismatch"):
         gate(data)
     data[1][1]["patient_name"] = None
-    with pytest.raises(scan.ScanGateError, match="metadata agreement gate:"):
+    with pytest.raises(scan.ScanGateError, match="patient gate: name mismatch"):
         gate(data)
 
 
-@pytest.mark.parametrize("failure", ["summary", "date", "conflicting_dates", "name", "metadata"])
+@pytest.mark.parametrize("failure", ["conflicting_dates", "name"])
 def test_batch_gates_raise(failure):
     data = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
-    if failure == "summary":
-        for page in data[1]:
-            page["out_of_range_summary"][0]["result_text"] = "33"
-    elif failure == "date":
-        for pair in data:
-            for page in pair:
-                page["collected"] = None
-    elif failure == "conflicting_dates":
+    if failure == "conflicting_dates":
         for page in data[0]:
             page["collected"] = "04/23/2026"
     elif failure == "name":
         for page in data[0]:
             page["patient_name"] = "Different, Person"
-    else:
-        data[0][1]["specimen_id"] = "SYN-DIFFERENT"
     with pytest.raises(scan.ScanGateError, match="gate:"):
         gate(data)
+
+
+def _footer_pages():
+    template = payloads()
+    middle = copy.deepcopy(template[0])
+    middle.update(page=3, specimen_id=None, footer="PAGE 2 OF 3")
+    middle["rows"] = [middle["rows"].pop(0)]
+    template[0]["rows"] = template[0]["rows"][1:]
+    template[0]["footer"] = "SPECIMEN: SYN-SCAN-001 PAGE 1 OF 3"
+    template[1].update(page=4, footer="SPECIMEN: SYN-SCAN-001 PAGE 3 OF 3")
+    pages = [template[0], middle, template[1]]
+    for page in pages:
+        for row in page["rows"]:
+            row["page"] = page["page"]
+    return pages
+
+
+def test_missing_specimen_between_matching_footer_pages_is_inherited(capsys):
+    accepted, notes = gate([[copy.deepcopy(page), copy.deepcopy(page)] for page in _footer_pages()])
+    assert len(accepted) == len(GOLDEN)
+    assert notes == []
+    assert next(row for row in accepted if row["page"] == 3)["specimen_id"] == "SYN-SCAN-001"
+    assert 'page=3 rows_read=1/1 specimen_id="SYN-SCAN-001"' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("failure", ["no_sequence", "wrong_sequence", "no_footer_id", "disagreement"])
+def test_footer_inheritance_requires_verified_sequence(failure):
+    pages = _footer_pages()
+    if failure == "no_sequence":
+        pages[1]["footer"] = None
+    elif failure == "wrong_sequence":
+        pages[1]["footer"] = "PAGE 3 OF 3"
+    elif failure == "no_footer_id":
+        pages[0]["footer"] = "PAGE 1 OF 3"
+        pages[2]["footer"] = "PAGE 3 OF 3"
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in pages]
+    if failure == "disagreement":
+        pairs[1][1]["footer"] = "PAGE 1 OF 3"
+    accepted, notes = gate(pairs)
+    assert len(accepted) == len(GOLDEN) - 1
+    assert all(row["page"] != 3 for row in accepted)
+    assert any("page 3" in note and "gate:" in note for note in notes)
+
+
+@pytest.mark.parametrize("reading", [0, 1, None])
+def test_summary_mismatch_excludes_only_disagreeing_row(reading, capsys):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    for index in (0, 1) if reading is None else (reading,):
+        pairs[1][index]["out_of_range_summary"][0]["result_text"] = "PRIVATE-RESULT"
+    accepted, notes = gate(pairs)
+    assert len(accepted) == len(GOLDEN) - 1
+    assert all(row["name"] != "FERRITIN" for row in accepted)
+    assert notes == [
+        "source=scan page 2 excluded 'FERRITIN': summary gate: out-of-range row disagrees with printed summary"]
+    lines = capsys.readouterr().out.splitlines()
+    assert notes[0] in lines
+    assert sum("verdict=kept" in line for line in lines) == 2
+    assert not any("Synthetic" in line or "PRIVATE-RESULT" in line or "result_text=" in line
+                   for line in lines)
+
+
+def test_page_log_format_and_privacy(capsys):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    gate(pairs)
+    assert capsys.readouterr().out.splitlines() == [
+        f'source=scan page={number} rows_read={count}/{count} specimen_id="SYN-SCAN-001" '
+        'name_matched=yes date="04/24/2026" verdict=kept reason="passed"'
+        for number, count in ((2, 54), (3, len(GOLDEN) - 54))
+    ]
+
+
+def test_fatal_conflict_logs_every_page_and_row(capsys):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    for page in pairs[0]:
+        page["collected"] = "04/23/2026"
+    with pytest.raises(scan.ScanGateError, match="conflicting Collected dates"):
+        gate(pairs)
+    lines = capsys.readouterr().out.splitlines()
+    assert sum("verdict=excluded" in line for line in lines) == 2
+    assert sum(" excluded " in line for line in lines) == len(GOLDEN)
+    assert not any("Synthetic" in line for line in lines)
+
+
+def test_metadata_failure_is_page_local():
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    pairs[0][1]["specimen_id"] = "SYN-DIFFERENT"
+    accepted, notes = gate(pairs)
+    assert len(accepted) == len(payloads()[1]["rows"])
+    assert any("metadata agreement gate: specimen_id differs" in note for note in notes)
+
+
+def test_missing_date_is_specimen_local():
+    pages = payloads()
+    pages[0].update(specimen_id="SYN-NO-DATE", footer=None)
+    accepted, notes = gate([[copy.deepcopy(page), copy.deepcopy(page)] for page in pages])
+    assert len(accepted) == len(pages[1]["rows"])
+    assert any("missing Collected date for specimen" in note for note in notes)
+
+
+def test_invalid_date_is_page_local():
+    pages = _footer_pages()
+    pages[1]["collected"] = "02/30/2026"
+    accepted, notes = gate([[copy.deepcopy(page), copy.deepcopy(page)] for page in pages])
+    assert len(accepted) == len(GOLDEN) - 1
+    assert any("page 3: date gate: invalid date" in note for note in notes)
+
+
+def test_partial_transcription_still_contributes_contradiction_evidence(capsys):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    partial = copy.deepcopy(pairs[0][0])
+    partial["collected"] = "04/23/2026"
+    with pytest.raises(scan.ScanGateError, match="conflicting Collected dates"):
+        scan.gate_reads(pairs[1:], {"Synthetic, Pat"}, pipeline._CELL_VALUE_RE,
+                        pipeline._PRINTED_DATE_RE, pipeline._normalize_date_for_matching,
+                        [(2, [partial], "schema gate: invalid JSON on page 2")])
+    output = capsys.readouterr().out
+    assert 'page=2 rows_read=54/null specimen_id="SYN-SCAN-001"' in output
+    assert output.count("verdict=excluded") == 2
 
 
 @pytest.fixture
@@ -340,12 +456,24 @@ def test_mocked_merge_and_staff_only_provenance(mixed_pdf, tmp_path):
     assert any(row["raw_name"] == "GLUCOSE" and "URINALYSIS" in row["source_context"] for row in unknown)
 
 
-def test_fatal_gate_uses_no_scan_rows(mixed_pdf, tmp_path):
+def test_bad_transcription_does_not_prevent_next_page(mixed_pdf, tmp_path, capsys):
+    page = payloads()[1]
+    client = MockClient([None, page, page])
+    extracted = pipeline.extract(str(mixed_pdf), [], None, client=client, audit_root=str(tmp_path))
+    assert extracted["latest_draw_date"] == "04/24/2026"
+    assert any("page 2: schema gate" in note for note in extracted["other_notes"])
+    lines = capsys.readouterr().out.splitlines()
+    assert any("page=2 rows_read=null/null" in line and "verdict=excluded" in line for line in lines)
+    assert any("page=3" in line and "verdict=kept" in line for line in lines)
+
+
+def test_summary_mismatch_preserves_other_scan_rows(mixed_pdf, tmp_path):
     data = payloads()
     data[1]["out_of_range_summary"] = []
     extracted = pipeline.extract(str(mixed_pdf), [], None, client=client_for(data), audit_root=str(tmp_path))
-    assert all(item["date_display"] != "04/24/2026" for item in extracted["marker_occurrences"])
-    assert any("summary gate" in note and "ALL SCAN ROWS REJECTED" in note for note in extracted["other_notes"])
+    assert any(item["date_display"] == "04/24/2026" for item in extracted["marker_occurrences"])
+    assert any("summary gate" in note for note in extracted["other_notes"])
+    assert not any("ALL SCAN ROWS REJECTED" in note for note in extracted["other_notes"])
 
 
 def test_scan_notes_are_staff_only_in_rendered_pdf(mixed_pdf, tmp_path, monkeypatch):
@@ -388,22 +516,25 @@ def test_invalid_transcription_is_visibly_rejected(mixed_pdf, tmp_path, failure)
     )
     extracted = pipeline.extract(str(mixed_pdf), [], None, client=client, audit_root=str(tmp_path))
     assert extracted["latest_draw_date"] == "01/27/2026"
-    assert any("gate:" in note and "ALL SCAN ROWS REJECTED" in note for note in extracted["other_notes"])
+    assert any("gate:" in note and "page excluded" in note for note in extracted["other_notes"])
+    assert not any("ALL SCAN ROWS REJECTED" in note for note in extracted["other_notes"])
 
 
 def test_patient_header_gate_is_mandatory():
     pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
-    with pytest.raises(scan.ScanGateError, match="digital patient name missing"):
-        scan.gate_reads(pairs, set(), pipeline._CELL_VALUE_RE,
-                        pipeline._PRINTED_DATE_RE, pipeline._normalize_date_for_matching)
+    accepted, notes = scan.gate_reads(pairs, set(), pipeline._CELL_VALUE_RE,
+                                     pipeline._PRINTED_DATE_RE, pipeline._normalize_date_for_matching)
+    assert accepted == []
+    assert any("digital patient name missing" in note for note in notes)
 
 
 def test_invalid_calendar_date_rejected():
     data = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
     for page in data[1]:
         page["collected"] = "02/30/2026"
-    with pytest.raises(scan.ScanGateError, match="date gate: invalid date"):
-        gate(data)
+    accepted, notes = gate(data)
+    assert accepted == []
+    assert any("date gate: invalid date" in note for note in notes)
 
 
 SOURCE = Path(__file__).parent / "real_fixtures" / "bloodwork_fixture_01.pdf"
@@ -426,6 +557,7 @@ def test_real_digital_rows_merge_with_mocked_golden(tmp_path):
                 page_rows.append({**row, "page": number})
         data.append({
             "page": number, "specimen_id": "SYN-MOCKED-SCAN", "collected": "04/24/2026 09:15" if number == 21 else None,
+            "footer": f"SPECIMEN: SYN-MOCKED-SCAN PAGE {number - 14} OF 7",
             "patient_name": next(iter(names)), "illegible": False,
             "rows": page_rows, "out_of_range_summary": summary if number == 20 else None,
         })

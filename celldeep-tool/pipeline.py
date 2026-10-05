@@ -1509,18 +1509,27 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit):
 
     numbers = [page.number + 1 for page in pages]
     notes = []
+    failures = []
     if client is None:
         if not os.environ.get("ANTHROPIC_API_KEY"):
+            scan.gate_reads([], set(), _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching,
+                            [(number, [], "client gate: no API key") for number in numbers])
             return [], [], [f"source=scan pages {numbers}: client gate failed: no API key; manual review required"]
         client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"],
                            timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS, max_retries=ANTHROPIC_MAX_RETRIES)
+    reads = []
+    for page in pages:
+        try:
+            reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL))
+        except scan.ScanGateError as error:
+            failures.append((page.number + 1, error.reads, str(error)))
+    digital_names = scan.digital_patient_names(digital_pages, _group_lines, _page_words)
     try:
-        reads = [scan.read_page(page, client, _create_anthropic_message, MODEL) for page in pages]
-        digital_names = scan.digital_patient_names(digital_pages, _group_lines, _page_words)
         accepted, notes = scan.gate_reads(
-            reads, digital_names, _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching)
+            reads, digital_names, _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching, failures)
     except scan.ScanGateError as error:
-        return [], [], [f"source=scan pages {numbers}: {error}; ALL SCAN ROWS REJECTED; manual review required"]
+        return [], [], error.notes + [
+            f"source=scan pages {numbers}: {error}; ALL SCAN ROWS REJECTED; manual review required"]
     occurrences, unknown = [], []
     lab_codes = {
         match[1] for page in digital_pages

@@ -31,13 +31,15 @@ _ROW = _object({
 })
 SCAN_SCHEMA = _object({
     "page": {"type": "integer"}, "specimen_id": _TEXT, "collected": _TEXT,
+    "footer": _TEXT,
     "patient_name": _TEXT, "illegible": {"type": "boolean"},
     "rows": {"type": "array", "items": _ROW},
     "out_of_range_summary": _nullable({"type": "array", "items": _SUMMARY_ROW}),
 })
 SCAN_PROMPT = """Transcribe this lab page literally. Never infer, calculate, correct, or complete text.
 Return only the supplied JSON schema. Copy names, result_text, reference_range, section headings,
-patient_name, footer SPECIMEN id, and Collected date exactly as printed. Use the PDF page number
+patient_name, footer SPECIMEN id, full footer text (including PAGE n OF m), and Collected date
+exactly as printed. Use the PDF page number
 provided, not the report's own printed page number. Classify each result by its printed In Range
 or Out of Range column. Keep H/L separate from result_text. Do not transcribe reference values,
 footnotes, interpretations, or summary entries as result rows. Preserve URINALYSIS section identity.
@@ -80,27 +82,35 @@ def read_page(page, client, create_message, model):
     image = base64.b64encode(page.get_pixmap(dpi=200, alpha=False).tobytes("png")).decode("ascii")
     reads = []
     for reading in (1, 2):
-        response = create_message(
-            client, f"bloodwork scan page {page.number + 1} read {reading}",
-            model=model, max_tokens=16000, system=SCAN_PROMPT,
-            messages=[{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
-                {"type": "text", "text": f"Transcribe PDF page {page.number + 1} independently."},
-            ]}],
-            output_config={"format": {"type": "json_schema", "schema": SCAN_SCHEMA}},
-        )
-        if getattr(response, "stop_reason", None) == "max_tokens":
-            raise ScanGateError(f"schema gate: truncated response on page {page.number + 1}")
-        raw = "".join(block.text for block in response.content if hasattr(block, "text"))
         try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as error:
-            raise ScanGateError(f"schema gate: invalid JSON on page {page.number + 1}") from error
-        _validate(data, SCAN_SCHEMA)
-        if data["page"] != page.number + 1 or any(row["page"] != data["page"] for row in data["rows"]):
-            raise ScanGateError(f"page gate: wrong page number on page {page.number + 1}")
-        reads.append(data)
+            reads.append(_read_transcription(page, image, reading, client, create_message, model))
+        except ScanGateError as error:
+            error.reads = reads
+            raise
     return reads
+
+
+def _read_transcription(page, image, reading, client, create_message, model):
+    response = create_message(
+        client, f"bloodwork scan page {page.number + 1} read {reading}",
+        model=model, max_tokens=16000, system=SCAN_PROMPT,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
+            {"type": "text", "text": f"Transcribe PDF page {page.number + 1} independently."},
+        ]}],
+        output_config={"format": {"type": "json_schema", "schema": SCAN_SCHEMA}},
+    )
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise ScanGateError(f"schema gate: truncated response on page {page.number + 1}")
+    raw = "".join(block.text for block in response.content if hasattr(block, "text"))
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ScanGateError(f"schema gate: invalid JSON on page {page.number + 1}") from error
+    _validate(data, SCAN_SCHEMA)
+    if data["page"] != page.number + 1 or any(row["page"] != data["page"] for row in data["rows"]):
+        raise ScanGateError(f"page gate: wrong page number on page {page.number + 1}")
+    return data
 
 
 def name_key(name):
@@ -163,67 +173,146 @@ def _numeric_flag(row, result_re):
     return row["flag"] == expected if determinate else row["flag"] is None
 
 
-def gate_reads(reads, digital_names, result_re, date_re, normalize_date):
-    """Return consensus rows and notices. Fatal failures reject the complete scan batch."""
+def _printed_date(text, date_re, normalize_date):
+    match = date_re.match(text)
+    if not match:
+        raise ScanGateError("date gate: unreadable Collected date")
+    normalized = normalize_date(match[0])
+    if not isinstance(normalized, tuple):
+        raise ScanGateError("date gate: invalid date")
+    try:
+        calendar_date(*normalized)
+    except ValueError as error:
+        raise ScanGateError("date gate: invalid date") from error
+    return normalized, match[0]
+
+
+def _footer_sequence(footer):
+    match = re.search(r"\bPAGE\s+(\d+)\s+OF\s+(\d+)\b", footer or "", re.I)
+    if match and 1 <= int(match[1]) <= int(match[2]):
+        return int(match[1]), int(match[2])
+    return None
+
+
+def gate_reads(reads, digital_names, result_re, date_re, normalize_date, failures=()):
+    """Isolate page/row failures; only contradictory identity evidence is batch-fatal."""
     expected_names = {name_key(name) for name in digital_names}
-    if len(expected_names) != 1:
-        raise ScanGateError("patient gate: digital patient name missing or conflicting")
+    states = []
     dates = {}
     specimens = {}
     notes = []
+    fatal = None
+    names = set()
     for pair in reads:
         first, second = pair
-        for field in ("specimen_id", "collected", "patient_name"):
+        state = {"pair": pair, "page": first["page"], "specimen": first["specimen_id"],
+                 "date": None, "reason": None, "matched": False}
+        states.append(state)
+        for page in pair:
+            if page["patient_name"]:
+                key = name_key(page["patient_name"])
+                names.add(key)
+                if expected_names and key not in expected_names:
+                    fatal = "patient gate: name mismatch"
+            if page["collected"] and page["specimen_id"]:
+                try:
+                    normalized, printed = _printed_date(page["collected"], date_re, normalize_date)
+                except ScanGateError:
+                    continue
+                dates.setdefault(page["specimen_id"], {})[normalized] = printed
+        state["matched"] = bool(first["patient_name"] and
+                                name_key(first["patient_name"]) in expected_names)
+        for field in ("specimen_id", "collected", "patient_name", "footer"):
             if first[field] != second[field]:
-                raise ScanGateError(f"metadata agreement gate: {field} differs on page {first['page']}")
-        if first["patient_name"] and name_key(first["patient_name"]) not in expected_names:
-            raise ScanGateError(f"patient gate: name mismatch on page {first['page']}")
-        normalized = None
+                state["reason"] = f"metadata agreement gate: {field} differs"
+                break
         if first["collected"]:
-            match = date_re.match(first["collected"])
-            if not match:
-                raise ScanGateError(f"date gate: unreadable Collected date on page {first['page']}")
-            date = match[0]
-            # The report grammar supports more formats; parse via the existing normalizer at merge.
-            normalized = normalize_date(date)
-            if not isinstance(normalized, tuple):
-                raise ScanGateError(f"date gate: invalid date on page {first['page']}")
             try:
-                calendar_date(*normalized)
-            except ValueError as error:
-                raise ScanGateError(f"date gate: invalid date on page {first['page']}") from error
+                _, state["date"] = _printed_date(first["collected"], date_re, normalize_date)
+            except ScanGateError as error:
+                state["reason"] = state["reason"] or str(error)
+        if first["illegible"] or second["illegible"]:
+            state["reason"] = state["reason"] or "legibility gate: illegible page identity"
+    for _, partial_reads, _ in failures:
+        for page in partial_reads:
+            if page["patient_name"]:
+                key = name_key(page["patient_name"])
+                names.add(key)
+                if expected_names and key not in expected_names:
+                    fatal = "patient gate: name mismatch"
+            if page["collected"] and page["specimen_id"]:
+                try:
+                    normalized, printed = _printed_date(page["collected"], date_re, normalize_date)
+                except ScanGateError:
+                    continue
+                dates.setdefault(page["specimen_id"], {})[normalized] = printed
+    if len(names) > 1 or len(expected_names) > 1:
+        fatal = fatal or "patient gate: conflicting patient names"
+    if any(len(values) > 1 for values in dates.values()):
+        fatal = fatal or "date gate: conflicting Collected dates for same specimen"
+
+    for state in states:
+        first, second = state["pair"]
         has_rows = bool(first["rows"] or second["rows"])
-        if not first["specimen_id"] and not has_rows:
-            if first["out_of_range_summary"] or second["out_of_range_summary"]:
-                raise ScanGateError(
-                    f"summary gate: specimen identity missing for summary on page {first['page']}")
-            notes.append(f"source=scan page {first['page']}: rowless page without specimen identity; "
-                         "no rows contributed")
-            continue
-        if first["illegible"] or not first["specimen_id"]:
-            raise ScanGateError(f"specimen gate: missing or illegible identity on page {first['page']}")
-        specimen = first["specimen_id"]
-        specimens.setdefault(specimen, []).append(pair)
-        if normalized is not None:
-            dates.setdefault(specimen, {})[normalized] = date
+        if not state["specimen"] and not has_rows:
+            state["reason"] = "specimen gate: rowless page without specimen identity"
+        if not state["specimen"] and has_rows and not state["reason"]:
+            sequence = _footer_sequence(first["footer"])
+            neighbours = []
+            for other in states:
+                neighbour = other["pair"][0]
+                neighbour_sequence = _footer_sequence(neighbour["footer"])
+                if sequence and neighbour_sequence and not other["reason"] and \
+                        abs(other["page"] - state["page"]) == 1 and \
+                        neighbour_sequence == (sequence[0] + other["page"] - state["page"], sequence[1]) and \
+                        neighbour["specimen_id"] and re.search(
+                            rf"(?<![\w-]){re.escape(neighbour['specimen_id'])}(?![\w-])",
+                            neighbour["footer"]):
+                    neighbours.append(neighbour["specimen_id"])
+            if neighbours and len(set(neighbours)) == 1:
+                state["specimen"] = neighbours[0]
+        if not state["specimen"]:
+            reason = ("specimen gate: missing identity; no verified adjacent PAGE n OF m footer"
+                      if has_rows else "specimen gate: rowless page without specimen identity")
+            state["reason"] = state["reason"] or reason
+        if not expected_names:
+            state["reason"] = state["reason"] or "patient gate: digital patient name missing"
+        if not state["reason"]:
+            specimens.setdefault(state["specimen"], []).append(state)
+            if state["date"]:
+                normalized = normalize_date(state["date"])
+                dates.setdefault(state["specimen"], {})[normalized] = state["date"]
+    if any(len(values) > 1 for values in dates.values()):
+        fatal = fatal or "date gate: conflicting Collected dates for same specimen"
+
+    def exclude_row(row, page, reason):
+        message = f"source=scan page {page} excluded {row['name']!r}: {reason}"
+        notes.append(message)
+        print(message)
+
     accepted = []
-    for specimen, pairs in specimens.items():
-        if len(dates.get(specimen, set())) != 1:
-            raise ScanGateError(f"date gate: missing or conflicting Collected dates for pages "
-                                f"{[pair[0]['page'] for pair in pairs]}")
-        date = next(iter(dates[specimen].values()))
+    for specimen, group in specimens.items():
+        group_names = {name_key(page["patient_name"]) for state in group
+                       for page in state["pair"] if page["patient_name"]}
+        group_dates = {normalize_date(state["date"]): state["date"] for state in group if state["date"]}
+        reason = fatal
+        if not group_names:
+            reason = reason or "patient gate: specimen patient name missing"
+        if not group_dates:
+            reason = reason or "date gate: missing Collected date for specimen"
+        if reason:
+            for state in group:
+                state["reason"] = reason
+            continue
+        date = next(iter(group_dates.values()))
+        summaries = []
         for reading in (0, 1):
-            rows = [row for pair in pairs for row in pair[reading]["rows"]
-                    if row["column"] == "out_of_range"]
-            blocks = [pair[reading]["out_of_range_summary"] for pair in pairs
-                      if pair[reading]["out_of_range_summary"] is not None]
-            summary = [row for block in blocks for row in block]
-            if not blocks or any(row["illegible"] or not row["name"] or not row["result_text"]
-                                 for row in rows + summary) or \
-                    {_row_key(row) for row in rows} != {_row_key(row) for row in summary}:
-                raise ScanGateError(f"summary gate: out-of-range summary mismatch for pages "
-                                    f"{[pair[0]['page'] for pair in pairs]}")
-        for first, second in pairs:
+            summaries.append({_row_key(row) for state in group
+                              for row in (state["pair"][reading]["out_of_range_summary"] or [])
+                              if not row["illegible"] and row["name"] and row["result_text"]})
+        for state in group:
+            first, second = state["pair"]
+            state["date"] = date
             by_name = {}
             for row in second["rows"]:
                 by_name.setdefault((row["name"], row["section"]), []).append(row)
@@ -253,13 +342,55 @@ def gate_reads(reads, digital_names, result_re, date_re, normalize_date):
                         reason = "grammar gate: result_text includes a flag instead of a separate flag field"
                     elif not _numeric_flag(row, result_re):
                         reason = "flag gate: result contradicts numeric reference range"
+                    elif row["column"] == "out_of_range" and any(
+                            _row_key(row) not in summary for summary in summaries):
+                        reason = "summary gate: out-of-range row disagrees with printed summary"
+                    elif row["column"] == "in_range" and any(
+                            _row_key(row) in summary for summary in summaries):
+                        reason = "summary gate: in-range row appears in out-of-range summary"
                 seen.add(identity)
                 if reason:
-                    notes.append(f"source=scan page {first['page']} excluded {row['name']!r}: {reason}")
+                    exclude_row(row, first["page"], reason)
                 else:
                     accepted.append({**row, "date": date, "specimen_id": specimen, "source": "scan"})
             for row in second["rows"]:
                 if (row["name"], row["section"]) not in seen:
-                    notes.append(f"source=scan page {second['page']} excluded {row['name']!r}: "
-                                 "agreement gate: row present only in second read")
+                    exclude_row(row, second["page"], "agreement gate: row present only in second read")
+            if (first["rows"] or second["rows"]) and not any(
+                    row["page"] == state["page"] for row in accepted):
+                state["reason"] = "row gates: no rows passed"
+    for number, partial_reads, reason in failures:
+        first = partial_reads[0] if partial_reads else None
+        printed = None
+        if first and first["collected"]:
+            try:
+                _, printed = _printed_date(first["collected"], date_re, normalize_date)
+            except ScanGateError:
+                pass  # The page's transcription failure is already reported.
+        states.append({"page": number, "pair": partial_reads,
+                       "specimen": first["specimen_id"] if first else None,
+                       "date": printed, "matched": bool(first and first["patient_name"] and
+                       name_key(first["patient_name"]) in expected_names), "reason": reason})
+    for state in sorted(states, key=lambda item: item["page"]):
+        reason = fatal or state["reason"]
+        if reason:
+            notes.append(f"source=scan page {state['page']}: {reason}; page excluded")
+            if state["reason"] != "row gates: no rows passed":
+                seen = set()
+                for reading, page in enumerate(state["pair"]):
+                    for row in page["rows"]:
+                        identity = (row["name"], row["section"])
+                        if reading == 0 or identity not in seen:
+                            exclude_row(row, state["page"], reason)
+                    seen.update((row["name"], row["section"]) for row in page["rows"])
+        counts = [len(page["rows"]) for page in state["pair"]]
+        counts += [None] * (2 - len(counts))
+        print(f"source=scan page={state['page']} rows_read={json.dumps(counts[0])}/{json.dumps(counts[1])} "
+              f"specimen_id={json.dumps(state['specimen'])} name_matched={'yes' if state['matched'] else 'no'} "
+              f"date={json.dumps(state['date'])} verdict={'excluded' if reason else 'kept'} "
+              f"reason={json.dumps(reason or 'passed')}")
+    if fatal:
+        error = ScanGateError(fatal)
+        error.notes = notes
+        raise error
     return accepted, notes

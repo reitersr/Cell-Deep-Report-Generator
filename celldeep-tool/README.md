@@ -20,17 +20,36 @@ readable results continue with an explicit staff review notice.
 Scan names, results, flags, columns, reference ranges, and section headings
 must agree between reads. Unsupported or illegible results and inconsistent
 numeric flags are excluded with a reason. A row without a printed section
-identity is also excluded to preserve section-scoped matching. Across each specimen, both reads
-must match the printed out-of-range summary; Collected dates must exist and
-agree, and any printed patient name must match the digital header. A failed
-summary, identity, or date gate rejects the entire scan batch with a staff
-review notice. Never substitute a date or infer text. A row absent from one
-read cannot enter the report.
-Rowful pages require a readable specimen identity; their date and printed
-patient identity may come from other pages of that specimen. Rowless pages
+identity is also excluded to preserve section-scoped matching. Gates are page-
+or specimen-local: malformed transcriptions, unreadable metadata, and missing
+specimen dates/identity exclude only the affected pages. Contradictory patient
+names, a name mismatching the digital header, or conflicting Collected dates
+for the same specimen reject the entire scan batch. A missing digital patient
+header excludes scans with an explicit notice. Never substitute a date or
+infer text. A row absent from one read cannot enter the report.
+The out-of-range cross-check uses only kept pages of each specimen and excludes
+only disagreeing rows, not the batch; summary entries for excluded pages do not
+invalidate other rows.
+Rowful pages require a readable specimen identity; a missing id may be inherited
+only from an adjacent PDF page with the literal same specimen id in its footer
+and consecutive `PAGE n OF m` footers agreeing in both reads. Conflicting
+neighbour ids do not permit inheritance. Dates and printed patient identity
+may come from other kept pages of that specimen. Rowless pages
 without a specimen identity contribute no rows and produce a staff note
 instead of rejecting the batch. Summary blocks still require a specimen
 identity for attribution, including when split across rowless pages.
+
+Each scanned page emits one value-free diagnostic line (including rejected
+batches); counts are `null` for reads that could not be validated:
+
+```text
+source=scan page=<PDF page> rows_read=<read 1 count>/<read 2 count> specimen_id=<JSON string or null> name_matched=<yes|no> date=<JSON string or null> verdict=<kept|excluded> reason=<JSON string>
+source=scan page <PDF page> excluded <marker repr>: <reason>
+```
+
+The second format is emitted for every excluded row. Neither format includes
+patient names or result values; `name_matched` reports the page's own printed
+name match, while specimen/date can reflect verified inheritance.
 
 Accepted scan rows use the same exact aliases and unknown-marker review
 policy as digital rows. Their `source=scan` provenance, accepted raw values,
