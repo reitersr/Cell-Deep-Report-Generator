@@ -108,8 +108,63 @@ def test_upload_page_offers_template_download_and_note_check():
     assert download.get_data(as_text=True) == template
     assert pipeline.check_provider_note(template) == {
         "read": True, "rejected": [],
-        "sections": ["Consultation Note", "Patient Concerns", "Protocol", "Marker Targets", "Vitality Index"]}
+        "sections": ["Consultation Note", "Treatment Status", "Patient Concerns", "Protocol", "Marker Targets",
+                     "Vitality Index"]}
     result = client.post("/note/check", data={"note_text": NOTE}).get_json()
     assert result["read"] is True and len(result["rejected"]) == 7
     assert result["rejected"][0] == {"line": 11, "text": "- Poor sleep | Systems: Sleepiness",
                                      "reason": pipeline.check_provider_note(NOTE)["rejected"][0]["reason"]}
+
+
+STATUS_NOTE = """## Consultation Note
+Patient is on testosterone replacement therapy.
+
+## Treatment Status
+- On TRT: {trt}
+- Postmenopausal and on BHRT: Not stated
+- Thyroid medication: Yes
+
+## Patient Concerns
+- Afternoon energy dips | Systems: Repair
+
+## Protocol
+- BPC-157 | Cadence: daily
+
+## Marker Targets
+- TSH: 1.0-2.0
+"""
+
+
+def _record(note):
+    extracted = pipeline.extract(None, [], note, patient_name="Synthetic, Pat")
+    return pipeline.score_and_build_record({**extracted, "sex": "male"})
+
+
+def test_all_four_sections_fill_from_the_template():
+    record, notice = _record(STATUS_NOTE.format(trt="Yes"))
+    assert record.on_trt is True and record.postmenopausal_bhrt is None
+    assert [p.name for p in record.protocol] == ["BPC-157"]
+    assert [p.text for p in record.pain_points] == ["Afternoon energy dips"]
+    note = pipeline.parse_provider_note(STATUS_NOTE.format(trt="Yes"))
+    assert note["marker_overrides"] == [{"marker": "TSH", "lo": 1.0, "hi": 2.0}]
+    assert note["treatment_status"] == {"on_trt": True, "postmenopausal_bhrt": None}
+
+
+def test_unknown_status_line_is_rejected_with_its_reason():
+    rejected = pipeline.check_provider_note(STATUS_NOTE.format(trt="Yes"))["rejected"]
+    assert rejected == [{"line": 7, "text": "- Thyroid medication: Yes",
+                         "reason": "status must read '- On TRT: Yes / No / Not stated' or "
+                                   "'- Postmenopausal and on BHRT: Yes / No / Not stated'"}]
+
+
+def test_status_section_wins_over_note_text_and_the_conflict_is_noted():
+    record, notice = _record(STATUS_NOTE.format(trt="No"))
+    assert record.on_trt is not True
+    assert any(note.startswith("TREATMENT STATUS: the note text mentions TRT") for note in notice.other_notes)
+
+
+def test_without_a_status_section_only_explicit_statements_count():
+    record, _ = _record("## Consultation Note\nPatient is on testosterone replacement therapy.\n")
+    assert record.on_trt is True
+    record, _ = _record("## Consultation Note\nDiscussed TRT as a possible future option.\n")
+    assert record.on_trt is None

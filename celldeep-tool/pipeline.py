@@ -154,6 +154,21 @@ def parse_provider_statuses(note_text: str | None) -> tuple[bool | None, bool | 
     return bhrt_status, on_trt
 
 
+def provider_statuses(extracted: dict, notice=None) -> tuple[bool | None, bool | None]:
+    """The '## Treatment Status' section when the note has one; otherwise only explicit statements in
+    the accepted note text. Returns (postmenopausal_bhrt, on_trt)."""
+    stated = parse_provider_statuses(extracted.get("provider_note_raw"))
+    section = extracted.get("treatment_status")
+    if section is None:
+        return stated
+    chosen = (section.get("postmenopausal_bhrt"), section.get("on_trt"))
+    for label, text_value, section_value in zip(("postmenopausal BHRT", "TRT"), stated, chosen):
+        if notice is not None and text_value is True and section_value is not True:
+            notice.other_notes.append(f"TREATMENT STATUS: the note text mentions {label}, but the Treatment Status "
+                                      "section does not say Yes; the section is used - confirm with the provider")
+    return chosen
+
+
 def _valid_lab_range(raw: dict, draw: str) -> dict | None:
     lo = raw.get(f"lab_range_{draw}_lo")
     hi = raw.get(f"lab_range_{draw}_hi")
@@ -1723,7 +1738,10 @@ def _merge_scan_occurrences(digital, scanned, row_audit):
 # Structured provider notes (see templates/provider_notes_template.md)
 # ---------------------------------------------------------------------------
 
-_NOTE_SECTIONS = ("consultation note", "patient concerns", "protocol", "marker targets", "vitality index")
+_NOTE_SECTIONS = ("consultation note", "patient concerns", "protocol", "marker targets", "vitality index",
+                  "treatment status")
+_STATUS_LINES = {"on trt": "on_trt", "postmenopausal and on bhrt": "postmenopausal_bhrt"}
+_STATUS_VALUES = {"yes": True, "no": False, "not stated": None}
 _PATIENT_SYSTEMS = ("Drive", "Pace", "Fuel", "Flow", "Repair", "Reserves", "Structure")
 _VITALITY_VALUES = ("No Concern", "Some Concern", "Significant Concern", "Not Assessed")
 
@@ -1732,7 +1750,8 @@ def _parse_structured_note(note_text: str):
     """Read the documented '## ' template line by line. A line that matches its section's format is
     read; every other line is returned in `rejected` with its line number and reason, and is never
     interpreted any other way. Returns (parsed, rejected, sections_seen, accepted_text)."""
-    parsed = {"protocol": [], "pain_points": [], "marker_overrides": [], "vitality_index": {}}
+    parsed = {"protocol": [], "pain_points": [], "marker_overrides": [], "vitality_index": {},
+              "treatment_status": None}
     # Blank out comments but keep their newlines so reported line numbers match the note as typed.
     text = re.sub(r"<!--.*?-->", lambda match: "\n" * match.group(0).count("\n"), note_text, flags=re.DOTALL)
     section = None
@@ -1809,6 +1828,15 @@ def _parse_structured_note(note_text: str):
                 continue
             parsed["marker_overrides"].append({"marker": marker[0], "lo": float(match.group("lo")),
                                                "hi": float(match.group("hi"))})
+        elif section == "treatment status":
+            match = re.fullmatch(r"(?P<label>[^:]+):\s*(?P<value>.+)", item)
+            key = _STATUS_LINES.get(match.group("label").strip().lower()) if match else None
+            value = match.group("value").strip().lower() if match else None
+            if key is None or value not in _STATUS_VALUES:
+                reject(number, line, "status must read '- On TRT: Yes / No / Not stated' or "
+                       "'- Postmenopausal and on BHRT: Yes / No / Not stated'")
+                continue
+            parsed["treatment_status"] = {**(parsed["treatment_status"] or {}), key: _STATUS_VALUES[value]}
         elif section == "vitality index":
             match = re.fullmatch(r"(?P<label>[^:]+):\s*(?P<value>.+)", item)
             label = match.group("label").strip() if match else ""
@@ -1839,7 +1867,7 @@ def parse_provider_note(note_text: str | None) -> dict:
     """Read only lines that follow the structured template; list every other line for staff with its
     reason. Free text is never mined for protocol, concerns, targets or status."""
     result = {"accepted": False, "protocol": [], "pain_points": [], "marker_overrides": [],
-              "vitality_index": {}, "other_notes": [], "accepted_text": None}
+              "vitality_index": {}, "other_notes": [], "accepted_text": None, "treatment_status": None}
     if not note_text or not note_text.strip():
         return result
     parsed, rejected, seen, accepted_text = _parse_structured_note(note_text)
@@ -1920,6 +1948,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "marker_overrides": note["marker_overrides"],
         "vitality_index": note["vitality_index"],
         "provider_note_raw": note["accepted_text"] if note["accepted"] else None,
+        "treatment_status": note["treatment_status"],
         "unrecognized_markers": unrecognized,
         "lab_reported": lab_items,
         "source_rows": row_audit,
@@ -2035,7 +2064,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     notice = ExtractionReviewNotice()
     markers = []
     patient_sex = extracted.get("sex") or None
-    postmenopausal_bhrt, on_trt = parse_provider_statuses(extracted.get("provider_note_raw"))
+    postmenopausal_bhrt, on_trt = provider_statuses(extracted, notice)
     scoring_log_lines = []
 
     overrides_by_marker = {}
