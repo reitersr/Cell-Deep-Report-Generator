@@ -35,6 +35,7 @@ from markers_reference import MARKER_LIBRARY, resolve_marker_config, has_missing
 from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
 from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
 from generation_prompt import build_copy
+import clinic_config
 import lab_reported
 import scoring
 import template
@@ -2033,8 +2034,10 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             notice.other_notes.append(error_line)
         if lab_range_fallback:
             cfg = dict(cfg, kind="range", lo=active_lab_range["lo"], hi=active_lab_range["hi"],
-                       disp_range=active_lab_range["display"])
+                       disp_range=f"{clinic_config.LAB_RANGE_LABEL} {active_lab_range['display']}")
             missing_threshold = False
+        elif missing_threshold:
+            cfg = dict(cfg, disp_range=clinic_config.NO_RANGE_LABEL)  # never a library placeholder
         if override is not None:
             lo, hi = override
             # Provider-note override always scores as a "range" band around the stated optimal

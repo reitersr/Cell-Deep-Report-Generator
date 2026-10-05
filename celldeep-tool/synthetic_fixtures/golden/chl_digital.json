@@ -122,7 +122,7 @@
       "now_date": "03/02/2026",
       "then_tier": "optimal",
       "now_tier": "optimal",
-      "celldeep_range": "1.5-9.3",
+      "celldeep_range": "lab range 1.5-9.3",
       "range_source": "lab",
       "unscored": null,
       "lab_range_now": "1.5-9.3",

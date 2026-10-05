@@ -685,7 +685,7 @@ def bio_row_tr(m, copy, color_override=None):
     censored_now = scoring.is_censored(m.disp_now, m.now)
     if unscored:
         color = MUTE
-        tier_word = "Reference range pending"
+        tier_word = clinic_config.NO_RANGE_CHIP_LABEL
     elif not_retested:
         color = MUTE
         tier_word = "Not retested"
@@ -781,7 +781,7 @@ def lab_reported_section(record: PatientRecord) -> str:
             earlier = item.results[0] if len(item.results) > 1 else None
             rows.append(f'''<div class="bio-table-row bio-tr lab-tr" style="--c:{MIDGRAY};">
       <div class="td-name"><span class="bio-name">{item.name}</span></div>
-      <div class="td-range">{fmt(latest.get("lab_range"))}</div>
+      <div class="td-range">{_html(latest.get("lab_range") or clinic_config.NO_RANGE_LABEL)}</div>
       <div class="td-then">{_lab_result_cell(earlier)}</div>
       <div class="td-now">{_lab_result_cell(latest)}</div>
     </div>''')

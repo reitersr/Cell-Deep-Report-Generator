@@ -27,3 +27,18 @@ UNSCORABLE_CHIP_LABEL = "Shown as reported, not scored"
 # "Lab flag: Low (lab range 38-380)". The CellDeep status itself never changes. False hides the line;
 # the staff notes list every disagreement either way.
 SHOW_LAB_FLAG_WHEN_IT_DIFFERS = True
+
+
+# ---- Range shown for a marker without a CellDeep threshold -------------------------------------------
+
+# When CellDeep has no threshold for a marker (see docs/ranges_audit.md), the range column shows the
+# range the lab printed for that result, prefixed with this label, e.g. "lab range 1.5-9.3". The
+# result is then scored against that printed range ("lab-printed fallback").
+LAB_RANGE_LABEL = "lab range"
+
+# Shown in the range column when there is no CellDeep threshold and the lab printed no range. No range
+# is ever invented; the result is shown as printed and not scored.
+NO_RANGE_LABEL = "no range printed"
+
+# Status chip for that unscored case.
+NO_RANGE_CHIP_LABEL = "Not scored, no range printed"
