@@ -127,7 +127,10 @@ def digital_patient_names(pages, group_lines, page_words):
             text = " ".join(word[4] for word in line)
             explicit = re.search(r"\bPatient(?: Name)?:\s*([A-Za-z ,'-]+)", text, re.I)
             if explicit:
-                names.add(explicit[1].strip())
+                # The name ends where the next printed label on the same line begins ("DOB:", "Sex", ...).
+                name = re.split(r"\s+(?:DOB|D\.?O\.?B|Date of Birth|Birth|Sex|Gender|Age|ID|MRN|Phone|Acct)\b",
+                                explicit[1], maxsplit=1, flags=re.I)[0]
+                names.add(name.strip(" ,"))
             elif line[0][1] < 50 and re.fullmatch(r"[A-Z][A-Z '-]+,\s*[A-Z][A-Z '-]+", text):
                 names.add(text)
     return names

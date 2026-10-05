@@ -55,8 +55,10 @@ def test_patient_pdf_contains_no_staff_note_markers(run_report):
 def test_staff_notes_open_with_scan_batch_outcomes(run_report):
     _, review, _ = run_report
     lines = review.splitlines()
-    assert lines[2] == f"SCANNED BLOODWORK - pages 2, 3 - identified by staff-entered patient name and Collected {DATE}"
-    block = "\n".join(lines[2:lines.index("OTHER REVIEW ITEMS")])
+    start = lines.index("This report generated successfully. A few items need a quick human check:") + 2
+    assert lines[start] == (f"SCANNED BLOODWORK - pages 2, 3 - identified by staff-entered patient name and "
+                            f"Collected {DATE}")
+    block = "\n".join(lines[start:lines.index("OTHER REVIEW ITEMS")])
     assert "Kept: 85 results (page 2: 53, page 3: 32)" in block
     assert "Excluded: 1 results" in block
     assert "page 2: 'IRON, TOTAL' - agreement gate" in block

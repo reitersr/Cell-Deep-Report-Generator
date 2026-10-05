@@ -72,7 +72,9 @@ def test_page_printing_a_different_patient_is_excluded_with_a_top_notice(tmp_pat
     extracted = {"name": fx.PATIENT, "dexa_history": history, "dexa_summary": summary}
     _, notice = pipeline.score_and_build_record(extracted)
     text = format_review_notice(notice)
-    assert text.splitlines()[2] == summary[0]
+    lines = text.splitlines()
+    assert lines[lines.index("This report generated successfully. A few items need a quick human check:") + 2] \
+        == summary[0]
     assert "Other" not in text
 
 
@@ -174,7 +176,10 @@ def test_end_to_end_report_uses_gated_dexa_and_keeps_staff_text_out(tmp_path, mo
     out = tmp_path / "r.pdf"
     pipeline.run(str(labs), [str(path)], None, fx.PATIENT, 44, "male", str(out))
     review = (tmp_path / "review.txt").read_text(encoding="utf-8")
-    assert review.splitlines()[2] == "DEXA - 2 page(s) read twice; 2 scan date(s) kept"
+    lines = review.splitlines()
+    assert lines[0] == f"This report is for {fx.PATIENT} (staff-entered)"
+    assert lines[lines.index("This report generated successfully. A few items need a quick human check:") + 2] \
+        == "DEXA - 2 page(s) read twice; 2 scan date(s) kept"
     assert "HALLUCINATION" not in review
     with fitz.open(out) as document:
         text = " ".join(" ".join(page.get_text().split()) for page in document)

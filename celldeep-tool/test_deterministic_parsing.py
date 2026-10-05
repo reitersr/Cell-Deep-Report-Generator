@@ -443,9 +443,10 @@ def test_unreadable_page_warning_reaches_generation_review(tmp_path, monkeypatch
     pipeline.run(str(labs), [], None, fx.PATIENT, 44, "male", str(tmp_path / "report.pdf"))
     warning = "source=scan pages [2]: client gate failed: no API key; manual review required"
     output = capsys.readouterr().out
-    assert f"  - {warning}" in output
-    assert "This report generated successfully" in output
+    assert warning not in output and fx.PATIENT not in output  # staff notes never go to logs
+    assert "Staff review items:" in output
     assert warning in review.read_text()
+    assert "This report generated successfully" in review.read_text()
 
 
 @pytest.mark.parametrize("has_name", [True, False], ids=["text-status", "orphan-cell"])

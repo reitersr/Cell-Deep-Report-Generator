@@ -21,6 +21,7 @@ import base64
 import argparse
 import re
 import tempfile
+import uuid
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -299,16 +300,14 @@ def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int,
 
 
 def _review_notes_path(patient_name: str) -> str:
-    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", patient_name.strip()).strip("._") or "patient"
-    return f"/tmp/{safe_name}_review_notes.txt"
+    """A unique path that does not contain the patient's name (paths end up in logs)."""
+    return f"/tmp/celldeep_review_notes_{uuid.uuid4().hex}.txt"
 
 
 def _diagnostic_path_prefix(patient_name: str | None) -> str:
-    """A concurrent-request-safe filename stem: the gthread worker config runs multiple requests
-    in the same process at once, and the previous fixed '/tmp/generate_copy_...' filenames could
-    be overwritten mid-request by a second, unrelated report generating at the same time."""
-    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", (patient_name or "").strip()).strip("._") or "patient"
-    return f"/tmp/{safe_name}"
+    """A concurrent-request-safe, name-free filename stem: several reports can generate at once in one
+    process, and file paths end up in logs, so they never contain the patient's name."""
+    return f"/tmp/celldeep_{uuid.uuid4().hex}"
 
 
 def _write_review_notes(patient_name: str, notice: ExtractionReviewNotice) -> str:
@@ -1501,7 +1500,7 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None) -> tup
 # ---------------------------------------------------------------------------
 
 def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], patient_name: str | None,
-                              dob_sink: list | None = None):
+                              dob_sink: list | None = None, name_sink: list | None = None):
     """Read every DEXA page twice and keep only measurements both reads agree on (scan_dexa.gate).
     Returns (dexa_history, staff_notes, summary_lines)."""
     import scan_bloodwork
@@ -1525,6 +1524,11 @@ def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], pa
                     failures.append((key, error.reads, str(error)))
                 else:
                     pages.append((key, reads))
+    if name_sink is not None:
+        for key, reads in sorted(pages, key=lambda item: item[0]):
+            printed = {" ".join(read["patient_name"].split()) for read in reads if read["patient_name"]}
+            if len(printed) == 1 and all(read["patient_name"] for read in reads):
+                name_sink.append(("DEXA", f"file {key[0]} page {key[1]}", printed.pop()))
     return scan_dexa.gate(pages, patient_name, failures, dob_sink)
 
 def has_scanned_pages(pdf_bytes: bytes) -> bool:
@@ -1610,7 +1614,7 @@ def scan_collected_date(text: str) -> str:
 
 
 def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_name=None, collected_date=None,
-                            dob_sink=None):
+                            dob_sink=None, name_sink=None):
     import scan_bloodwork as scan
 
     numbers = [page.number + 1 for page in pages]
@@ -1635,6 +1639,11 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
             reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL))
         except scan.ScanGateError as error:
             failures.append((page.number + 1, error.reads, str(error)))
+    if name_sink is not None:
+        for pair in reads:
+            printed = {" ".join(page["patient_name"].split()) for page in pair if page["patient_name"]}
+            if len(printed) == 1 and all(page["patient_name"] for page in pair):
+                name_sink.append(("scanned lab page", pair[0]["page"], printed.pop()))
     if dob_sink is not None:
         for pair in reads:
             dobs = {_printed_dob(page.get("date_of_birth")) for page in pair}
@@ -1859,12 +1868,17 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     row_audit = []
     scan_numbers = []
     dob_sources = []  # (source label, (y, m, d)); used only to compute age, never stored
+    printed_names = []  # (source, page or None, name as printed) for the staff-notes header
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
             pages = list(document)
             digital_pages = [page for page in pages if _page_words(page)]
             scans = [page for page in pages if not _page_words(page)]
             scan_numbers = [page.number + 1 for page in scans]
+            if digital_pages:
+                import scan_bloodwork
+                printed_names.extend(("lab PDF text pages", None, " ".join(name.split())) for name in sorted(
+                    scan_bloodwork.digital_patient_names(digital_pages, _group_lines, _page_words)))
             for page in digital_pages:
                 for match in _DOB_RE.finditer(page.get_text()):
                     if (dob := _printed_dob(match.group(1))) is not None:
@@ -1874,16 +1888,19 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                     digital_pages, row_audit=row_audit, review_notes=lab_review_notes)
             if scans:
                 scanned, scan_unknown, scan_notes = _extract_scan_bloodwork(
-                    scans, digital_pages, client, row_audit, patient_name, collected_date, dob_sources)
+                    scans, digital_pages, client, row_audit, patient_name, collected_date, dob_sources,
+                    printed_names)
                 occurrences = _merge_scan_occurrences(occurrences, scanned, row_audit)
                 unrecognized.extend(scan_unknown)
                 lab_review_notes.extend(scan_notes)
     scan_summary = _scan_summary(scan_numbers, scan_notes, collected_date) if scan_numbers else []
     lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
     lab_review_notes.extend(lab_notes)
-    dexa_history, dexa_notes, dexa_summary = (_extract_dexa_with_claude(client, dexa_pdfs, patient_name, dob_sources)
+    dexa_history, dexa_notes, dexa_summary = (_extract_dexa_with_claude(client, dexa_pdfs, patient_name, dob_sources, printed_names)
                                               if dexa_pdfs else ([], [], []))
     note = parse_provider_note(note_text)
+    for match in re.finditer(r"^\s*Patient(?: Name)?\s*:\s*(.+?)\s*$", note["accepted_text"] or "", re.I | re.M):
+        printed_names.append(("provider note", None, " ".join(match.group(1).split())))
 
     dated = [occ for occ in occurrences
              if isinstance(_normalize_date_for_matching(occ["date_display"]), tuple)
@@ -1908,14 +1925,14 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "source_rows": row_audit,
         "scan_summary": scan_summary,
         "dexa_summary": dexa_summary,
+        "printed_names": printed_names,
         **_age_from_dob(dob_sources, latest["date_display"] if latest else None),
         "other_notes": [*lab_review_notes, *note["other_notes"]],
     }
 
-    safe_patient = re.sub(r"[^A-Za-z0-9._-]+", "_", (patient_name or "patient")).strip("._") or "patient"
     audit_base = Path(audit_root or tempfile.gettempdir()) / "celldeep_extraction_audits"
     audit_base.mkdir(parents=True, exist_ok=True)
-    audit_dir = Path(tempfile.mkdtemp(prefix=f"{safe_patient}_", dir=audit_base))
+    audit_dir = Path(tempfile.mkdtemp(prefix="extraction_", dir=audit_base))  # no name: paths reach logs
     occurrences_path = audit_dir / "marker-occurrences.json"
     occurrences_path.write_text(json.dumps(occurrences, indent=2, ensure_ascii=False), encoding="utf-8")
     (audit_dir / "source-rows.json").write_text(
@@ -2177,10 +2194,36 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     notice.other_notes.extend(extracted.get("other_notes", []))
     notice.scan_summary = list(extracted.get("scan_summary", []))
     notice.dexa_summary = list(extracted.get("dexa_summary", []))
+    notice.name_header = name_header(extracted.get("name"), extracted.get("printed_names", []))
     unrecognized_names = {" ".join(item["raw_name"].split()).casefold()
                           for item in extracted.get("unrecognized_markers", [])}
     notice.other_notes[:0] = coverage_gaps(extracted.get("source_rows", []), record, unrecognized_names)
     return record, notice
+
+
+def name_header(staff_name: str | None, printed: list) -> list[str]:
+    """'This report is for <staff-entered name>' and the name each source printed, flagging mismatches.
+    Only names are listed; no date of birth or ID is read into it."""
+    import scan_bloodwork
+
+    lines = [f"This report is for {staff_name or '(no name entered)'} (staff-entered)"]
+    expected = scan_bloodwork.name_key(staff_name) if staff_name else None
+    sources = ("lab PDF text pages", "scanned lab page", "DEXA", "provider note")
+    for source in sources:
+        entries = [(where, name) for kind, where, name in printed if kind == source]
+        if not entries:
+            lines.append(f"  {source}: no name printed")
+            continue
+        by_name = {}
+        for where, name in entries:
+            by_name.setdefault(name, []).append(where)
+        for name, places in by_name.items():
+            where = [str(place) for place in places if place is not None]
+            location = f" ({', '.join(where)})" if where else ""
+            verdict = ("matches" if expected and scan_bloodwork.name_key(name) == expected
+                       else "NAME MISMATCH - confirm this source belongs to the patient")
+            lines.append(f"  {source}{location}: {name} - {verdict}")
+    return lines
 
 
 def coverage_gaps(source_rows: list[dict], record: PatientRecord, unrecognized_names: set[str]) -> list[str]:
@@ -2266,7 +2309,8 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     review_path = _write_review_notes(patient_name, notice)
     review = format_review_notice(notice)
     if review:
-        print("\n" + review)
+        # Staff notes contain names and values; logs get only a count.
+        print(f"\nStaff review items: {len(review.splitlines()) - 1} line(s) written to the QA file")
     print(f"\nDone. Report saved to {out_path}")
     print(f"Internal QA notes saved to {review_path}")
     return review_path
