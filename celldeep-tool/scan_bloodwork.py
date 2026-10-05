@@ -27,7 +27,7 @@ _SUMMARY_ROW = _object({
 _ROW = _object({
     **_SUMMARY_ROW["properties"],
     "column": _nullable({"type": "string", "enum": ["in_range", "out_of_range"]}),
-    "reference_range": _TEXT, "page": {"type": "integer"}, "section": _TEXT,
+    "reference_range": _TEXT, "lab_code": _TEXT, "page": {"type": "integer"}, "section": _TEXT,
 })
 SCAN_SCHEMA = _object({
     "page": {"type": "integer"}, "specimen_id": _TEXT, "collected": _TEXT,
@@ -41,7 +41,9 @@ Return only the supplied JSON schema. Copy names, result_text, reference_range, 
 patient_name, footer SPECIMEN id, full footer text (including PAGE n OF m), and Collected date
 exactly as printed. Use the PDF page number
 provided, not the report's own printed page number. Classify each result by its printed In Range
-or Out of Range column. Keep H/L separate from result_text. Do not transcribe reference values,
+or Out of Range column. Keep H/L separate from result_text. Copy the printed Lab column code
+(performing-site code) into lab_code; never append it to the name or reference_range; null if no
+Lab column. Do not transcribe reference values,
 footnotes, interpretations, or summary entries as result rows. Preserve URINALYSIS section identity.
 Copy every entry of LIST OF RESULTS PRINTED IN THE OUT OF RANGE COLUMN verbatim into
 out_of_range_summary; null means no such block, [] means a printed empty block.
@@ -148,17 +150,44 @@ def _row_key(row):
     return row["name"], row["result_text"], row["flag"]
 
 
+_UNIT = r"(?:\s+[a-zµμ%][a-z0-9µμ%/.^]*)?"
+
+
+def _canonical_range(text):
+    """One spelling for one printed range: '> OR = 5.4', '>OR=5.4' and '≥ 5.4' all read '>=5.4'.
+    Only notation and spacing change; numbers, units and wording are compared as printed."""
+    if text is None:
+        return None
+    text = " ".join(text.split()).casefold().replace("≤", "<=").replace("≥", ">=")
+    text = re.sub(r"([<>])\s*or\s*=", r"\1=", text)
+    text = re.sub(r"\s*(<=|>=|<|>)\s*", r"\1", text)
+    return re.sub(r"(\d)\s*[-–]\s*(?=\d)", r"\1-", text)
+
+
+def strip_lab_code(name, codes):
+    """Remove a printed Lab column code that the transcription attached to the end of a test
+    name, e.g. 'TESTOSTERONE, TOTAL, MS AMD' or '... (AMD)'. A code after a comma is part of
+    the name ('ESTROGENS, TOTAL, IA') and is kept."""
+    for code in sorted(codes, key=len, reverse=True):
+        code = re.escape(code)
+        stripped = re.sub(rf"\s*\(\s*{code}\s*\)$", "", name)
+        stripped = re.sub(rf"(?<=[^,\s])\s+{code}$", "", stripped)
+        if stripped.strip() and stripped != name:
+            return stripped.strip()
+    return name
+
+
 def _numeric_flag(row, result_re):
     result = result_re.fullmatch(row["result_text"])
     if result is None:
         return True
     if result["flag"] and result["flag"] != row["flag"]:
         return False
-    reference = row["reference_range"]
+    reference = _canonical_range(row["reference_range"])
     if not reference:
         return True
-    bounded = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*", reference)
-    single = re.fullmatch(r"\s*(<=|>=|<|>|≤|≥)\s*(-?\d+(?:\.\d+)?)\s*", reference)
+    bounded = re.fullmatch(r"(-?\d+(?:\.\d+)?)-(-?\d+(?:\.\d+)?)" + _UNIT, reference)
+    single = re.fullmatch(r"(<=|>=|<|>)(-?\d+(?:\.\d+)?)" + _UNIT, reference)
     if bounded:
         low, high = map(float, bounded.groups())
         if low > high:
@@ -208,7 +237,7 @@ def _footer_sequence(footer):
     return None
 
 
-def gate_staff_identified_reads(reads, collected, result_re, patient_name, failures=()):
+def gate_staff_identified_reads(reads, collected, result_re, patient_name, failures=(), lab_codes=()):
     """Staff-entered patient name and Collected date identify every scanned page, so printed
     footer/header/name/date are not gated. A row is kept only when both reads agree on its
     value, flag and reference range and the printed value passes the identity-independent
@@ -229,19 +258,35 @@ def gate_staff_identified_reads(reads, collected, result_re, patient_name, failu
              "that differs from the staff-entered name; rows were not rejected for this - confirm the "
              "page belongs to this patient")
 
+    codes = {*lab_codes, *(row["lab_code"] for pair in reads for page in pair for row in page["rows"]
+                          if row["lab_code"] and re.fullmatch(r"[A-Z0-9]{2,5}", row["lab_code"]))}
+
+    def name_of(text):
+        return strip_lab_code(" ".join(text.split()), codes)
+
+    def summary_key(text, flag):
+        # The printed out-of-range list may show "210.0 H" as one string with no separate flag.
+        text = " ".join(text.split())
+        split = re.fullmatch(r"(.*?\S)\s*([HL])", text)
+        if flag is None and split and result_re.fullmatch(split[1]) and not result_re.fullmatch(split[1])["flag"]:
+            text, flag = split[1], split[2]
+        return text.casefold(), flag
+
     summaries = ({}, {})
     for pair in reads:
         for reading, page in enumerate(pair):
             for entry in page["out_of_range_summary"] or []:
                 if not entry["illegible"] and entry["name"] and entry["result_text"]:
-                    summaries[reading].setdefault(entry["name"], set()).add(_row_key(entry)[1:])
+                    summaries[reading].setdefault(name_of(entry["name"]).casefold(), set()).add(
+                        summary_key(entry["result_text"], entry["flag"]))
 
     def row_reason(rows):
         first, second = rows
         if len(first) != 1 or len(second) != 1:
             return "agreement gate: missing or duplicate row in independent reads"
         first, second = first[0], second[0]
-        if any(first[key] != second[key] for key in ("result_text", "flag", "reference_range")):
+        if first["result_text"] != second["result_text"] or first["flag"] != second["flag"] or \
+                _canonical_range(first["reference_range"]) != _canonical_range(second["reference_range"]):
             return "agreement gate: independent reads disagree on value, flag or range"
         if first["illegible"] or second["illegible"] or not first["name"] or not first["result_text"]:
             return "legibility gate: null or illegible row"
@@ -253,8 +298,9 @@ def gate_staff_identified_reads(reads, collected, result_re, patient_name, failu
             return "grammar gate: result_text includes a flag instead of a separate flag field"
         if not _numeric_flag(first, result_re):
             return "flag gate: result contradicts numeric reference range"
-        if any(entries and _row_key(first)[1:] not in entries
-               for entries in (summary.get(first["name"]) for summary in summaries)):
+        key = summary_key(first["result_text"], first["flag"])
+        if any(entries and key not in entries
+               for entries in (summary.get(name_of(first["name"]).casefold()) for summary in summaries)):
             return "summary gate: row disagrees with printed out-of-range summary"
         return None
 
@@ -264,7 +310,8 @@ def gate_staff_identified_reads(reads, collected, result_re, patient_name, failu
         identities = {}
         for reading, page in enumerate(pair):
             for row in page["rows"]:
-                identities.setdefault((row["name"], row["section"]), ([], []))[reading].append(row)
+                identity = (name_of(row["name"]) if row["name"] else row["name"], row["section"])
+                identities.setdefault(identity, ([], []))[reading].append(row)
         kept = 0
         for rows in identities.values():
             reason = row_reason(rows)
@@ -272,7 +319,8 @@ def gate_staff_identified_reads(reads, collected, result_re, patient_name, failu
                 if reason:
                     note(f"source=scan page {number} excluded {row['name']!r}: {reason}")
                 else:
-                    accepted.append({**row, "date": collected, "specimen_id": None, "source": "scan"})
+                    accepted.append({**row, "name": name_of(row["name"]), "date": collected,
+                                     "specimen_id": None, "source": "scan"})
                     kept += 1
         if not identities:
             reason = "no result rows read; notice only"

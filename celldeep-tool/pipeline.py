@@ -29,13 +29,14 @@ from anthropic import APIConnectionError, APITimeoutError, Anthropic, RateLimitE
 from json_repair import repair_json
 import fitz
 
-from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint
+from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint, LabReportedResult
 from schema import normalize_date_for_matching as _normalize_date_for_matching
 from markers_reference import MARKER_LIBRARY, resolve_marker_config, has_missing_thresholds
 from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
 from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
 from extraction_prompt import EXTRACTION_SYSTEM_PROMPT, EXTRACTION_OUTPUT_SCHEMA, build_extraction_user_message
 from generation_prompt import build_copy
+import lab_reported
 import scoring
 import template
 
@@ -646,7 +647,8 @@ def _nearby_cadence(note_text: str, start: int, end: int) -> str | None:
 
 
 def verify_extraction_completeness(extracted: dict, provider_note_text: str = "",
-                                   lab_text: str = "", dexa_text: str = "") -> ExtractionReviewNotice:
+                                   lab_text: str = "", dexa_text: str = "",
+                                   dexa_scanned: bool = False) -> ExtractionReviewNotice:
     """Verify model omissions against source text without inventing lab values."""
     notice = ExtractionReviewNotice()
     log_lines = []
@@ -719,7 +721,13 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
         numeric = value.rstrip("%").strip()
         date_match = dexa_text.lower().find(date.lower()) if date else -1
         context = dexa_text[max(0, date_match - 500):date_match + 500] if date_match >= 0 else dexa_text
-        if numeric and numeric not in context and value not in context:
+        if numeric and (not dexa_text.strip() or (dexa_scanned and date_match < 0)):
+            # A scanned DEXA page has no text layer, so absence from the text proves nothing.
+            warning = (f"DEXA SOURCE IS SCANNED: body fat % for {date} = {value} cannot be checked against "
+                       "source text; compare it with the scan image")
+            notice.other_notes.append(warning)
+            log_lines.append(warning)
+        elif numeric and numeric not in context and value not in context:
             warning = (f"WARNING: DEXA BODY FAT % FOR {date} = {value} NOT FOUND VERBATIM IN SOURCE PDF - "
                        "POSSIBLE HALLUCINATION, NEEDS HUMAN REVIEW")
             notice.other_notes.append(warning)
@@ -808,7 +816,9 @@ _CELL_VALUE_RE = re.compile(r"(?P<ineq>[<>≤≥]=?)?(?P<num>\d+(?:\.\d+)?|\.\d+
 _CELL_PIECE_RE = re.compile(r"[<>≤≥]=?(?:\d+(?:\.\d+)?|\.\d+)[HL]?|(?:\d+(?:\.\d+)?|\.\d+)[HL]?")
 _NOT_PERFORMED_CELLS = {"tnp", "test not performed", "not performed"}
 _QUALITATIVE_CELLS = {"negative", "positive", "detected", "not detected", "none detected", "trace",
-                      "normal", "abnormal", "reactive", "non-reactive", "nonreactive"}
+                      "normal", "abnormal", "reactive", "non-reactive", "nonreactive",
+                      # printed urine color/clarity results, read literally
+                      "yellow", "straw", "amber", "colorless", "clear", "hazy", "cloudy", "turbid"}
 _EXPECTED_QUALITATIVE = {"negative", "not detected", "none detected", "normal", "non-reactive", "nonreactive"}
 _MULTIWORD_CELLS = (("test", "not", "performed"), ("not", "performed"), ("not", "detected"), ("none", "detected"))
 _STANDALONE_FLAGS = {"H", "L", "HH", "LL"}
@@ -974,7 +984,7 @@ def _cell_result(token: str) -> tuple[str, float | None, str]:
 
 def _printed_lab_range(range_words: list[str]) -> tuple[float, float, str]:
     display = " ".join(range_words).strip()
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)", display)
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)(?:\s+[A-Za-zµμ%][\w/%.^µμ]*)?", display)
     if not match:
         return 0, 0, ""
     return float(match.group(1)), float(match.group(2)), display
@@ -1037,6 +1047,7 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
     # Only a token printed inside a dated column's own header span can be a result; anything else
     # (reference legends, units, lab codes, stray thresholds) is never eligible, whatever its shape.
     cells: dict[int, str] = {}
+    flags: dict[int, str] = {}  # the lab's own printed H/L flag per value column; never computed
     stray: dict[int, list[str]] = {}
     range_words: list[str] = []
     problems: list[str] = []
@@ -1047,6 +1058,9 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         if kind == "range":
             range_words.append(word[4])
             continue
+        if kind in ("current", "historical") and word[4] in _STANDALONE_FLAGS \
+                and header["logical"][column] is not None:
+            flags[header["logical"][column]] = word[4]
         if kind not in ("current", "historical") or word[4] in _STANDALONE_FLAGS:
             continue
         try:
@@ -1076,6 +1090,9 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
                 problems.append(piece)
             else:
                 cells[start + offset] = piece
+                printed_flag = _CELL_VALUE_RE.fullmatch(piece)
+                if printed_flag and printed_flag.group("flag"):
+                    flags[start + offset] = printed_flag.group("flag")
 
     if problems:
         raise BloodworkParseError(
@@ -1098,11 +1115,12 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
             if date:
                 status, value, display = _cell_result(token) if token is not None else ("not_performed", None, "")
                 parsed_cells.append({"kind": column["kind"], "date_display": date, "status": status,
-                                     "value": value, "disp_value": display, "present": token is not None})
+                                     "value": value, "disp_value": display, "present": token is not None,
+                                     "lab_flag": flags.get(index) if token is not None else None})
         unrecognized.append({
             "raw_name": raw_name, "raw_value": " | ".join(cells[i] for i in sorted(cells)),
             "raw_unit": "", "raw_range": " ".join(range_words), "source_context": _section_label(section),
-            "cells": parsed_cells,
+            "cells": parsed_cells, "section_heading": section.get("heading"),
         })
         return True
 
@@ -1210,7 +1228,7 @@ def _parse_table_region(page, lines, header, section, occurrences, unrecognized,
         name_lines = _group_lines(name_words, 4.0)
         text = " ".join(_line_text(line) for line in name_lines).strip()
         band_text = " ".join(_line_text(line) for line in _group_lines(words, 4.0)).strip()
-        if name_words and band_text.isupper() and all(
+        if name_words and band_text.isupper() and _is_single_phrase(words) and all(
                 not _is_cell_token(w[4]) and not _is_threshold_token(w[4]) for w in words):
             section["heading"] = band_text
             continue
@@ -1228,9 +1246,13 @@ def _parse_table_region(page, lines, header, section, occurrences, unrecognized,
             column = header["columns"][index]
             if column["kind"] in ("current", "historical"):
                 tokens = [w[4] for w in span]
+                popped = []
                 while len(tokens) > 1 and tokens[-1] in _STANDALONE_FLAGS:
-                    tokens.pop()
+                    popped.append(tokens.pop())
                 token = " ".join(tokens)
+                numeric = _CELL_VALUE_RE.fullmatch(token)
+                if popped in (["H"], ["L"]) and numeric and not numeric.group("flag"):
+                    token += popped[0]  # keep the lab's printed flag with its own result
                 assigned[index].append((span[0][0], min(w[1] for w in span),
                                         span[-1][2], max(w[3] for w in span), token))
             else:
@@ -1277,6 +1299,14 @@ def _parse_table_region(page, lines, header, section, occurrences, unrecognized,
                               "y": min(w[1] for w in words),
                               "occurrences": [dict(item) for item in occurrences[occurrence_start:]],
                               "unrecognized": unrecognized[unknown_start:]})
+
+
+def _is_single_phrase(words: list[tuple]) -> bool:
+    """A printed heading is one run of words; a result row's words are spread across columns."""
+    for line in _group_lines(words, 4.0):
+        if any(right[0] - left[2] > _PHRASE_GAP_PT for left, right in zip(line, line[1:])):
+            return False
+    return True
 
 
 def _section_title(words: list[tuple]) -> str | None:
@@ -1513,6 +1543,42 @@ def has_scanned_pages(pdf_bytes: bytes) -> bool:
         return False  # Unreadable PDFs fail visibly in the report job.
 
 
+def _has_image_only_pages(paths: list[str]) -> bool:
+    for path in paths:
+        with fitz.open(path) as document:
+            if any(not _page_words(page) for page in document):
+                return True
+    return False
+
+
+def _scan_summary(numbers: list[int], notes: list[str], collected_date: str | None) -> list[str]:
+    """The scanned-page outcome digest printed at the top of the staff notes."""
+    kept, excluded, pages, batch, mismatches = {}, [], [], [], []
+    for note in notes:
+        if note.startswith("STAFF REVIEW"):
+            mismatches.append(note)
+        elif match := re.match(r"source=scan page (\d+) accepted ", note):
+            kept[int(match[1])] = kept.get(int(match[1]), 0) + 1
+        elif match := re.match(r"source=scan page (\d+) excluded (.+?): (.+)$", note):
+            excluded.append(f"page {match[1]}: {match[2]} - {match[3]}")
+        elif match := re.match(r"source=scan page (\d+): (.+)$", note):
+            pages.append(f"page {match[1]}: {match[2]}")
+        elif note.startswith("source=scan pages") and "identified by staff-entered" not in note:
+            batch.append(note.split(": ", 1)[1] if ": " in note else note)
+    identity = (f"staff-entered patient name and Collected {collected_date}" if collected_date
+                else "printed page identity (no staff Collected date)")
+    lines = [f"SCANNED BLOODWORK - pages {', '.join(map(str, numbers))} - identified by {identity}",
+             f"  Kept: {sum(kept.values())} results"
+             + (f" ({', '.join(f'page {page}: {count}' for page, count in sorted(kept.items()))})" if kept else ""),
+             f"  Excluded: {len(excluded)} results"]
+    lines += [f"    - {item}" for item in excluded]
+    if pages:
+        lines.append("  Page outcomes:")
+        lines += [f"    - {item}" for item in pages]
+    lines += [f"  {item}" for item in batch + mismatches]
+    return lines
+
+
 def scan_collected_date(text: str) -> str:
     import scan_bloodwork as scan
 
@@ -1544,9 +1610,13 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
             reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL))
         except scan.ScanGateError as error:
             failures.append((page.number + 1, error.reads, str(error)))
+    lab_codes = {
+        match[1] for page in digital_pages
+        for match in re.finditer(r"\(\d+\)\s*\(([A-Z][A-Z0-9]{1,5})\)", _line_text(_page_words(page)))
+    }
     if staff:
         accepted, notes = scan.gate_staff_identified_reads(
-            reads, collected_date, _CELL_VALUE_RE, patient_name, failures)
+            reads, collected_date, _CELL_VALUE_RE, patient_name, failures, lab_codes)
         # Name-mismatch notices stay first so staff see them before the identity summary.
         notes.insert(sum(note.startswith("STAFF REVIEW") for note in notes),
                      f"source=scan pages {numbers}: identified by staff-entered patient name and "
@@ -1560,10 +1630,6 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
             return [], [], error.notes + [
                 f"source=scan pages {numbers}: {error}; ALL SCAN ROWS REJECTED; manual review required"]
     occurrences, unknown = [], []
-    lab_codes = {
-        match[1] for page in digital_pages
-        for match in re.finditer(r"\(\d+\)\s*\(([A-Z][A-Z0-9]{1,5})\)", _line_text(_page_words(page)))
-    }
     header = _bloodwork_header([
         (40, 90, 70, 100, "Test"), (220, 90, 260, 100, "Current"),
         (320, 90, 350, 100, "Reference"), (352, 90, 380, 100, "Range"),
@@ -1579,6 +1645,9 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         _parse_bloodwork_row(words, header, section, occurrences, unknown, row_name=name, allow_text=True)
         for occurrence in occurrences[start:]:
             occurrence["source_label"] += f"; pages {row['page']}"
+        for item in unknown[unknown_start:]:
+            for cell in item["cells"]:
+                cell["lab_flag"] = row["flag"] if cell["present"] else None
         row_audit.append({
             "page": row["page"], "name": name, "section": row["section"],
             "occurrences": [dict(item) for item in occurrences[start:]], "unrecognized": unknown[unknown_start:],
@@ -1619,12 +1688,22 @@ _PATIENT_SYSTEMS = ("Drive", "Pace", "Fuel", "Flow", "Repair", "Reserves", "Stru
 _VITALITY_VALUES = ("No Concern", "Some Concern", "Significant Concern", "Not Assessed")
 
 
-def _parse_structured_note(note_text: str) -> dict:
+def _parse_structured_note(note_text: str):
+    """Read the documented '## ' template line by line. A line that matches its section's format is
+    read; every other line is returned in `rejected` with its line number and reason, and is never
+    interpreted any other way. Returns (parsed, rejected, sections_seen, accepted_text)."""
     parsed = {"protocol": [], "pain_points": [], "marker_overrides": [], "vitality_index": {}}
-    text = re.sub(r"<!--.*?-->", "", note_text, flags=re.DOTALL)
+    # Blank out comments but keep their newlines so reported line numbers match the note as typed.
+    text = re.sub(r"<!--.*?-->", lambda match: "\n" * match.group(0).count("\n"), note_text, flags=re.DOTALL)
     section = None
-    seen = set()
+    seen = []
+    rejected = []
+    accepted_lines = []
     systems = {system.lower(): system for system in _PATIENT_SYSTEMS}
+
+    def reject(number, line, reason):
+        rejected.append({"line": number, "text": line, "reason": reason})
+
     for number, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line:
@@ -1632,31 +1711,47 @@ def _parse_structured_note(note_text: str) -> dict:
         if line.startswith("## "):
             name = line[3:].strip().lower()
             if name not in _NOTE_SECTIONS:
-                raise ProviderNoteFormatError(f"line {number}: unknown section {line[3:].strip()!r}")
-            if name in seen:
-                raise ProviderNoteFormatError(f"line {number}: section {line[3:].strip()!r} appears twice")
-            seen.add(name)
-            section = name
+                reject(number, line, "unknown section; expected one of: "
+                       + ", ".join(f"'## {title.title()}'" for title in _NOTE_SECTIONS))
+                section = "unknown"
+            elif name in seen:
+                reject(number, line, "section appears twice; only the first one is read")
+                section = "duplicate"
+            else:
+                seen.append(name)
+                section = name
+                accepted_lines.append(line)
             continue
         if section is None:
             if line.startswith("# "):
-                continue
-            raise ProviderNoteFormatError(f"line {number}: text outside a '## ' section")
+                accepted_lines.append(line)
+            else:
+                reject(number, line, "text outside a '## ' section")
+            continue
+        if section in ("unknown", "duplicate"):
+            reject(number, line, f"under {'an unknown' if section == 'unknown' else 'a repeated'} section "
+                   "heading, so it is not read")
+            continue
         if section == "consultation note":
+            accepted_lines.append(line)
             continue
         if not line.startswith("- "):
-            raise ProviderNoteFormatError(f"line {number}: expected a '- ' item under {section!r}")
+            reject(number, line, f"expected a '- ' item under '## {section.title()}'")
+            continue
         item = line[2:].strip()
         if section == "patient concerns":
             match = re.fullmatch(r"(?P<text>[^|\"]+?)\s*\|\s*Systems?:\s*(?P<systems>[^|]+)", item)
             names = [s.strip().lower() for s in match.group("systems").split(",")] if match else []
             if not match or not names or any(s not in systems for s in names):
-                raise ProviderNoteFormatError(f"line {number}: concern must read '<concern> | Systems: <system>, ...'")
+                reject(number, line, "concern must read '- <concern> | Systems: <system>, ...' using "
+                       + ", ".join(_PATIENT_SYSTEMS))
+                continue
             parsed["pain_points"].append({"text": match.group("text"), "categories": [systems[s] for s in names]})
         elif section == "protocol":
             match = re.fullmatch(r"(?P<name>[^|]+?)(?:\s*\|\s*Cadence:\s*(?P<cadence>[^|]+?))?", item)
             if not match:
-                raise ProviderNoteFormatError(f"line {number}: protocol item must read '<compound> | Cadence: <cadence>'")
+                reject(number, line, "protocol item must read '- <compound> | Cadence: <cadence>'")
+                continue
             known = lookup_protocol_item(match.group("name"))
             config = known[1] if known else {}
             parsed["protocol"].append({
@@ -1669,38 +1764,58 @@ def _parse_structured_note(note_text: str) -> dict:
             match = re.fullmatch(r"(?P<marker>[^:]+):\s*(?P<lo>\d+(?:\.\d+)?)\s*[-–]\s*(?P<hi>\d+(?:\.\d+)?)", item)
             marker = markers_reference_lookup(match.group("marker")) if match else None
             if not marker:
-                raise ProviderNoteFormatError(f"line {number}: target must read '<recognized marker>: <lo>-<hi>'")
+                reject(number, line, "target must read '- <recognized marker>: <lo>-<hi>'"
+                       + (f"; {match.group('marker').strip()!r} is not a recognized marker" if match else ""))
+                continue
             parsed["marker_overrides"].append({"marker": marker[0], "lo": float(match.group("lo")),
                                                "hi": float(match.group("hi"))})
         elif section == "vitality index":
             match = re.fullmatch(r"(?P<label>[^:]+):\s*(?P<value>.+)", item)
             label = match.group("label").strip() if match else ""
             if label == "Physical Performance":
+                accepted_lines.append(line)
                 continue
             if label not in scoring.VITALITY_LABELS or match.group("value").strip() not in _VITALITY_VALUES:
-                raise ProviderNoteFormatError(f"line {number}: unrecognized Vitality Index entry {item!r}")
+                reject(number, line, "Vitality Index entry must read '- <domain>: <"
+                       + " / ".join(_VITALITY_VALUES) + ">' for one of " + ", ".join(scoring.VITALITY_LABELS))
+                continue
             parsed["vitality_index"][label] = match.group("value").strip()
-    if not seen:
-        raise ProviderNoteFormatError("no structured '## ' sections found")
+        accepted_lines.append(line)
     if "vitality index" in seen:
         for label in scoring.VITALITY_LABELS:
             parsed["vitality_index"].setdefault(label, "Not Assessed")
-    return parsed
+    return parsed, rejected, seen, "\n".join(accepted_lines)
+
+
+def check_provider_note(note_text: str | None) -> dict:
+    """What the parser will read from a note, for the upload page's format check."""
+    if not note_text or not note_text.strip():
+        return {"read": False, "sections": [], "rejected": []}
+    _, rejected, seen, _ = _parse_structured_note(note_text)
+    return {"read": bool(seen), "sections": [title.title() for title in seen], "rejected": rejected}
 
 
 def parse_provider_note(note_text: str | None) -> dict:
-    """A note that doesn't follow the structured template is rejected and flagged for manual entry -
-    its content is never read any other way."""
+    """Read only lines that follow the structured template; list every other line for staff with its
+    reason. Free text is never mined for protocol, concerns, targets or status."""
     result = {"accepted": False, "protocol": [], "pain_points": [], "marker_overrides": [],
-              "vitality_index": {}, "other_notes": []}
+              "vitality_index": {}, "other_notes": [], "accepted_text": None}
     if not note_text or not note_text.strip():
         return result
-    try:
-        result.update(_parse_structured_note(note_text), accepted=True)
-    except ProviderNoteFormatError as error:
+    parsed, rejected, seen, accepted_text = _parse_structured_note(note_text)
+    listing = [f"    line {item['line']}: {item['text']!r} - {item['reason']}" for item in rejected]
+    if not seen:
         result["other_notes"].append(
-            f"PROVIDER NOTE REJECTED - {error} - NOTE WAS NOT READ; ENTER PROTOCOL, CONCERNS, TARGETS, AND "
-            "STATUS MANUALLY USING THE PROVIDER NOTES TEMPLATE")
+            "PROVIDER NOTE REJECTED - no structured '## ' sections found - NOTE WAS NOT READ; ENTER PROTOCOL, "
+            "CONCERNS, TARGETS, AND STATUS MANUALLY USING THE PROVIDER NOTES TEMPLATE")
+        result["other_notes"].extend(listing)
+        return result
+    result.update(parsed, accepted=True, accepted_text=accepted_text)
+    if rejected:
+        result["other_notes"].append(
+            f"PROVIDER NOTE: {len(rejected)} LINE(S) NOT READ - the rest of the note was read; fix these lines "
+            "in the note or enter them manually:")
+        result["other_notes"].extend(listing)
     return result
 
 
@@ -1711,11 +1826,13 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     collected_date = scan_collected_date(collected_date) if collected_date else None
     occurrences, unrecognized, lab_review_notes = [], [], []
     row_audit = []
+    scan_numbers = []
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
             pages = list(document)
             digital_pages = [page for page in pages if _page_words(page)]
             scans = [page for page in pages if not _page_words(page)]
+            scan_numbers = [page.number + 1 for page in scans]
             if digital_pages:
                 occurrences, unrecognized = _parse_bloodwork_tables(
                     digital_pages, row_audit=row_audit, review_notes=lab_review_notes)
@@ -1725,6 +1842,9 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                 occurrences = _merge_scan_occurrences(occurrences, scanned, row_audit)
                 unrecognized.extend(scan_unknown)
                 lab_review_notes.extend(scan_notes)
+    scan_summary = _scan_summary(scan_numbers, scan_notes, collected_date) if scan_numbers else []
+    lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
+    lab_review_notes.extend(lab_notes)
     dexa_history = _extract_dexa_with_claude(client, dexa_pdfs, patient_name) if dexa_pdfs else []
     note = parse_provider_note(note_text)
 
@@ -1745,8 +1865,11 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "pain_points": note["pain_points"],
         "marker_overrides": note["marker_overrides"],
         "vitality_index": note["vitality_index"],
-        "provider_note_raw": note_text if note["accepted"] else None,
+        "provider_note_raw": note["accepted_text"] if note["accepted"] else None,
         "unrecognized_markers": unrecognized,
+        "lab_reported": lab_items,
+        "source_rows": row_audit,
+        "scan_summary": scan_summary,
         "other_notes": [*lab_review_notes, *note["other_notes"]],
     }
 
@@ -1993,9 +2116,32 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         cns_domains=extracted.get("cns_domains"),
         vitality_index=scoring.normalize_vitality_index(extracted.get("vitality_index")),
         provider_note_raw=extracted.get("provider_note_raw"),
+        lab_reported=[LabReportedResult(name=item["name"], group=item["group"], results=item["results"])
+                      for item in extracted.get("lab_reported", [])],
     )
     notice.other_notes.extend(extracted.get("other_notes", []))
+    notice.scan_summary = list(extracted.get("scan_summary", []))
+    unrecognized_names = {" ".join(item["raw_name"].split()).casefold()
+                          for item in extracted.get("unrecognized_markers", [])}
+    notice.other_notes[:0] = coverage_gaps(extracted.get("source_rows", []), record, unrecognized_names)
     return record, notice
+
+
+def coverage_gaps(source_rows: list[dict], record: PatientRecord, unrecognized_names: set[str]) -> list[str]:
+    """Every printed result row must reach the patient report or the staff notes; never vanish."""
+    scored = {marker.name for marker in record.markers}
+    shown = {item.name for item in record.lab_reported}
+    gaps = []
+    for row in source_rows:
+        names = [occurrence["name"] for occurrence in row["occurrences"] if occurrence["name"] not in scored]
+        for unknown in row["unrecognized"]:
+            match = lab_reported.lookup(unknown["raw_name"], lab_reported._heading(unknown))
+            printed = " ".join(unknown["raw_name"].split())
+            if printed.casefold() not in unrecognized_names and (match is None or match[0] not in shown):
+                names.append(printed)
+        gaps.extend(f"COVERAGE GAP - {name!r} printed on page {row['page']} is in neither the patient "
+                    "report nor these notes; manual review required" for name in names)
+    return gaps
 
 
 def markers_reference_lookup(raw_name: str):
@@ -2024,6 +2170,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     # Protocol comes only from the note's structured Protocol section, never from scanning its prose.
     completeness_notice = verify_extraction_completeness(
         extracted, provider_note_text="", lab_text=raw_lab_text, dexa_text=raw_dexa_text,
+        dexa_scanned=_has_image_only_pages(dexa_pdfs),
     )
 
     print("Step 2/3: scoring (deterministic, no AI)...")

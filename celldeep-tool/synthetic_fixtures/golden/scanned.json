@@ -1,0 +1,174 @@
+{
+  "first_draw_date": "",
+  "latest_draw_date": "04/14/2026",
+  "scored": [
+    {
+      "name": "TSH",
+      "then": null,
+      "then_date": "",
+      "now": "2.10",
+      "now_date": "04/14/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "0.40–5.50",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": "0.40-4.50",
+      "history": []
+    },
+    {
+      "name": "Testosterone, Total",
+      "then": null,
+      "then_date": "",
+      "now": "812",
+      "now_date": "04/14/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "600–900",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": "250-1100 ng/dL",
+      "history": []
+    },
+    {
+      "name": "Free Testosterone",
+      "then": null,
+      "then_date": "",
+      "now": "190.0",
+      "now_date": "04/14/2026",
+      "then_tier": null,
+      "now_tier": "moderate",
+      "celldeep_range": "100–180",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": "35.0-155.0 pg/mL",
+      "history": []
+    },
+    {
+      "name": "Folate",
+      "then": null,
+      "then_date": "",
+      "now": "8.2",
+      "now_date": "04/14/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "optimal >5.4",
+      "range_source": null,
+      "unscored": null,
+      "lab_range_now": null,
+      "history": []
+    },
+    {
+      "name": "Fasting Insulin",
+      "then": null,
+      "then_date": "",
+      "now": "4.4",
+      "now_date": "04/14/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "2–10",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": null,
+      "history": []
+    },
+    {
+      "name": "HbA1c",
+      "then": null,
+      "then_date": "",
+      "now": "5.2",
+      "now_date": "04/14/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "optimal <5.7%",
+      "range_source": null,
+      "unscored": null,
+      "lab_range_now": null,
+      "history": []
+    },
+    {
+      "name": "Estradiol",
+      "then": null,
+      "then_date": "",
+      "now": "31",
+      "now_date": "04/14/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "20–45",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": null,
+      "history": []
+    }
+  ],
+  "lab_reported": [
+    {
+      "name": "White Blood Cell Count",
+      "group": "Complete Blood Count",
+      "results": [
+        {
+          "date_display": "04/14/2026",
+          "disp_value": "5.1",
+          "lab_flag": null,
+          "lab_range": "3.8-10.8"
+        }
+      ]
+    },
+    {
+      "name": "Absolute Lymphocytes",
+      "group": "Complete Blood Count",
+      "results": [
+        {
+          "date_display": "04/14/2026",
+          "disp_value": "790",
+          "lab_flag": "L",
+          "lab_range": "850-3900"
+        }
+      ]
+    },
+    {
+      "name": "Urinalysis — Glucose",
+      "group": "Urinalysis",
+      "results": [
+        {
+          "date_display": "04/14/2026",
+          "disp_value": "NEGATIVE",
+          "lab_flag": null,
+          "lab_range": "NEGATIVE"
+        }
+      ]
+    },
+    {
+      "name": "Urinalysis — Ketones",
+      "group": "Urinalysis",
+      "results": [
+        {
+          "date_display": "04/14/2026",
+          "disp_value": "1+",
+          "lab_flag": null,
+          "lab_range": "NEGATIVE"
+        }
+      ]
+    }
+  ],
+  "staff_unrecognized": [],
+  "scan_summary": [
+    "SCANNED BLOODWORK - pages 1, 2 - identified by staff-entered patient name and Collected 04/14/2026",
+    "  Kept: 11 results (page 1: 7, page 2: 4)",
+    "  Excluded: 0 results"
+  ],
+  "staff_notes": [
+    "source=scan pages [1, 2]: identified by staff-entered patient name and Collected 04/14/2026; printed footer/header/name/date not gated",
+    "source=scan page 1 accepted 'TSH': '2.10', flag=None, Collected=04/14/2026",
+    "source=scan page 1 accepted 'TESTOSTERONE, TOTAL, MS': '812', flag=None, Collected=04/14/2026",
+    "source=scan page 1 accepted 'TESTOSTERONE, FREE': '190.0', flag='H', Collected=04/14/2026",
+    "source=scan page 1 accepted 'FOLATE, SERUM': '8.2', flag=None, Collected=04/14/2026",
+    "source=scan page 1 accepted 'INSULIN': '4.4', flag=None, Collected=04/14/2026",
+    "source=scan page 1 accepted 'WHITE BLOOD CELL COUNT': '5.1', flag=None, Collected=04/14/2026",
+    "source=scan page 1 accepted 'ABSOLUTE LYMPHOCYTES': '790', flag='L', Collected=04/14/2026",
+    "source=scan page 2 accepted 'HEMOGLOBIN A1c': '5.2', flag=None, Collected=04/14/2026",
+    "source=scan page 2 accepted 'ESTRADIOL': '31', flag=None, Collected=04/14/2026",
+    "source=scan page 2 accepted 'GLUCOSE': 'NEGATIVE', flag=None, Collected=04/14/2026",
+    "source=scan page 2 accepted 'KETONES': '1+', flag=None, Collected=04/14/2026"
+  ]
+}

@@ -1,3 +1,4 @@
 .env
 # Real patient source files for local debugging only - never committed.
 real_fixtures/
+local-output/

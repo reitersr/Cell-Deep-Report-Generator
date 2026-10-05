@@ -23,7 +23,7 @@ library update, not a recurring judgment call.
 
 This mirrors exactly how the human-built version of this pipeline worked
 tonight: when a genuinely new marker (Fibrinogen) needed to be added for
-Star, it was added to the reference library once, deliberately, with a real
+the reference patient, it was added to the reference library once, deliberately, with a real
 clinical cutoff — not invented per-report.
 """
 
@@ -39,6 +39,7 @@ class UnrecognizedMarker:
     raw_range: Optional[str] = None   # reference range as printed on the source lab report, if present
     source_context: Optional[str] = None  # a short excerpt for the operator to quickly verify
     cells: list[dict] = field(default_factory=list)
+    section_heading: Optional[str] = None   # printed section heading the row sat under, if any
 
 
 @dataclass
@@ -47,14 +48,26 @@ class ExtractionReviewNotice:
     safely resolve on its own. This is operator-facing only — never rendered into the patient PDF."""
     unrecognized_markers: list = field(default_factory=list)   # list[UnrecognizedMarker]
     other_notes: list = field(default_factory=list)            # free-text flags, e.g. ambiguous protocol cadence
+    scan_summary: list = field(default_factory=list)           # scanned-page outcomes, printed first
+
+
+# Text that only staff QA output produces. template.render refuses to build a patient PDF whose
+# HTML contains any of these, and tests scan generated PDFs for them.
+STAFF_NOTE_MARKERS = (
+    "source=scan", "gate:", "STAFF REVIEW", "COVERAGE GAP", "NEEDS HUMAN REVIEW", "manual review required",
+    "LAB-REPORTED CONFLICT", "PATIENT NAME MISMATCH", "SCANNED BLOODWORK", "ERROR: missing threshold",
+    "Unrecognized marker", "POSSIBLE HALLUCINATION", "PROVIDER NOTE REJECTED", "PROVIDER NOTE:", "LINE(S) NOT READ",
+)
 
 
 def format_review_notice(notice: ExtractionReviewNotice) -> str:
     """Plain-text summary an operator sees after generation, if anything needs their attention.
     Returns an empty string if nothing needs review — the common case."""
-    if not notice.unrecognized_markers and not notice.other_notes:
+    if not notice.unrecognized_markers and not notice.other_notes and not notice.scan_summary:
         return ""
     lines = ["This report generated successfully. A few items need a quick human check:"]
+    if notice.scan_summary:
+        lines += ["", *notice.scan_summary, "", "OTHER REVIEW ITEMS"]
     for m in notice.unrecognized_markers:
         line = f"  - Unrecognized marker \"{m.raw_name}\" ({m.raw_value}{' ' + m.raw_unit if m.raw_unit else ''})"
         if m.raw_range:

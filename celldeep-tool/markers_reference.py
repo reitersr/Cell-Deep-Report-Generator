@@ -6,7 +6,7 @@ only to recognize which known marker a lab value corresponds to (by name,
 allowing for common aliases/formatting differences across lab vendors) and
 pull the value out. The scoring configuration (what counts as optimal,
 moderate, flagged) comes from HERE — the same clinical definitions we
-calibrated and corrected against Star Hawkins' real CHL panel and Priscilla's
+calibrated and corrected against the calibration reference patient's CHL panel and Priscilla's
 brand-approved tier logic. This keeps scoring consistent patient to patient,
 lab to lab, rather than re-derived per document.
 
@@ -14,7 +14,7 @@ If extraction encounters a marker NOT in this table, that is a real, expected
 case (different lab, different panel) — see unknown_marker_policy.py for how
 the pipeline handles it. It is NEVER silently invented here.
 
-Corrections applied during calibration (verified against Star's real CHL PDF,
+Corrections applied during calibration (verified against the reference patient's CHL PDF,
 not the original invented thresholds):
   - Lp-PLA2 Activity: binary optimal/high, no moderate zone (moderate == optimal)
   - Myeloperoxidase: moderate ceiling corrected to 539
@@ -100,7 +100,7 @@ MARKER_LIBRARY = {
         aliases=["insulin resistance score", "ir score"]),
     "Fasting Insulin": dict(category="Metabolic", unit="\u00b5IU/mL", kind="range",
         lo=2, hi=10, disp_range="2\u201310",
-        aliases=["fasting insulin", "insulin, fasting", "Insulin, Intact, LC/MS/MS"]),
+        aliases=["fasting insulin", "insulin, fasting", "Insulin, Intact, LC/MS/MS", "insulin"]),
     "C-Peptide": dict(category="Metabolic", unit="ng/mL", kind="bounded",
         direction="lower", optimal=2.16, moderate=2.16, disp_range="optimal \u22642.16",
         aliases=["c-peptide", "c peptide", "connecting peptide", "c peptide, serum", "serum c-peptide",
@@ -246,7 +246,7 @@ MARKER_LIBRARY = {
         aliases=["creatinine"]),
     "Troponin T, HS": dict(category="Also Monitored", unit="ng/L", kind="bounded",
         direction="lower", optimal=6, moderate=6, inclusive=False, disp_range="optimal <6",
-        aliases=["troponin", "troponin t", "troponin, high sensitivity", "hs troponin", "hs troponin t", "hs-troponin t",
+        aliases=["troponin, high sensitivity", "hs troponin", "hs troponin t", "hs-troponin t",
                  "Troponin T, High Sensitivity (hs-TnT)"]),
     "Urinalysis \u2014 Occult Blood": dict(category="Also Monitored", unit="", kind="categorical",
         disp_range="expected negative",

@@ -36,23 +36,23 @@ def _words(items, height=9.0):
 # (1) current and historical values run together with no delimiter ---------------------------------
 
 def test_concatenated_columns_split_by_declared_column_count(tmp_path):
-    page = (fx.section_preamble("SYN100", "04/24/2026")
-            + fx.header_line(100, ("01/27/2026", "01/07/2026"))
+    page = (fx.section_preamble("SYN100", "04/14/2026")
+            + fx.header_line(100, ("02/03/2026", "01/13/2026"))
             + fx.row(130, "hs-CRP", "0.36L0.41", hist2="1.2", units="mg/L", lab_range="0.0-3.0")
             + fx.row(144, "FSH", "<0.7<0.5", hist2="<0.3", units="mIU/mL"))
     occurrences, _ = _parse(tmp_path, [page])
     found = _by_key(occurrences)
 
-    assert found[("hs-CRP", "04/24/2026")]["value"] == 0.36
-    assert found[("hs-CRP", "01/27/2026")]["value"] == 0.41
-    assert found[("hs-CRP", "01/07/2026")]["value"] == 1.2
-    assert [found[("FSH", d)]["disp_value"] for d in ("04/24/2026", "01/27/2026", "01/07/2026")] == \
+    assert found[("hs-CRP", "04/14/2026")]["value"] == 0.36
+    assert found[("hs-CRP", "02/03/2026")]["value"] == 0.41
+    assert found[("hs-CRP", "01/13/2026")]["value"] == 1.2
+    assert [found[("FSH", d)]["disp_value"] for d in ("04/14/2026", "02/03/2026", "01/13/2026")] == \
         ["<0.7", "<0.5", "<0.3"]
 
 
 def test_digits_running_into_digits_raise_instead_of_guessing_a_boundary(tmp_path):
-    page = (fx.section_preamble("SYN101", "04/24/2026")
-            + fx.header_line(100, ("01/27/2026",))
+    page = (fx.section_preamble("SYN101", "04/14/2026")
+            + fx.header_line(100, ("02/03/2026",))
             + fx.row(130, "TMAO", "29.012.4", units="uM"))
     with pytest.raises(pipeline.BloodworkParseError, match="runs result digits together"):
         _parse(tmp_path, [page])
@@ -60,9 +60,9 @@ def test_digits_running_into_digits_raise_instead_of_guessing_a_boundary(tmp_pat
 
 def test_ordinary_unflagged_rows_with_range_between_columns_parse_cleanly(tmp_path):
     # Shape "88 73-135 ng/mL 70": two plain numbers, no flag, no inequality, range printed mid-row.
-    page = (fx.section_preamble("SYN102", "04/24/2026")
+    page = (fx.section_preamble("SYN102", "04/14/2026")
             + [(40, 100, "Test Name"), (200, 100, "Current"), (250, 100, "Reference Range"),
-               (330, 100, "Units"), (390, 100, "Historical"), (390, 111, "01/27/2026")]
+               (330, 100, "Units"), (390, 100, "Historical"), (390, 111, "02/03/2026")]
             + [(40, 130, "SDMA"), (200, 130, "88"), (250, 130, "73-135"), (330, 130, "ng/mL"), (390, 130, "70")]
             + [(40, 144, "Glucose (fasting)"), (200, 144, "92"), (250, 144, "65-99"), (330, 144, "mg/dL"),
                (390, 144, "88")]
@@ -71,72 +71,72 @@ def test_ordinary_unflagged_rows_with_range_between_columns_parse_cleanly(tmp_pa
 
     assert [(o["name"], o["date_display"], o["value"], o["disp_value"], o["lab_range_lo"], o["lab_range_hi"])
             for o in occurrences] == [
-        ("SDMA", "04/24/2026", 88.0, "88", 73.0, 135.0), ("SDMA", "01/27/2026", 70.0, "70", 73.0, 135.0),
-        ("Glucose (fasting)", "04/24/2026", 92.0, "92", 65.0, 99.0),
-        ("Glucose (fasting)", "01/27/2026", 88.0, "88", 65.0, 99.0),
-        ("TSH", "04/24/2026", 1.9, "1.9", 0.40, 4.50), ("TSH", "01/27/2026", 2.4, "2.4", 0.40, 4.50)]
+        ("SDMA", "04/14/2026", 88.0, "88", 73.0, 135.0), ("SDMA", "02/03/2026", 70.0, "70", 73.0, 135.0),
+        ("Glucose (fasting)", "04/14/2026", 92.0, "92", 65.0, 99.0),
+        ("Glucose (fasting)", "02/03/2026", 88.0, "88", 65.0, 99.0),
+        ("TSH", "04/14/2026", 1.9, "1.9", 0.40, 4.50), ("TSH", "02/03/2026", 2.4, "2.4", 0.40, 4.50)]
 
 
 # (2) directly-appended H/L flag -----------------------------------------------------------------
 
 def test_appended_and_standalone_flags_are_stripped_before_parsing(tmp_path):
-    page = (fx.section_preamble("SYN110", "04/24/2026")
-            + fx.header_line(100, ("01/27/2026",))
+    page = (fx.section_preamble("SYN110", "04/14/2026")
+            + fx.header_line(100, ("02/03/2026",))
             + fx.row(130, "Testosterone, Total", "3173H", "1846", units="ng/dL", lab_range="250-1100")
             + fx.row(144, "HDL Cholesterol", "38L", units="mg/dL")
             + fx.row(158, "LDL Cholesterol", "245", units="mg/dL") + [(fx.LAB_X["current"] + 22, 158, "H")])
     found = _by_key(_parse(tmp_path, [page])[0])
 
-    assert (found[("Testosterone, Total", "04/24/2026")]["value"],
-            found[("Testosterone, Total", "04/24/2026")]["disp_value"]) == (3173.0, "3173")
-    assert found[("Testosterone, Total", "01/27/2026")]["value"] == 1846.0
-    assert (found[("HDL Cholesterol", "04/24/2026")]["value"],
-            found[("HDL Cholesterol", "04/24/2026")]["disp_value"]) == (38.0, "38")
-    assert found[("LDL Cholesterol", "04/24/2026")]["value"] == 245.0
-    assert found[("Testosterone, Total", "04/24/2026")]["lab_range_display"] == "250-1100"
+    assert (found[("Testosterone, Total", "04/14/2026")]["value"],
+            found[("Testosterone, Total", "04/14/2026")]["disp_value"]) == (3173.0, "3173")
+    assert found[("Testosterone, Total", "02/03/2026")]["value"] == 1846.0
+    assert (found[("HDL Cholesterol", "04/14/2026")]["value"],
+            found[("HDL Cholesterol", "04/14/2026")]["disp_value"]) == (38.0, "38")
+    assert found[("LDL Cholesterol", "04/14/2026")]["value"] == 245.0
+    assert found[("Testosterone, Total", "04/14/2026")]["lab_range_display"] == "250-1100"
 
 
 # (3) inequality-prefixed values -----------------------------------------------------------------
 
 def test_inequality_prefixed_cells_keep_null_value_and_full_printed_string(tmp_path):
-    page = (fx.section_preamble("SYN120", "04/24/2026")
-            + fx.header_line(100, ("01/27/2026",))
+    page = (fx.section_preamble("SYN120", "04/14/2026")
+            + fx.header_line(100, ("02/03/2026",))
             + fx.row(130, "hs-CRP", ">20.0", "<0.3", units="mg/L"))
     found = _by_key(_parse(tmp_path, [page])[0])
-    assert (found[("hs-CRP", "04/24/2026")]["value"], found[("hs-CRP", "04/24/2026")]["disp_value"]) == (None, ">20.0")
-    assert (found[("hs-CRP", "01/27/2026")]["value"], found[("hs-CRP", "01/27/2026")]["disp_value"]) == (None, "<0.3")
-    assert found[("hs-CRP", "04/24/2026")]["status"] == "final"
+    assert (found[("hs-CRP", "04/14/2026")]["value"], found[("hs-CRP", "04/14/2026")]["disp_value"]) == (None, ">20.0")
+    assert (found[("hs-CRP", "02/03/2026")]["value"], found[("hs-CRP", "02/03/2026")]["disp_value"]) == (None, "<0.3")
+    assert found[("hs-CRP", "04/14/2026")]["status"] == "final"
 
     x = fx.LAB_X
     words = _words([(x["name"], 40, "Order"), (x["name"] + 30, 40, "ID:"), (x["name"] + 50, 40, "SYN121"),
-                    (x["name"], 60, "Collected:"), (x["name"] + 60, 60, "04/24/2026"),
+                    (x["name"], 60, "Collected:"), (x["name"] + 60, 60, "04/14/2026"),
                     (x["name"], 100, "Test"), (x["name"] + 25, 100, "Name"), (x["current"], 100, "Current"),
-                    (x["hist1"], 100, "Historical"), (x["hist1"], 111, "01/27/2026"),
+                    (x["hist1"], 100, "Historical"), (x["hist1"], 111, "02/03/2026"),
                     (x["name"], 130, "eGFR"), (x["current"], 130, "≥90"), (x["hist1"], 130, "≤59")])
     occurrences, _ = pipeline._parse_bloodwork_tables([words])
     assert [(o["date_display"], o["value"], o["disp_value"]) for o in occurrences] == [
-        ("04/24/2026", None, "≥90"), ("01/27/2026", None, "≤59")]
+        ("04/14/2026", None, "≥90"), ("02/03/2026", None, "≤59")]
 
 
 # (4) Test Not Performed / blank-where-a-date-exists vs. genuinely absent from the panel ------------
 
 def test_not_performed_and_blank_dated_cells_differ_from_a_marker_absent_from_the_panel(tmp_path):
-    current = (fx.section_preamble("SYN130", "04/24/2026")
-               + fx.header_line(100, ("01/27/2026",))
+    current = (fx.section_preamble("SYN130", "04/14/2026")
+               + fx.header_line(100, ("02/03/2026",))
                + fx.row(130, "TMAO", "TNP", "5.1", units="uM")
                + fx.row(144, "Myeloperoxidase", "Test Not Performed")
                + fx.row(158, "hs-CRP", "0.3", units="mg/L"))
-    prior = (fx.section_preamble("SYN129", "01/27/2026")
+    prior = (fx.section_preamble("SYN129", "02/03/2026")
              + fx.header_line(100)
              + fx.row(130, "Ferritin", "85", units="ng/mL"))
     occurrences, _ = _parse(tmp_path, [current, prior])
     found = _by_key(occurrences)
 
-    for key in (("TMAO", "04/24/2026"), ("Myeloperoxidase", "04/24/2026"), ("hs-CRP", "01/27/2026")):
+    for key in (("TMAO", "04/14/2026"), ("Myeloperoxidase", "04/14/2026"), ("hs-CRP", "02/03/2026")):
         assert (found[key]["status"], found[key]["value"], found[key]["disp_value"]) == ("not_performed", None, "")
-    assert found[("TMAO", "01/27/2026")]["value"] == 5.1
+    assert found[("TMAO", "02/03/2026")]["value"] == 5.1
     # Ferritin was not part of the 04/24 draw's panel at all: nothing is reported for that date.
-    assert [occ["date_display"] for occ in occurrences if occ["name"] == "Ferritin"] == ["01/27/2026"]
+    assert [occ["date_display"] for occ in occurrences if occ["name"] == "Ferritin"] == ["02/03/2026"]
 
     reconciled = {m["name"]: m for m in pipeline.reconcile_marker_occurrences(occurrences)}
     assert reconciled["hs-CRP"]["now"] == 0.3 and reconciled["hs-CRP"]["then"] is None
@@ -146,14 +146,14 @@ def test_not_performed_and_blank_dated_cells_differ_from_a_marker_absent_from_th
 # (5) zero / one / several historical columns, colored or plain, one rule -------------------------
 
 def test_one_rule_handles_zero_one_and_several_historical_columns(tmp_path):
-    standalone = (fx.section_preamble("SYN301", "04/24/2026")
+    standalone = (fx.section_preamble("SYN301", "04/14/2026")
                   + fx.header_line(100)
                   + fx.row(130, "PSA Total", "2.10", units="ng/mL", lab_range="0.0-4.0")
                   + fx.row(144, "Occult Blood", "Negative"))
-    one_historical = ([(40, 40, "Collected: 01/27/2026"), (40, 54, "Order ID: SYN302")]
+    one_historical = ([(40, 40, "Collected: 02/03/2026"), (40, 54, "Order ID: SYN302")]
                       + fx.header_line(100, ("10/15/2025",), dates_below=False)
                       + fx.row(130, "TMAO", "6.5", "7.0", units="uM"))
-    tiered = ([(40, 40, "Order ID: SYN303"), (40, 54, "Collected: 01/07/2026"),
+    tiered = ([(40, 40, "Order ID: SYN303"), (40, 54, "Collected: 01/13/2026"),
                (40, 100, "Test Name"), (200, 100, "Optimal"), (245, 100, "Moderate"), (295, 100, "High"),
                (340, 100, "Historical"), (340, 111, "10/15/2025"), (410, 100, "Historical"),
                (410, 111, "07/01/2025"), (480, 100, "Units"),
@@ -162,24 +162,24 @@ def test_one_rule_handles_zero_one_and_several_historical_columns(tmp_path):
     occurrences, _ = _parse(tmp_path, [standalone, one_historical, tiered])
     found = _by_key(occurrences)
 
-    assert found[("PSA Total", "04/24/2026")]["value"] == 2.10
-    occult = found[("Urinalysis \u2014 Occult Blood", "04/24/2026")]
+    assert found[("PSA Total", "04/14/2026")]["value"] == 2.10
+    occult = found[("Urinalysis \u2014 Occult Blood", "04/14/2026")]
     assert (occult["value"], occult["disp_value"], occult["is_good"]) == (None, "Negative", True)
-    assert found[("TMAO", "01/27/2026")]["value"] == 6.5
+    assert found[("TMAO", "02/03/2026")]["value"] == 6.5
     assert found[("TMAO", "10/15/2025")]["value"] == 7.0
-    assert [found[("hs-CRP", d)]["value"] for d in ("01/07/2026", "10/15/2025", "07/01/2025")] == [4.2, 3.9, 2.8]
-    assert found[("LDL Cholesterol", "01/07/2026")]["value"] == 88.0
+    assert [found[("hs-CRP", d)]["value"] for d in ("01/13/2026", "10/15/2025", "07/01/2025")] == [4.2, 3.9, 2.8]
+    assert found[("LDL Cholesterol", "01/13/2026")]["value"] == 88.0
     assert found[("LDL Cholesterol", "07/01/2025")]["status"] == "not_performed"
     assert {occ["source_label"] for occ in occurrences} == {
-        "Order SYN301 (collected 04/24/2026)", "Order SYN302 (collected 01/27/2026)",
-        "Order SYN303 (collected 01/07/2026)"}
+        "Order SYN301 (collected 04/14/2026)", "Order SYN302 (collected 02/03/2026)",
+        "Order SYN303 (collected 01/13/2026)"}
 
 
 # (6) a Progress-Summary trend table is ignored; a genetics section doesn't split the section --------
 
 def test_progress_summary_is_ignored_and_genetics_page_does_not_interrupt_sections(tmp_path):
-    first = (fx.section_preamble("SYN400", "04/24/2026")
-             + fx.header_line(100, ("01/27/2026",))
+    first = (fx.section_preamble("SYN400", "04/14/2026")
+             + fx.header_line(100, ("02/03/2026",))
              + fx.row(130, "hs-CRP", "0.3", "0.9", units="mg/L"))
     genetics = [(40, 60, "Cardiovascular Genetics Detail Report"),
                 (40, 90, "ApoE Genotype E3/E4"),
@@ -187,30 +187,30 @@ def test_progress_summary_is_ignored_and_genetics_page_does_not_interrupt_sectio
     continued = ([(40, 40, "Order ID: SYN400")] + fx.header_line(100)
                  + fx.row(130, "TMAO", "6.0", units="uM"))
     summary = ([(40, 60, "Cardiometabolic Patient Progress Summary")]
-               + fx.header_line(100, ("01/27/2026", "01/07/2026"))
+               + fx.header_line(100, ("02/03/2026", "01/13/2026"))
                + fx.row(130, "hs-CRP", "9.9", "8.8", "7.7", units="mg/L"))
     occurrences, unrecognized = _parse(tmp_path, [first, genetics, continued, summary])
 
     assert sorted((o["name"], o["date_display"], o["value"]) for o in occurrences) == [
-        ("TMAO", "04/24/2026", 6.0), ("hs-CRP", "01/27/2026", 0.9), ("hs-CRP", "04/24/2026", 0.3)]
+        ("TMAO", "04/14/2026", 6.0), ("hs-CRP", "02/03/2026", 0.9), ("hs-CRP", "04/14/2026", 0.3)]
     assert unrecognized == []
 
 
 def _data_page(title, order_id="SYN950", title_extra=()):
-    return ([(40, 30, title), *title_extra] + fx.section_preamble(order_id, "01/27/2026")
-            + fx.header_line(100, ("01/07/2026",))
+    return ([(40, 30, title), *title_extra] + fx.section_preamble(order_id, "02/03/2026")
+            + fx.header_line(100, ("01/13/2026",))
             + fx.row(130, "TMAO", "4.1", ">20.0", units="uM"))
 
 
 @pytest.mark.parametrize("title_extra", [
     (), ((500, 30, "Page 1 of 12"),), ((380, 30, "Synthetic, Pat"),),
-    ((380, 30, "Order ID: SYN950"),), ((380, 30, "Collected: 01/27/2026"),),
+    ((380, 30, "Order ID: SYN950"),), ((380, 30, "Collected: 02/03/2026"),),
 ], ids=["title-alone", "page-number-on-title-line", "patient-on-title-line", "order-id-on-title-line",
         "collected-on-title-line"])
 def test_narrative_section_after_a_data_table_is_never_scanned_as_its_rows(tmp_path, title_extra):
     comment_extra = tuple((x, y, text.replace("1 of", "10 of")) for x, y, text in title_extra)
     comment_page = ([(40, 30, "Cardiometabolic Comment Report"), *comment_extra]
-                    + fx.section_preamble("SYN950", "01/27/2026")
+                    + fx.section_preamble("SYN950", "02/03/2026")
                     + [(40, 100, "TMAO"), (232, 100, "Lab:"), (252, 100, "Z4M"),
                        (40, 114, "Elevated values were discussed with the ordering provider."),
                        (40, 128, "Fibrinogen"), (232, 128, "Lab:"), (252, 128, "Z4M")])
@@ -218,19 +218,19 @@ def test_narrative_section_after_a_data_table_is_never_scanned_as_its_rows(tmp_p
     occurrences, _ = _parse(tmp_path, pages)
 
     assert [(o["name"], o["date_display"], o["disp_value"]) for o in occurrences] == [
-        ("TMAO", "01/27/2026", "4.1"), ("TMAO", "01/07/2026", ">20.0")]
+        ("TMAO", "02/03/2026", "4.1"), ("TMAO", "01/13/2026", ">20.0")]
 
 
 @pytest.mark.parametrize("repeat_header", [False, True], ids=["no-header", "repeated-header"])
 def test_continuation_page_requires_its_own_header(tmp_path, repeat_header):
-    continuation = ([(40, 30, "Cardiometabolic Report")] + fx.section_preamble("SYN950", "01/27/2026")
-                    + (fx.header_line(100, ("01/07/2026",)) if repeat_header else [])
+    continuation = ([(40, 30, "Cardiometabolic Report")] + fx.section_preamble("SYN950", "02/03/2026")
+                    + (fx.header_line(100, ("01/13/2026",)) if repeat_header else [])
                     + fx.row(130, "Fibrinogen", "310", "290", units="mg/dL"))
     occurrences, _ = _parse(tmp_path, [_data_page("Cardiometabolic Report"), continuation])
 
-    expected = [("TMAO", "01/27/2026", "4.1"), ("TMAO", "01/07/2026", ">20.0")]
+    expected = [("TMAO", "02/03/2026", "4.1"), ("TMAO", "01/13/2026", ">20.0")]
     if repeat_header:
-        expected += [("Fibrinogen", "01/27/2026", "310"), ("Fibrinogen", "01/07/2026", "290")]
+        expected += [("Fibrinogen", "02/03/2026", "310"), ("Fibrinogen", "01/13/2026", "290")]
     assert [(o["name"], o["date_display"], o["disp_value"]) for o in occurrences] == expected
 
 
@@ -238,9 +238,9 @@ def test_continuation_page_requires_its_own_header(tmp_path, repeat_header):
 
 def _legend_table(rows, current_x=250, historical_x=470, units_x=600):
     """Header: Test Name | Current | Historical (date below) | Units; rows are (name, [(x, text), ...])."""
-    items = (fx.section_preamble("SYN700", "04/24/2026")
+    items = (fx.section_preamble("SYN700", "04/14/2026")
              + [(40, 100, "Test Name"), (current_x, 100, "Current"), (historical_x, 100, "Historical"),
-                (historical_x, 111, "01/27/2026"), (units_x, 100, "Units")])
+                (historical_x, 111, "02/03/2026"), (units_x, 100, "Units")])
     for offset, (name, cells) in enumerate(rows):
         y = 130 + 14 * offset
         items += [(40, y, name)] + [(x, y, text) for x, text in cells]
@@ -257,10 +257,10 @@ def test_threshold_legend_before_after_or_interleaved_is_never_taken_as_the_resu
     found = _by_key(_parse(tmp_path, [page])[0])
 
     assert {key: (occ["value"], occ["disp_value"]) for key, occ in found.items()} == {
-        ("Myeloperoxidase", "04/24/2026"): (420.0, "420"), ("Myeloperoxidase", "01/27/2026"): (380.0, "380"),
-        ("ADMA", "04/24/2026"): (95.0, "95"), ("ADMA", "01/27/2026"): (101.0, "101"),
-        ("Fibrinogen", "04/24/2026"): (300.0, "300"), ("Fibrinogen", "01/27/2026"): (290.0, "290"),
-        ("LH", "04/24/2026"): (None, "<0.2"), ("LH", "01/27/2026"): (None, "<0.1"),
+        ("Myeloperoxidase", "04/14/2026"): (420.0, "420"), ("Myeloperoxidase", "02/03/2026"): (380.0, "380"),
+        ("ADMA", "04/14/2026"): (95.0, "95"), ("ADMA", "02/03/2026"): (101.0, "101"),
+        ("Fibrinogen", "04/14/2026"): (300.0, "300"), ("Fibrinogen", "02/03/2026"): (290.0, "290"),
+        ("LH", "04/14/2026"): (None, "<0.2"), ("LH", "02/03/2026"): (None, "<0.1"),
     }
     assert all(occ["lab_range_display"] == "" for occ in found.values())
 
@@ -273,14 +273,14 @@ def test_reference_token_separated_from_legend_by_a_units_label_is_never_a_resul
     occurrences, _ = _parse(tmp_path, [page])
 
     assert [(o["date_display"], o["value"], o["disp_value"]) for o in occurrences] == [
-        ("04/24/2026", 88.0, "88"), ("01/27/2026", 90.0, "90")]
+        ("04/14/2026", 88.0, "88"), ("02/03/2026", 90.0, "90")]
 
 
 def test_single_comparator_inside_the_dated_column_is_the_result_even_beside_a_legend(tmp_path):
     page = _legend_table([("TMAO", [(250, "<0.3"), (290, "<1.0"), (315, "1.0-3.0"), (355, ">3.0"), (470, "6.1")])])
     occurrences, _ = _parse(tmp_path, [page])
     assert [(o["date_display"], o["value"], o["disp_value"]) for o in occurrences] == [
-        ("04/24/2026", None, "<0.3"), ("01/27/2026", 6.1, "6.1")]
+        ("04/14/2026", None, "<0.3"), ("02/03/2026", 6.1, "6.1")]
 
 
 def test_high_side_capped_comparator_alone_in_a_dated_column_is_the_result(tmp_path):
@@ -290,10 +290,10 @@ def test_high_side_capped_comparator_alone_in_a_dated_column_is_the_result(tmp_p
     ])
     found = _by_key(_parse(tmp_path, [page])[0])
     assert {key: (occ["status"], occ["value"], occ["disp_value"]) for key, occ in found.items()} == {
-        ("Myeloperoxidase", "04/24/2026"): ("final", 410.0, "410"),
-        ("Myeloperoxidase", "01/27/2026"): ("final", None, ">20.0"),
-        ("Fibrinogen", "04/24/2026"): ("final", None, ">=900"),
-        ("Fibrinogen", "01/27/2026"): ("final", 320.0, "320"),
+        ("Myeloperoxidase", "04/14/2026"): ("final", 410.0, "410"),
+        ("Myeloperoxidase", "02/03/2026"): ("final", None, ">20.0"),
+        ("Fibrinogen", "04/14/2026"): ("final", None, ">=900"),
+        ("Fibrinogen", "02/03/2026"): ("final", 320.0, "320"),
     }
 
 
@@ -306,7 +306,7 @@ def test_multi_line_header_assigns_columns_by_the_current_historical_labels_abov
     the Historical date (beside an empty second date slot) two lines below the sub-labels."""
     header = [
         _box(40, 80, 150, "Order"), _box(82, 95, 150, "ID:"), _box(97, 140, 150, "SYN810"),
-        _box(40, 80, 160, "Collected:"), _box(82, 125, 160, "01/27/2026"),
+        _box(40, 80, 160, "Collected:"), _box(82, 125, 160, "02/03/2026"),
         _box(198.2, 227.0, 191.1, "Current"), _box(511.8, 548.3, 191.1, "Historical"),
         _box(40, 60, 204.0, "Test"),
         _box(170.4, 194.0, 204.0, "Result"), _box(196.0, 202.0, 204.0, "&"), _box(204.0, 232.0, 204.0, "Relative"),
@@ -316,7 +316,7 @@ def test_multi_line_header_assigns_columns_by_the_current_historical_labels_abov
         _box(279.9, 309.7, 209.2, "Optimal"), _box(328.0, 363.6, 209.2, "Moderate"), _box(388.0, 405.7, 209.2, "High"),
         _box(437.9, 457.9, 209.2, "Units"),
         _box(170.5, 200.3, 216.9, "Optimal"), _box(213.6, 261.6, 216.9, "Non-Optimal"),
-        _box(484.5, 524.6, 216.9, "01/07/2026"), _box(552.2, 554.5, 216.9, "/"), _box(556.7, 558.9, 216.9, "/"),
+        _box(484.5, 524.6, 216.9, "01/13/2026"), _box(552.2, 554.5, 216.9, "/"), _box(556.7, 558.9, 216.9, "/"),
     ]
     rows = [
         _box(40, 70, 305, "TMAO"), _box(180.1, 194.0, 305, "4.1"), _box(286.9, 302.7, 305, "<6.2"),
@@ -328,10 +328,10 @@ def test_multi_line_header_assigns_columns_by_the_current_historical_labels_abov
     occurrences, _ = pipeline._parse_bloodwork_tables([header + rows])
 
     assert [(o["name"], o["date_display"], o["status"], o["value"], o["disp_value"]) for o in occurrences] == [
-        ("TMAO", "01/27/2026", "final", 4.1, "4.1"),
-        ("TMAO", "01/07/2026", "final", None, ">20.0"),
-        ("Fibrinogen", "01/27/2026", "final", 310.0, "310"),
-        ("Fibrinogen", "01/07/2026", "not_performed", None, ""),
+        ("TMAO", "02/03/2026", "final", 4.1, "4.1"),
+        ("TMAO", "01/13/2026", "final", None, ">20.0"),
+        ("Fibrinogen", "02/03/2026", "final", 310.0, "310"),
+        ("Fibrinogen", "01/13/2026", "not_performed", None, ""),
     ]
 
 
@@ -359,13 +359,13 @@ def _free_text_lab_pdf(path, collected_line):
 
 
 def test_unrecognized_layout_without_collected_line_raises(tmp_path):
-    path = _free_text_lab_pdf(tmp_path / "labs.pdf", "Draw Date: 04/24/2026")
+    path = _free_text_lab_pdf(tmp_path / "labs.pdf", "Draw Date: 04/14/2026")
     with fitz.open(path) as document, pytest.raises(pipeline.BloodworkParseError, match="no recognizable 'Collected:'"):
         pipeline._parse_bloodwork_tables(list(document))
 
 
 def test_collected_line_but_no_matching_table_raises_instead_of_empty_report(tmp_path):
-    path = _free_text_lab_pdf(tmp_path / "labs.pdf", "Collected: 04/24/2026")
+    path = _free_text_lab_pdf(tmp_path / "labs.pdf", "Collected: 04/14/2026")
     out = tmp_path / "report.pdf"
     with pytest.raises(pipeline.BloodworkParseError, match="zero recognized marker rows"):
         pipeline.run(str(path), [], None, fx.PATIENT, 44, "male", str(out))
@@ -373,7 +373,7 @@ def test_collected_line_but_no_matching_table_raises_instead_of_empty_report(tmp
 
 
 def test_parsed_occurrences_keep_the_extraction_schema_shape(tmp_path):
-    page = (fx.section_preamble("SYN500", "04/24/2026") + fx.header_line(100, ("01/27/2026",))
+    page = (fx.section_preamble("SYN500", "04/14/2026") + fx.header_line(100, ("02/03/2026",))
             + fx.row(130, "hs-CRP", "0.3", "TNP", units="mg/L", lab_range="0.0-3.0")
             + fx.row(144, "Occult Blood", "Negative"))
     occurrences, _ = _parse(tmp_path, [page])
@@ -416,8 +416,8 @@ def test_adjacent_words_form_a_cell_before_column_assignment():
 
 @pytest.mark.parametrize("second_value", ["1.9", "2.1"], ids=["identical", "conflicting"])
 def test_duplicate_canonical_dates_keep_page_provenance_or_raise(tmp_path, second_value):
-    first = fx.section_preamble("SYN991", "04/24/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.9")
-    second = fx.section_preamble("SYN991", "04/24/2026") + fx.header_line(100) \
+    first = fx.section_preamble("SYN991", "04/14/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.9")
+    second = fx.section_preamble("SYN991", "04/14/2026") + fx.header_line(100) \
         + fx.row(130, "Thyroid Stimulating Hormone (TSH)", second_value)
     if second_value != "1.9":
         with pytest.raises(pipeline.BloodworkParseError, match=r"TSH .*pages 1 and 2"):
@@ -436,7 +436,7 @@ def test_unreadable_page_warning_reaches_generation_review(tmp_path, monkeypatch
     review = tmp_path / "review_notes.txt"
     monkeypatch.setattr(pipeline, "_review_notes_path", lambda name: str(review))
     labs = fx.write_lab_pdf(tmp_path / "labs.pdf", [
-        fx.section_preamble("SYN992", "04/24/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.9"),
+        fx.section_preamble("SYN992", "04/14/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.9"),
         [],
     ])
     monkeypatch.setattr(pipeline.template, "render", lambda *args, **kwargs: None)
@@ -452,8 +452,8 @@ def test_unreadable_page_warning_reaches_generation_review(tmp_path, monkeypatch
 def test_ruled_text_cells_are_accounted_for_or_raise(tmp_path, has_name):
     from unknown_marker_policy import UnrecognizedMarker
 
-    items = (fx.section_preamble("SYN990", "04/24/2026")
-             + fx.header_line(100, ("01/27/2026",))
+    items = (fx.section_preamble("SYN990", "04/14/2026")
+             + fx.header_line(100, ("02/03/2026",))
              + ([(40, 130, "Novel Assay")] if has_name else [])
              + [(220, 135, "Not"), (220, 145, "Applicable"),
                 (300, 135, "Not"), (300, 145, "Applicable")])
@@ -475,7 +475,7 @@ def test_ruled_text_cells_are_accounted_for_or_raise(tmp_path, has_name):
         assert header is not None
         for line in lines:
             pipeline._attach_header_dates(line, header)
-        section = {"order_id": "SYN990", "dates": ["04/24/2026"]}
+        section = {"order_id": "SYN990", "dates": ["04/14/2026"]}
         rows = [line for line in lines if line[0][1] > 120]
         occurrences, unknown, audit = [], [], []
         pipeline._parse_table_region(document[0], rows, header, section, occurrences, unknown, audit)
@@ -490,10 +490,10 @@ def test_ruled_text_cells_are_accounted_for_or_raise(tmp_path, has_name):
 # DEXA stays on the original Claude extraction path ------------------------------------------------
 
 CLAUDE_DEXA_HISTORY = [
-    {"date_display": "05/21/2025", "total_mass_lb": 170.5, "fat_mass_lb": 56.5, "lean_mass_lb": 107.6,
-     "body_fat_pct": "34.4%", "vat_fat_mass_lb": 1.01, "visceral_fat_area_cm2": 82.4},
-    {"date_display": "01/27/2026", "total_mass_lb": 165.0, "fat_mass_lb": 49.5, "lean_mass_lb": 109.0,
-     "body_fat_pct": "30.0%", "vat_fat_mass_lb": 0.85, "visceral_fat_area_cm2": 70.1},
+    {"date_display": "05/12/2025", "total_mass_lb": 172.0, "fat_mass_lb": 58.0, "lean_mass_lb": 108.9,
+     "body_fat_pct": "33.7%", "vat_fat_mass_lb": 1.06, "visceral_fat_area_cm2": 84.0},
+    {"date_display": "02/03/2026", "total_mass_lb": 166.0, "fat_mass_lb": 50.5, "lean_mass_lb": 110.0,
+     "body_fat_pct": "30.4%", "vat_fat_mass_lb": 0.88, "visceral_fat_area_cm2": 71.5},
 ]
 
 
@@ -538,7 +538,7 @@ def test_reports_without_dexa_make_no_claude_call(tmp_path, monkeypatch):
     _FakeClaude.calls = []
     monkeypatch.setattr(pipeline, "Anthropic", _FakeClaude)
     labs = fx.write_lab_pdf(tmp_path / "labs.pdf", [
-        fx.section_preamble("SYN902", "04/24/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.9")])
+        fx.section_preamble("SYN902", "04/14/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.9")])
     pipeline.run(str(labs), [], None, fx.PATIENT, 44, "male", str(tmp_path / "report.pdf"))
     assert _FakeClaude.calls == []
 
@@ -546,7 +546,7 @@ def test_reports_without_dexa_make_no_claude_call(tmp_path, monkeypatch):
 # Template fill, priority, provider notes, end to end ----------------------------------------------
 
 def _marker(name, category, now_tier, then_tier=None, now=1.0, then=None, now_pct=None, then_pct=None,
-            now_date="04/24/2026", then_date="01/07/2026"):
+            now_date="04/14/2026", then_date="01/13/2026"):
     retested = now is not None
     return Marker(name=name, category=category, unit="", kind="range", disp_range="",
                   now=now, disp_now=str(now) if retested else "", now_date_display=now_date if retested else "",
@@ -580,12 +580,12 @@ def test_every_number_and_date_in_filled_copy_comes_from_the_record():
     ]
     copy = build_copy(PatientRecord(name="Copy Facts", markers=markers))
     text = json.dumps(copy)
-    record_dates = {"04/24/2026", "01/07/2026"}
+    record_dates = {"04/14/2026", "01/13/2026"}
     record_values = {"4.4", "2.2", "1.9", "400.0"}
     assert set(re.findall(r"\d{2}/\d{2}/\d{4}", text)) <= record_dates
     assert set(re.findall(r"\d+\.\d+", text)) <= record_values
     assert copy["next_30_label"] == "Ferritin"
-    assert copy["next_30_sub"] == "Not retested since 01/07/2026"
+    assert copy["next_30_sub"] == "Not retested since 01/13/2026"
 
 
 STRUCTURED_NOTE = """# CellDeep Provider Notes
@@ -629,7 +629,7 @@ def test_unstructured_provider_note_is_rejected_and_never_read():
 def test_end_to_end_run_is_deterministic_and_renders(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "Anthropic", _FakeClaude)
     labs = fx.write_lab_pdf(tmp_path / "labs.pdf", [
-        fx.section_preamble("SYN900", "04/24/2026") + fx.header_line(100, ("01/07/2026",))
+        fx.section_preamble("SYN900", "04/14/2026") + fx.header_line(100, ("01/13/2026",))
         + fx.row(130, "hs-CRP", "4.4H", "2.2", units="mg/L", lab_range="0.0-3.0")
         + fx.row(144, "TSH", "1.9", "2.4", units="uIU/mL")])
     dexa = _dexa_pdf(tmp_path / "dexa.pdf")
@@ -639,15 +639,15 @@ def test_end_to_end_run_is_deterministic_and_renders(tmp_path, monkeypatch):
 
     with fitz.open(out) as rendered:
         text = "\n".join(page.get_text() for page in rendered)
-    assert "hs-CRP moved from 2.2 mg/L on 01/07/2026 to 4.4 mg/L on 04/24/2026" in text.replace("\n", " ")
+    assert "hs-CRP moved from 2.2 mg/L on 01/13/2026 to 4.4 mg/L on 04/14/2026" in text.replace("\n", " ")
     assert "Afternoon energy dips" in text
-    assert "34.4%" in text and "30.0%" in text
+    assert "33.7%" in text and "30.4%" in text
     assert "PROVIDER NOTE REJECTED" not in Path(review_path).read_text(encoding="utf-8")
 
 
 def test_end_to_end_run_flags_rejected_note_for_manual_entry(tmp_path):
     labs = fx.write_lab_pdf(tmp_path / "labs.pdf", [
-        fx.section_preamble("SYN901", "04/24/2026") + fx.header_line(100)
+        fx.section_preamble("SYN901", "04/14/2026") + fx.header_line(100)
         + fx.row(130, "TSH", "1.9", units="uIU/mL")])
     out = tmp_path / "report.pdf"
     review_path = pipeline.run(str(labs), [], "Started BPC-157 daily.", fx.PATIENT, 44, "male", str(out))
