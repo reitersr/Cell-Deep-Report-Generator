@@ -1544,9 +1544,13 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
             reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL))
         except scan.ScanGateError as error:
             failures.append((page.number + 1, error.reads, str(error)))
+    lab_codes = {
+        match[1] for page in digital_pages
+        for match in re.finditer(r"\(\d+\)\s*\(([A-Z][A-Z0-9]{1,5})\)", _line_text(_page_words(page)))
+    }
     if staff:
         accepted, notes = scan.gate_staff_identified_reads(
-            reads, collected_date, _CELL_VALUE_RE, patient_name, failures)
+            reads, collected_date, _CELL_VALUE_RE, patient_name, failures, lab_codes)
         # Name-mismatch notices stay first so staff see them before the identity summary.
         notes.insert(sum(note.startswith("STAFF REVIEW") for note in notes),
                      f"source=scan pages {numbers}: identified by staff-entered patient name and "
@@ -1560,10 +1564,6 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
             return [], [], error.notes + [
                 f"source=scan pages {numbers}: {error}; ALL SCAN ROWS REJECTED; manual review required"]
     occurrences, unknown = [], []
-    lab_codes = {
-        match[1] for page in digital_pages
-        for match in re.finditer(r"\(\d+\)\s*\(([A-Z][A-Z0-9]{1,5})\)", _line_text(_page_words(page)))
-    }
     header = _bloodwork_header([
         (40, 90, 70, 100, "Test"), (220, 90, 260, 100, "Current"),
         (320, 90, 350, 100, "Reference"), (352, 90, 380, 100, "Range"),

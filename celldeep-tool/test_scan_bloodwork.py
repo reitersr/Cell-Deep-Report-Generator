@@ -122,7 +122,7 @@ def payloads():
         rows.append({
             "name": name, "result_text": value, "flag": flag, "reference_range": reference,
             "column": "out_of_range" if flag or name == "KETONES" else "in_range",
-            "page": 2 if index < 54 else 3, "illegible": False,
+            "page": 2 if index < 54 else 3, "illegible": False, "lab_code": None,
             "section": "URINALYSIS" if 54 <= index <= 70 else "ROUTINE PANELS",
         })
     summary = [{"name": row["name"], "result_text": row["result_text"], "flag": row["flag"],

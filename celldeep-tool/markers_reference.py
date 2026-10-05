@@ -100,7 +100,7 @@ MARKER_LIBRARY = {
         aliases=["insulin resistance score", "ir score"]),
     "Fasting Insulin": dict(category="Metabolic", unit="\u00b5IU/mL", kind="range",
         lo=2, hi=10, disp_range="2\u201310",
-        aliases=["fasting insulin", "insulin, fasting", "Insulin, Intact, LC/MS/MS"]),
+        aliases=["fasting insulin", "insulin, fasting", "Insulin, Intact, LC/MS/MS", "insulin"]),
     "C-Peptide": dict(category="Metabolic", unit="ng/mL", kind="bounded",
         direction="lower", optimal=2.16, moderate=2.16, disp_range="optimal \u22642.16",
         aliases=["c-peptide", "c peptide", "connecting peptide", "c peptide, serum", "serum c-peptide",
