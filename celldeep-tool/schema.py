@@ -108,6 +108,17 @@ class Marker:
 
 
 @dataclass
+class LabReportedResult:
+    """A test CellDeep shows exactly as the lab reported it, with no CellDeep score.
+
+    results: chronological list of {date_display, disp_value, lab_flag ("H"/"L"/None, the lab's own
+    printed flag), lab_range (printed reference range text or None)}."""
+    name: str
+    group: str
+    results: list = field(default_factory=list)
+
+
+@dataclass
 class DexaReading:
     """One DEXA scan. VAT/SAT are optional per-reading — not every visit re-measures them."""
     date_display: str          # e.g. "May 12, 2025"
@@ -176,6 +187,9 @@ class PatientRecord:
 
     # raw provider note text, kept for reference/traceability — not directly rendered
     provider_note_raw: Optional[str] = None
+
+    # lab results shown as printed (value, lab range, lab H/L flag) but never scored
+    lab_reported: list = field(default_factory=list)   # list[LabReportedResult]
 
     # document mode — determined by whether first_draw_date is None (true first consult)
     # or a real prior date exists (progression document). Generation branches on this.

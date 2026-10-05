@@ -246,7 +246,7 @@ MARKER_LIBRARY = {
         aliases=["creatinine"]),
     "Troponin T, HS": dict(category="Also Monitored", unit="ng/L", kind="bounded",
         direction="lower", optimal=6, moderate=6, inclusive=False, disp_range="optimal <6",
-        aliases=["troponin", "troponin t", "troponin, high sensitivity", "hs troponin", "hs troponin t", "hs-troponin t",
+        aliases=["troponin, high sensitivity", "hs troponin", "hs troponin t", "hs-troponin t",
                  "Troponin T, High Sensitivity (hs-TnT)"]),
     "Urinalysis \u2014 Occult Blood": dict(category="Also Monitored", unit="", kind="categorical",
         disp_range="expected negative",

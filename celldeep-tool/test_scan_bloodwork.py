@@ -452,8 +452,11 @@ def test_mocked_merge_and_staff_only_provenance(mixed_pdf, tmp_path):
     audit = json.loads(next(tmp_path.rglob("source-rows.json")).read_text())
     assert sum(row["page"] in (2, 3) for row in audit) == len(GOLDEN)
     assert all("source" not in row for row in audit)
-    unknown = extracted["unrecognized_markers"]
-    assert any(row["raw_name"] == "GLUCOSE" and "URINALYSIS" in row["source_context"] for row in unknown)
+    urine = next(item for item in extracted["lab_reported"] if item["name"] == "Urinalysis \u2014 Glucose")
+    assert urine["results"] == [{"date_display": "04/14/2026", "disp_value": "NEGATIVE", "lab_flag": None,
+                                 "lab_range": None}]
+    assert not any(item["date_display"] == "04/14/2026" and item["disp_value"] == "NEGATIVE"
+                   for item in extracted["marker_occurrences"] if item["name"] == "Glucose (fasting)")
 
 
 def test_bad_transcription_does_not_prevent_next_page(mixed_pdf, tmp_path, capsys):

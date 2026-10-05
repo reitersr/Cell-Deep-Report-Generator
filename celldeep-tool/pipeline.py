@@ -29,13 +29,14 @@ from anthropic import APIConnectionError, APITimeoutError, Anthropic, RateLimitE
 from json_repair import repair_json
 import fitz
 
-from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint
+from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint, LabReportedResult
 from schema import normalize_date_for_matching as _normalize_date_for_matching
 from markers_reference import MARKER_LIBRARY, resolve_marker_config, has_missing_thresholds
 from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
 from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
 from extraction_prompt import EXTRACTION_SYSTEM_PROMPT, EXTRACTION_OUTPUT_SCHEMA, build_extraction_user_message
 from generation_prompt import build_copy
+import lab_reported
 import scoring
 import template
 
@@ -974,7 +975,7 @@ def _cell_result(token: str) -> tuple[str, float | None, str]:
 
 def _printed_lab_range(range_words: list[str]) -> tuple[float, float, str]:
     display = " ".join(range_words).strip()
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)", display)
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)(?:\s+[A-Za-zµμ%][\w/%.^µμ]*)?", display)
     if not match:
         return 0, 0, ""
     return float(match.group(1)), float(match.group(2)), display
@@ -1037,6 +1038,7 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
     # Only a token printed inside a dated column's own header span can be a result; anything else
     # (reference legends, units, lab codes, stray thresholds) is never eligible, whatever its shape.
     cells: dict[int, str] = {}
+    flags: dict[int, str] = {}  # the lab's own printed H/L flag per value column; never computed
     stray: dict[int, list[str]] = {}
     range_words: list[str] = []
     problems: list[str] = []
@@ -1047,6 +1049,9 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         if kind == "range":
             range_words.append(word[4])
             continue
+        if kind in ("current", "historical") and word[4] in _STANDALONE_FLAGS \
+                and header["logical"][column] is not None:
+            flags[header["logical"][column]] = word[4]
         if kind not in ("current", "historical") or word[4] in _STANDALONE_FLAGS:
             continue
         try:
@@ -1076,6 +1081,9 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
                 problems.append(piece)
             else:
                 cells[start + offset] = piece
+                printed_flag = _CELL_VALUE_RE.fullmatch(piece)
+                if printed_flag and printed_flag.group("flag"):
+                    flags[start + offset] = printed_flag.group("flag")
 
     if problems:
         raise BloodworkParseError(
@@ -1098,11 +1106,12 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
             if date:
                 status, value, display = _cell_result(token) if token is not None else ("not_performed", None, "")
                 parsed_cells.append({"kind": column["kind"], "date_display": date, "status": status,
-                                     "value": value, "disp_value": display, "present": token is not None})
+                                     "value": value, "disp_value": display, "present": token is not None,
+                                     "lab_flag": flags.get(index) if token is not None else None})
         unrecognized.append({
             "raw_name": raw_name, "raw_value": " | ".join(cells[i] for i in sorted(cells)),
             "raw_unit": "", "raw_range": " ".join(range_words), "source_context": _section_label(section),
-            "cells": parsed_cells,
+            "cells": parsed_cells, "section_heading": section.get("heading"),
         })
         return True
 
@@ -1228,9 +1237,13 @@ def _parse_table_region(page, lines, header, section, occurrences, unrecognized,
             column = header["columns"][index]
             if column["kind"] in ("current", "historical"):
                 tokens = [w[4] for w in span]
+                popped = []
                 while len(tokens) > 1 and tokens[-1] in _STANDALONE_FLAGS:
-                    tokens.pop()
+                    popped.append(tokens.pop())
                 token = " ".join(tokens)
+                numeric = _CELL_VALUE_RE.fullmatch(token)
+                if popped in (["H"], ["L"]) and numeric and not numeric.group("flag"):
+                    token += popped[0]  # keep the lab's printed flag with its own result
                 assigned[index].append((span[0][0], min(w[1] for w in span),
                                         span[-1][2], max(w[3] for w in span), token))
             else:
@@ -1579,6 +1592,9 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         _parse_bloodwork_row(words, header, section, occurrences, unknown, row_name=name, allow_text=True)
         for occurrence in occurrences[start:]:
             occurrence["source_label"] += f"; pages {row['page']}"
+        for item in unknown[unknown_start:]:
+            for cell in item["cells"]:
+                cell["lab_flag"] = row["flag"] if cell["present"] else None
         row_audit.append({
             "page": row["page"], "name": name, "section": row["section"],
             "occurrences": [dict(item) for item in occurrences[start:]], "unrecognized": unknown[unknown_start:],
@@ -1725,6 +1741,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                 occurrences = _merge_scan_occurrences(occurrences, scanned, row_audit)
                 unrecognized.extend(scan_unknown)
                 lab_review_notes.extend(scan_notes)
+    lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
+    lab_review_notes.extend(lab_notes)
     dexa_history = _extract_dexa_with_claude(client, dexa_pdfs, patient_name) if dexa_pdfs else []
     note = parse_provider_note(note_text)
 
@@ -1747,6 +1765,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "vitality_index": note["vitality_index"],
         "provider_note_raw": note_text if note["accepted"] else None,
         "unrecognized_markers": unrecognized,
+        "lab_reported": lab_items,
+        "source_rows": row_audit,
         "other_notes": [*lab_review_notes, *note["other_notes"]],
     }
 
@@ -1993,9 +2013,31 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         cns_domains=extracted.get("cns_domains"),
         vitality_index=scoring.normalize_vitality_index(extracted.get("vitality_index")),
         provider_note_raw=extracted.get("provider_note_raw"),
+        lab_reported=[LabReportedResult(name=item["name"], group=item["group"], results=item["results"])
+                      for item in extracted.get("lab_reported", [])],
     )
     notice.other_notes.extend(extracted.get("other_notes", []))
+    unrecognized_names = {" ".join(item["raw_name"].split()).casefold()
+                          for item in extracted.get("unrecognized_markers", [])}
+    notice.other_notes[:0] = coverage_gaps(extracted.get("source_rows", []), record, unrecognized_names)
     return record, notice
+
+
+def coverage_gaps(source_rows: list[dict], record: PatientRecord, unrecognized_names: set[str]) -> list[str]:
+    """Every printed result row must reach the patient report or the staff notes; never vanish."""
+    scored = {marker.name for marker in record.markers}
+    shown = {item.name for item in record.lab_reported}
+    gaps = []
+    for row in source_rows:
+        names = [occurrence["name"] for occurrence in row["occurrences"] if occurrence["name"] not in scored]
+        for unknown in row["unrecognized"]:
+            match = lab_reported.lookup(unknown["raw_name"], lab_reported._heading(unknown))
+            printed = " ".join(unknown["raw_name"].split())
+            if printed.casefold() not in unrecognized_names and (match is None or match[0] not in shown):
+                names.append(printed)
+        gaps.extend(f"COVERAGE GAP - {name!r} printed on page {row['page']} is in neither the patient "
+                    "report nor these notes; manual review required" for name in names)
+    return gaps
 
 
 def markers_reference_lookup(raw_name: str):

@@ -29,6 +29,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/pipeline.py` | Orchestrator: deterministic bloodwork table parsing, scan routing, reconciliation, scoring hand-off, review notes, CLI (`python pipeline.py --help`). |
 | `celldeep-tool/scan_bloodwork.py` | Image-only bloodwork pages: two independent vision reads per page and the deterministic gates that keep or exclude each row. |
 | `celldeep-tool/markers_reference.py` | Marker library: canonical names, exact aliases, CellDeep scoring thresholds. |
+| `celldeep-tool/lab_reported.py` | Lab-reported, not-scored tests (CBC, chemistry, urinalysis, ...): exact aliases, section-scoped; shown with printed range and the lab's H/L flag, never a CellDeep score. |
 | `celldeep-tool/scoring.py` | Pure scoring math, no AI. |
 | `celldeep-tool/generation_prompt.py` | Deterministic patient-facing copy (template fill, no AI). |
 | `celldeep-tool/template.py` | HTML/CSS renderer (locked V23 design) and PDF output via Playwright. |
@@ -77,7 +78,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
 3. **DEXA**: `_extract_dexa_with_claude` (unchanged Claude call).
 4. **Provider note**: `parse_provider_note` reads only the documented template sections.
 5. **Scoring** (`score_and_build_record`): reconciles occurrences into `Marker`s, scores with
-   `markers_reference.py` thresholds, collects staff notices.
+   `markers_reference.py` thresholds, collects staff notices. Unrecognized rows that match
+   `lab_reported.py`, and any other row the lab flagged H/L, become `record.lab_reported`
+   (shown, never scored). `coverage_gaps` checks that every printed row reached the report or
+   the staff notes and raises a `COVERAGE GAP` note otherwise.
 6. **Copy and render**: `generation_prompt.build_copy` fills patient-facing text;
    `template.render` writes the patient PDF.
 7. **Staff notes**: `_write_review_notes` / `format_review_notice` write the staff-only review

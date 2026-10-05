@@ -330,6 +330,8 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .bio-dash{{color:{MIDGRAY}; font-size:13px;}}
 .bio-unit{{font-size:9px; color:{MUTE}; margin-left:3px; display:block; margin-top:1px;}}
 .bio-date{{display:block; font-size:8px; color:{MUTE}; margin-top:2px; line-height:1.1;}}
+.lab-pill{{background:{MIDGRAY}22; color:{INK};}}
+.lab-flag{{font-weight:700; margin-left:3px;}}
 .bio-note{{font-size:9.5px; color:{DARKGRAY}; line-height:1.3; font-style:italic; max-width:6.2in;}}
 '''
 
@@ -703,6 +705,43 @@ def bio_group(cat, record, copy, first_draw, latest_draw, show_headers=True):
             f'<div class="bio-table">{header_html}{first_row}</div></div>{narr_html}{remaining_rows}</div>')
 
 
+def _lab_result_cell(result) -> str:
+    if result is None:
+        return f'<span class="bio-dash">{fmt(None)}</span>'
+    flag = result.get("lab_flag")
+    flag_html = f' <b class="lab-flag">{flag}</b>' if flag else ""
+    date = f'<span class="bio-date">{fmt_date(result["date_display"])}</span>' if result.get("date_display") else ""
+    return f'<span class="bio-pill lab-pill">{fmt(result["disp_value"])}{flag_html}</span>{date}'
+
+
+def lab_reported_section(record: PatientRecord) -> str:
+    """Lab-reported results exactly as printed: value, the lab's range and the lab's own H/L flag.
+    Never a CellDeep score or tier color, and never part of any system rollup."""
+    if not record.lab_reported:
+        return ""
+    groups = []
+    for group in dict.fromkeys(item.group for item in record.lab_reported):
+        rows = []
+        for item in (item for item in record.lab_reported if item.group == group):
+            latest = item.results[-1]
+            earlier = item.results[0] if len(item.results) > 1 else None
+            rows.append(f'''<div class="bio-table-row bio-tr lab-tr" style="--c:{MIDGRAY};">
+      <div class="td-name"><span class="bio-name">{item.name}</span></div>
+      <div class="td-range">{fmt(latest.get("lab_range"))}</div>
+      <div class="td-then">{_lab_result_cell(earlier)}</div>
+      <div class="td-now">{_lab_result_cell(latest)}</div>
+    </div>''')
+        header = ('<div class="bio-table-row bio-table-header"><div>Test</div><div>Lab Reference Range</div>'
+                  '<div>Earlier</div><div>Latest</div></div>')
+        groups.append(f'<div class="bio-group"><div class="bio-group-title">{group.upper()}</div>'
+                      f'<div class="bio-table">{header}{"".join(rows)}</div></div>')
+    return f'''<div class="lab-reported">
+    <div class="sec-title" style="margin-top:22px;">Lab-Reported Results, Not Scored</div>
+    <p style="font-size:11px; color:#4c4744; margin-bottom:12px;">These results are shown exactly as your lab reported them, with the lab's own reference range and the lab's H (high) or L (low) flag. CellDeep has not scored them, and they do not change any score in this report.</p>
+    {"".join(groups)}
+    </div>'''
+
+
 def render(record: PatientRecord, copy: dict, out_path: str,
            logo_traced_path: str | None = None, dexa_img_b64: str | None = None):
     """The single entry point. Produces a finished PDF at out_path."""
@@ -784,6 +823,8 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     {remaining_breakdown}''' if data_categories else ""
     if data_categories:
         full_panel_html += '<p class="footer-note">Reference ranges reflect standard laboratory values. Markers vary by which panel was run for this draw; some rounds include a more extensive workup than others, and that is expected, not a gap in your care. This document is generated for CellDeep and replaces the standard lab notebook page in your chart.</p>'
+
+    full_panel_html += lab_reported_section(record)
 
     bullets_html = "".join(f'<li>{fmt(b)}</li>' for b in copy.get("optimization_summary_bullets", []))
 
