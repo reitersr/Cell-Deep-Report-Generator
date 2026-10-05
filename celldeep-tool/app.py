@@ -106,6 +106,12 @@ def generate():
             return redirect(url_for("index"))
 
         age = int(age) if age else None
+        labs_file = request.files.get("labs_pdf")
+        labs_bytes = labs_file.read() if labs_file and labs_file.filename else None
+        if labs_bytes and not collected_date and pipeline.has_scanned_pages(labs_bytes):
+            flash("This bloodwork PDF contains scanned pages. Enter the Bloodwork Collected Date "
+                  "so the scanned pages can be identified.")
+            return redirect(url_for("index"))
         if collected_date:
             try:
                 collected_date = pipeline.scan_collected_date(collected_date)
@@ -118,10 +124,9 @@ def generate():
         job_directory.mkdir(parents=True, exist_ok=False)
 
         labs_path = None
-        labs_file = request.files.get("labs_pdf")
-        if labs_file and labs_file.filename:
+        if labs_bytes is not None:
             labs_path = job_directory / "labs.pdf"
-            labs_file.save(labs_path)
+            labs_path.write_bytes(labs_bytes)
 
         dexa_paths = []
         for index, dexa_file in enumerate(request.files.getlist("dexa_pdfs")):

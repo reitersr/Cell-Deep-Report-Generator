@@ -208,16 +208,26 @@ def _footer_sequence(footer):
     return None
 
 
-def gate_staff_identified_reads(reads, collected, failures=()):
+def gate_staff_identified_reads(reads, collected, result_re, patient_name, failures=()):
     """Staff-entered patient name and Collected date identify every scanned page, so printed
     footer/header/name/date are not gated. A row is kept only when both reads agree on its
-    value, flag and reference range; the printed summary excludes only rows it contradicts."""
+    value, flag and reference range and the printed value passes the identity-independent
+    format and flag checks; the printed summary excludes only rows it contradicts. A printed
+    patient name that differs from the staff entry is a staff-review notice, never a rejection."""
     notes = []
     accepted = []
 
     def note(message):
         notes.append(message)
         print(message)
+
+    mismatched = sorted({page["page"] for pair in [*reads, *(partial for _, partial, _ in failures)]
+                         for page in pair if page["patient_name"]
+                         and name_key(page["patient_name"]) != name_key(patient_name)})
+    for number in mismatched:
+        note(f"STAFF REVIEW - PATIENT NAME MISMATCH: source=scan page {number} prints a patient name "
+             "that differs from the staff-entered name; rows were not rejected for this - confirm the "
+             "page belongs to this patient")
 
     summaries = ({}, {})
     for pair in reads:
@@ -235,6 +245,14 @@ def gate_staff_identified_reads(reads, collected, failures=()):
             return "agreement gate: independent reads disagree on value, flag or range"
         if first["illegible"] or second["illegible"] or not first["name"] or not first["result_text"]:
             return "legibility gate: null or illegible row"
+        numeric = result_re.fullmatch(first["result_text"])
+        if numeric is None and first["result_text"].casefold() not in _STATUSES and \
+                re.fullmatch(r"[1-4]\+", first["result_text"]) is None:
+            return "grammar gate: unsupported printed result"
+        if numeric and numeric["flag"]:
+            return "grammar gate: result_text includes a flag instead of a separate flag field"
+        if not _numeric_flag(first, result_re):
+            return "flag gate: result contradicts numeric reference range"
         if any(entries and _row_key(first)[1:] not in entries
                for entries in (summary.get(first["name"]) for summary in summaries)):
             return "summary gate: row disagrees with printed out-of-range summary"

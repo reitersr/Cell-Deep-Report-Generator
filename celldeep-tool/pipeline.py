@@ -1504,6 +1504,15 @@ def _extract_dexa_with_claude(client: Anthropic, dexa_pdfs: list[str], patient_n
     return _parse_json_response(raw_text, patient_name=patient_name).get("dexa_history", [])
 
 
+def has_scanned_pages(pdf_bytes: bytes) -> bool:
+    """True when a lab PDF has image-only pages, which only staff-entered identity can date."""
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+            return any(not _page_words(page) for page in document)
+    except RuntimeError:
+        return False  # Unreadable PDFs fail visibly in the report job.
+
+
 def scan_collected_date(text: str) -> str:
     import scan_bloodwork as scan
 
@@ -1522,7 +1531,7 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         if not os.environ.get("ANTHROPIC_API_KEY"):
             failures = [(number, [], "client gate: no API key") for number in numbers]
             if staff:
-                scan.gate_staff_identified_reads([], collected_date, failures)
+                scan.gate_staff_identified_reads([], collected_date, _CELL_VALUE_RE, patient_name, failures)
             else:
                 scan.gate_reads([], set(), _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching,
                                 failures)
@@ -1536,9 +1545,12 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         except scan.ScanGateError as error:
             failures.append((page.number + 1, error.reads, str(error)))
     if staff:
-        accepted, notes = scan.gate_staff_identified_reads(reads, collected_date, failures)
-        notes.insert(0, f"source=scan pages {numbers}: identified by staff-entered patient name and "
-                        f"Collected {collected_date}; printed footer/header/name/date not gated")
+        accepted, notes = scan.gate_staff_identified_reads(
+            reads, collected_date, _CELL_VALUE_RE, patient_name, failures)
+        # Name-mismatch notices stay first so staff see them before the identity summary.
+        notes.insert(sum(note.startswith("STAFF REVIEW") for note in notes),
+                     f"source=scan pages {numbers}: identified by staff-entered patient name and "
+                     f"Collected {collected_date}; printed footer/header/name/date not gated")
     else:
         digital_names = scan.digital_patient_names(digital_pages, _group_lines, _page_words)
         try:

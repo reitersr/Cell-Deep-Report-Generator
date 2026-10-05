@@ -538,21 +538,58 @@ def test_invalid_calendar_date_rejected():
 
 
 def staff_gate(data, failures=()):
-    return scan.gate_staff_identified_reads(data, "04/24/2026", failures)
+    return scan.gate_staff_identified_reads(data, "04/24/2026", pipeline._CELL_VALUE_RE,
+                                            "Pat Synthetic", failures)
 
 
 def test_staff_identity_skips_printed_metadata_gates(capsys):
     pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
     pairs[0][1]["footer"] = "SPECIMEN: SYN-SCAN-001 PAGE 1 OF 7"
     pairs[1][0].update(illegible=True, specimen_id=None, collected=None, footer=None)
-    pairs[1][1].update(patient_name="Different, Person", collected="04/23/2026")
+    pairs[1][1].update(collected="04/23/2026")
     accepted, notes = staff_gate(pairs)
     assert notes == []
     assert [(row["name"], row["result_text"], row["flag"], row["reference_range"]) for row in accepted] == GOLDEN
     assert all(row["date"] == "04/24/2026" and row["source"] == "scan" for row in accepted)
     lines = capsys.readouterr().out.splitlines()
     assert sum('identity="staff"' in line and "verdict=kept" in line for line in lines) == 2
-    assert not any("Synthetic" in line or "Different" in line for line in lines)
+    assert not any("Synthetic" in line for line in lines)
+
+
+def test_staff_printed_name_mismatch_is_review_notice_only(capsys):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    pairs[1][1]["patient_name"] = "Different, Person"
+    partial = {**copy.deepcopy(pairs[0][0]), "page": 4, "patient_name": "Other, Name", "rows": []}
+    accepted, notes = staff_gate(pairs, [(4, [partial], "schema gate: invalid JSON on page 4")])
+    assert len(accepted) == len(GOLDEN)
+    mismatches = [note for note in notes if note.startswith("STAFF REVIEW - PATIENT NAME MISMATCH")]
+    assert [note.split("page ")[1].split()[0] for note in mismatches] == ["3", "4"]
+    assert notes[:2] == mismatches
+    output = capsys.readouterr().out
+    assert "PATIENT NAME MISMATCH: source=scan page 3" in output
+    for name in ("Synthetic", "Pat", "Different", "Person", "Other"):
+        assert name not in output and not any(name in note for note in notes)
+
+
+@pytest.mark.parametrize("failure", ["flag", "grammar", "flag_in_text"])
+def test_staff_identity_keeps_value_format_and_flag_checks(failure):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    for page in pairs[0]:
+        row = page["rows"][0]
+        if failure == "flag":
+            row.update(result_text="49", flag=None)
+        elif failure == "grammar":
+            row["result_text"] = "probably normal"
+        else:
+            row["result_text"] = "59H"
+    for page in pairs[1]:
+        page.update(patient_name=None, footer=None, specimen_id=None, illegible=True)
+    accepted, notes = staff_gate(pairs)
+    assert len(accepted) == len(GOLDEN) - 1
+    assert all(row["name"] != "IRON, TOTAL" for row in accepted)
+    reason = {"flag": "flag gate:", "grammar": "grammar gate: unsupported",
+              "flag_in_text": "grammar gate: result_text includes a flag"}[failure]
+    assert len(notes) == 1 and "excluded 'IRON, TOTAL': " + reason in notes[0]
 
 
 @pytest.mark.parametrize("field", ["result_text", "flag", "reference_range", "missing", "duplicate"])
@@ -648,13 +685,15 @@ def test_pipeline_uses_staff_identity_for_scanned_pages(mixed_pdf, tmp_path):
     reads = [copy.deepcopy(page) for page in data for _ in (1, 2)]
     reads[1]["footer"] = "PAGE 1 OF 7"
     reads[2]["illegible"] = True
+    reads[3]["patient_name"] = "Different, Person"
     extracted = pipeline.extract(str(mixed_pdf), [], None, patient_name="Synthetic, Pat",
                                  collected_date="2026-04-24", client=MockClient(reads),
                                  audit_root=str(tmp_path))
     assert extracted["latest_draw_date"] == "04/24/2026"
     assert sum(" accepted " in note for note in extracted["other_notes"]) == len(GOLDEN)
     assert not any("excluded" in note or "REJECTED" in note for note in extracted["other_notes"])
-    assert any("staff-entered" in note for note in extracted["other_notes"])
+    assert extracted["other_notes"][0].startswith("STAFF REVIEW - PATIENT NAME MISMATCH: source=scan page 3")
+    assert any("identified by staff-entered" in note for note in extracted["other_notes"])
     values = {(item["name"], item["date_display"]): item for item in extracted["marker_occurrences"]}
     assert values["TSH", "04/24/2026"]["disp_value"] == "1.19"
 
