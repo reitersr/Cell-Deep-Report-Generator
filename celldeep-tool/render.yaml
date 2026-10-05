@@ -11,3 +11,6 @@ services:
         value: "0"
       - key: FLASK_SECRET_KEY
         generateValue: true
+      # Shared staff password for the whole site; set it in the Render dashboard, never in code.
+      - key: CELLDEEP_STAFF_PASSWORD
+        sync: false

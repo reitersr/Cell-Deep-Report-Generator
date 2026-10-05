@@ -14,7 +14,6 @@ Any other printed result that the lab flagged H or L is also shown, under its pr
 no lab-flagged result is missing from the patient report.
 """
 
-import re
 
 from schema import normalize_date_for_matching
 
@@ -56,6 +55,8 @@ LAB_REPORTED_LIBRARY = {
         ("Potassium", ["potassium"]),
         ("Chloride", ["chloride"]),
         ("Carbon Dioxide", ["carbon dioxide", "co2", "carbon dioxide, total"]),
+        ("Bicarbonate", ["bicarbonate", "hco3"]),
+        ("Anion Gap", ["anion gap"]),
         ("Urea Nitrogen (BUN)", ["urea nitrogen (bun)", "urea nitrogen", "bun", "blood urea nitrogen"]),
         ("BUN/Creatinine Ratio", ["bun/creatinine ratio"]),
         ("Calcium", ["calcium", "calcium, total"]),
@@ -68,6 +69,7 @@ LAB_REPORTED_LIBRARY = {
         ("Alkaline Phosphatase", ["alkaline phosphatase", "alk phos"]),
         ("AST", ["ast", "ast (sgot)", "sgot"]),
         ("ALT", ["alt", "alt (sgpt)", "sgpt"]),
+        ("GGT", ["ggt", "gamma-glutamyl transferase", "gamma glutamyl transferase", "gamma-glutamyltransferase"]),
     ]),
     **_entries("Iron Studies", [
         ("Iron, Total", ["iron, total", "iron", "total iron"]),

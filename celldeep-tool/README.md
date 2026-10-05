@@ -2,14 +2,15 @@
 
 Turns a lab PDF, DEXA PDF(s) and a structured provider note into the CellDeep patient report
 (PDF) plus a staff-only QA file. Built from the locked V23 reference design. Bloodwork tables
-are read deterministically from the PDF text layer by row/column position; scanned pages are
-read twice by a vision model and kept only where both reads agree; patient-facing copy is
-template fill from the scored record. DEXA PDFs are still extracted by the original Claude call
-(`ANTHROPIC_API_KEY` required when a DEXA PDF or a scanned lab page is uploaded).
+are read deterministically from the PDF text layer by row/column position; scanned lab pages and
+every DEXA page are read twice by a vision model and kept only where both reads agree;
+patient-facing copy is template fill from the scored record (`ANTHROPIC_API_KEY` required when a
+DEXA PDF or a scanned lab page is uploaded).
 
 The non-negotiables (never infer; no real patient data in the repository; no staff QA text in
-the patient PDF; `_extract_dexa_with_claude` unchanged; manual, PR-only deploys) and the data
-flow are in [`../CLAUDE.md`](../CLAUDE.md). Open clinical decisions are in
+the patient PDF; DEXA read twice and gated; PR-only changes to `main`) and the data flow are in
+[`../CLAUDE.md`](../CLAUDE.md). Clinic-decision defaults (censored results, lab flags, range
+labels) are in `clinic_config.py`, one comment per setting. Open clinical decisions are in
 [`../docs/open_decisions.md`](../docs/open_decisions.md); the threshold source of every marker
 is in [`../docs/ranges_audit.md`](../docs/ranges_audit.md).
 
@@ -26,11 +27,35 @@ Every Anthropic call is mocked; the suite needs no network. CI
 interfaces and fails if the network is reachable. Tests needing `real_fixtures/` (git-ignored,
 local only) or `CELLDEEP_LIVE_VISION=1` skip otherwise.
 
+## Operations
+
+- **Staff login.** Every page requires the shared staff password from the `CELLDEEP_STAFF_PASSWORD`
+  environment variable (set in the Render dashboard; never in code or logs). Without it the site
+  is locked. Sessions last 12 hours; "Sign out" is on the upload page.
+- **Automatic deletion.** Uploaded files, generated reports, review notes and extraction audits
+  are deleted from `/tmp` six hours after their last write (`tmp_cleanup.py`; runs at startup,
+  every 15 minutes and on requests).
+- **Failures** show "Generation failed. Job ID: <id>" on the page; the details are in the server
+  log under that job id. Logs never contain patient names or the staff notice text.
+
 ## Upload
 
 Staff enter the patient name, age, sex, the lab PDF, DEXA PDF(s), the provider note, the Vitality
 Index and the bloodwork **Collected date**. The Collected date is required when the lab PDF has
 image-only pages; the upload is rejected on screen before any job starts without it.
+
+When the lab, scanned or DEXA pages print a date of birth, the report's age is computed from it
+and the collection date (the DOB itself is never stored); "By N" is the age at the next birthday.
+Disagreeing DOBs give a staff notice and no age in the report.
+
+## DEXA
+
+Every DEXA page is read twice (`scan_dexa.py`). A measurement is kept only when both reads agree
+after normalization; a field printed in one read only or read differently is excluded and listed
+with page and reason; a scan date the reads disagree on excludes that whole scan; a page printing
+another patient's name is excluded with a notice at the top of the staff notes. Scans are merged
+by date across pages and sorted oldest first, so page order and model output order never change
+the result. Values the scanner marks "(e)" are kept and shown with an "estimated" label.
 
 ## Bloodwork
 
@@ -93,14 +118,25 @@ Each printed result row ends in exactly one of these places, and `pipeline.cover
 ## Staff QA file
 
 Written next to the report and downloadable separately; never rendered into the patient PDF.
-It opens with a **SCANNED BLOODWORK** block (pages, how they were identified, results kept per
-page, every excluded row with page and reason, page outcomes, name-mismatch notices), followed
-by coverage gaps, unrecognized markers and other review items. `template.render` refuses to
-write a patient PDF whose HTML contains any staff-note marker
-(`unknown_marker_policy.STAFF_NOTE_MARKERS`).
+It opens with "This report is for <staff-entered name>" and the name each source printed (lab
+text, scanned lab pages, DEXA pages, provider note), each marked "matches" or "NAME MISMATCH".
+Then come the **DEXA** block and the **SCANNED BLOODWORK** block (pages, results kept, every
+excluded item with page and reason, page outcomes, name-mismatch notices), followed by coverage
+gaps, age/DOB notices, lab flags that differ from the CellDeep status, censored results,
+unrecognized markers and other review items. `template.render` refuses to write a patient PDF
+whose HTML contains any staff-note marker (`unknown_marker_policy.STAFF_NOTE_MARKERS`).
 
-A DEXA PDF without a text layer is reported as "DEXA SOURCE IS SCANNED" (values must be compared
-with the image) instead of a verbatim-text mismatch.
+## Censored results, lab flags and ranges
+
+- A result printed as a limit ("<0.7", ">2000") is shown exactly as printed with the lab's flag
+  ("&gt;2000 - lab flag High"), never converted to a number, excluded from every score and counted
+  separately in the patient summary.
+- When the lab printed H or L for a result CellDeep scores Optimal, a small neutral line shows
+  "Lab flag: Low (lab range 38-380)" (switch: `SHOW_LAB_FLAG_WHEN_IT_DIFFERS`). Flags printed in
+  a separate "Flag" column (Labcorp-style) are read too.
+- A marker without a CellDeep threshold shows the lab's printed range as "lab range ..." or
+  "no range printed"; no range is ever invented.
+- Results between the earliest and latest draw are listed as "Also on file", with their lab flags.
 
 ## Provider notes
 
@@ -108,7 +144,8 @@ Notes follow `templates/provider_notes_template.md` (downloadable from the uploa
 line that follows its `## ` section's format is read; every other line is listed with its line
 number, text and reason in the staff QA file and by the upload page's **Check note format**
 button. A note with no `## ` sections is not read at all. Free text is never mined for protocol,
-concerns, targets or treatment status; TRT/BHRT status comes only from accepted note content.
+concerns or targets. TRT/BHRT status comes from the `## Treatment Status` section ("Yes / No /
+Not stated"); notes without it fall back to explicit statements in the accepted note text.
 
 ## Digital table parsing
 
@@ -182,6 +219,9 @@ urinalysis band test in `test_lab_reported.py` follow this workflow.
 | `unknown_marker_policy.py` | What happens when extraction finds a marker not in the library — flagged for human review, never guessed. |
 | `scoring.py` | Pure math. No AI. The exact corrected tier/percentage logic from data.py. |
 | `scan_bloodwork.py` | Scanned-page double reads and the gates that keep or exclude each row. |
+| `scan_dexa.py` | DEXA double reads, agreement gates, date-sorted history, "(e)" estimated values. |
+| `clinic_config.py` | Clinic-decision defaults (censored results, lab flags, range labels). |
+| `tmp_cleanup.py` | Six-hour deletion of uploads, reports and audits from `/tmp`. |
 | `lab_reported.py` | Lab-reported, not-scored tests; exact section-scoped aliases. |
 | `ranges_audit.py` | Read-only threshold-source audit; `--write` regenerates `docs/ranges_audit.md`. |
 | `synthetic_fixtures/` | Invented-data fixture builders (`layouts.py`) and golden files. |

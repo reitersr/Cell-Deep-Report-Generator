@@ -443,9 +443,10 @@ def test_unreadable_page_warning_reaches_generation_review(tmp_path, monkeypatch
     pipeline.run(str(labs), [], None, fx.PATIENT, 44, "male", str(tmp_path / "report.pdf"))
     warning = "source=scan pages [2]: client gate failed: no API key; manual review required"
     output = capsys.readouterr().out
-    assert f"  - {warning}" in output
-    assert "This report generated successfully" in output
+    assert warning not in output and fx.PATIENT not in output  # staff notes never go to logs
+    assert "Staff review items:" in output
     assert warning in review.read_text()
+    assert "This report generated successfully" in review.read_text()
 
 
 @pytest.mark.parametrize("has_name", [True, False], ids=["text-status", "orphan-cell"])
@@ -487,17 +488,24 @@ def test_ruled_text_cells_are_accounted_for_or_raise(tmp_path, has_name):
     assert UnrecognizedMarker(**unknown[0]).cells == unknown[0]["cells"]
 
 
-# DEXA stays on the original Claude extraction path ------------------------------------------------
+# DEXA goes through the two-read vision route (see test_dexa_two_reads.py) ---------------------------
 
 CLAUDE_DEXA_HISTORY = [
-    {"date_display": "05/12/2025", "total_mass_lb": 172.0, "fat_mass_lb": 58.0, "lean_mass_lb": 108.9,
-     "body_fat_pct": "33.7%", "vat_fat_mass_lb": 1.06, "visceral_fat_area_cm2": 84.0},
-    {"date_display": "02/03/2026", "total_mass_lb": 166.0, "fat_mass_lb": 50.5, "lean_mass_lb": 110.0,
-     "body_fat_pct": "30.4%", "vat_fat_mass_lb": 0.88, "visceral_fat_area_cm2": 71.5},
+    {"date_display": "05/12/2025", "estimated": [], "total_mass_lb": 172.0, "fat_mass_lb": 58.0,
+     "lean_mass_lb": 108.9, "body_fat_pct": "33.7%", "vat_fat_mass_lb": 1.06, "visceral_fat_area_cm2": 84.0},
+    {"date_display": "02/03/2026", "estimated": [], "total_mass_lb": 166.0, "fat_mass_lb": 50.5,
+     "lean_mass_lb": 110.0, "body_fat_pct": "30.4%", "vat_fat_mass_lb": 0.88, "visceral_fat_area_cm2": 71.5},
+]
+_DEXA_SCANS = [
+    {"date": "05/12/2025", "total_mass": "172.0", "fat_mass": "58.0", "lean_mass": "108.9", "body_fat_pct": "33.7%",
+     "vat_mass": "1.06", "vat_area": "84.0"},
+    {"date": "02/03/2026", "total_mass": "166.0", "fat_mass": "50.5", "lean_mass": "110.0", "body_fat_pct": "30.4%",
+     "vat_mass": "0.88", "vat_area": "71.5"},
 ]
 
 
 class _FakeClaude:
+    """Two identical literal reads of every DEXA page."""
     calls = []
 
     def __init__(self, **kwargs):
@@ -506,7 +514,9 @@ class _FakeClaude:
 
     def create(self, **kwargs):
         _FakeClaude.calls.append(kwargs)
-        payload = json.dumps({"marker_occurrences": [], "dexa_history": CLAUDE_DEXA_HISTORY})
+        page = int(re.search(r"page (\d+)", kwargs["messages"][0]["content"][1]["text"])[1])
+        payload = json.dumps({"page": page, "patient_name": None, "date_of_birth": None, "illegible": False,
+                              "scans": _DEXA_SCANS})
         return type("Response", (), {"content": [type("Block", (), {"text": payload})()]})()
 
 
@@ -518,20 +528,20 @@ def _dexa_pdf(path):
     return path
 
 
-def test_dexa_pdfs_go_through_the_original_claude_extraction_request(tmp_path):
-    from extraction_prompt import EXTRACTION_SYSTEM_PROMPT
+def test_dexa_pdfs_are_read_twice_per_page_with_the_shared_model_and_schema(tmp_path):
+    import scan_dexa
 
     _FakeClaude.calls = []
     dexa = _dexa_pdf(tmp_path / "dexa.pdf")
     extracted = pipeline.extract(None, [str(dexa)], None, patient_name=fx.PATIENT, client=_FakeClaude())
 
     assert extracted["dexa_history"] == CLAUDE_DEXA_HISTORY
-    [call] = _FakeClaude.calls
-    assert call["model"] == pipeline.MODEL
-    assert call["system"] == EXTRACTION_SYSTEM_PROMPT
-    assert call["output_config"] == {"format": {"type": "json_schema", "schema": EXTRACTION_OUTPUT_SCHEMA}}
-    content = call["messages"][0]["content"]
-    assert content[0] == pipeline._pdf_content_block(str(dexa))
+    assert len(_FakeClaude.calls) == 2
+    for call in _FakeClaude.calls:
+        assert call["model"] == pipeline.MODEL
+        assert call["system"] == scan_dexa.DEXA_PROMPT
+        assert call["output_config"] == {"format": {"type": "json_schema", "schema": scan_dexa.DEXA_SCHEMA}}
+        assert call["messages"][0]["content"][0]["type"] == "image"
 
 
 def test_reports_without_dexa_make_no_claude_call(tmp_path, monkeypatch):

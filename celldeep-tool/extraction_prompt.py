@@ -54,7 +54,7 @@ every section of a report, every draw date. Do not skip a repeat mention just be
 one occurrence of that marker.
 - Do NOT decide which draw is "current" or "prior" — just record the actual collection/specimen date printed \
 on the report or in the value column header in "date_display". "date_display" MUST be the date itself, such \
-as "01/07/2026" or "April 24, 2026", never a label such as "Historical", "Current", "Prior", or "Now". \
+as "01/13/2026" or "April 14, 2026", never a label such as "Historical", "Current", "Prior", or "Now". \
 Do NOT merge, average, or silently pick between two occurrences of the same \
 marker on the same date, even if they come from different reports/sections and even if you are confident \
 they agree — if a marker's result for one date appears in two different reports or two different sections of \
@@ -70,7 +70,7 @@ the date is printed once above the rows rather than repeated beside each row. Wh
 attach each occurrence to the date printed by its own report; never use the first report's date for another report.
 - "source_label": a short label identifying which report or section this specific occurrence came from — \
 taken from the nearest report title, lab name, or section header in the source (e.g. "Cleveland HeartLab \
-Cardiometabolic", "Quest Diagnostics MR421967F", "Non-Cardiometabolic panel"). Use the same label \
+Cardiometabolic", "Quest Diagnostics SYN-SPECIMEN-01", "Non-Cardiometabolic panel"). Use the same label \
 consistently for every occurrence that plainly comes from the same report/section. If the entire source is \
 genuinely one single undifferentiated report with no distinguishable sections, use one consistent label for \
 all of it (e.g. the lab's name) rather than leaving it blank.
@@ -326,9 +326,11 @@ EXTRACTION_OUTPUT_SCHEMA = {
                     "lab_range_lo": {"type": "number"},
                     "lab_range_hi": {"type": "number"},
                     "lab_range_display": {"type": "string"},
+                    # The lab's own printed H/L flag for this result, "" when none was printed.
+                    "lab_flag": {"type": "string"},
                 },
                 "required": ["name", "date_display", "source_label", "status", "value", "disp_value",
-                             "is_good", "lab_range_lo", "lab_range_hi", "lab_range_display"],
+                             "is_good", "lab_range_lo", "lab_range_hi", "lab_range_display", "lab_flag"],
             },
         },
         "dexa_history": {

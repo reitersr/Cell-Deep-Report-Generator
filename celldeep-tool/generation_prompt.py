@@ -12,6 +12,8 @@ fact. "Baseline"/"starting point" claims resolve via min() on normalized date;
 from markers_reference import (CATEGORY_TAGLINES, DATA_TO_PATIENT_CATEGORY, MARKER_DESCRIPTIONS,
                                NARRATIVE_CATEGORY_OVERRIDE, SYSTEM_ORDER)
 from schema import normalize_date_for_matching
+from scoring import is_censored
+import clinic_config
 
 PATIENT_SYSTEMS = ("Drive", "Pace", "Fuel", "Flow", "Repair", "Reserves")
 _TIER_WORDS = {"optimal": "optimal", "moderate": "moderate", "flag": "flagged"}
@@ -159,8 +161,14 @@ def _structure_improved(record) -> bool:
     return before is not None and after is not None and after < before
 
 
-def _count_phrase(count: int, singular: str, plural: str) -> str:
-    return f"{count} {singular if count == 1 else plural}"
+def plural(count: int, singular: str, plural_form: str) -> str:
+    """The word that agrees with count: plural('1', 'is', 'are') -> 'is'; 0 and 2+ take the plural."""
+    return singular if count == 1 else plural_form
+
+
+def _count_phrase(count: int, singular: str, plural_form: str) -> str:
+    """'1 marker', '0 markers', '2 markers'."""
+    return f"{count} {plural(count, singular, plural_form)}"
 
 
 def _box_story(markers) -> str:
@@ -170,11 +178,16 @@ def _box_story(markers) -> str:
                                                if _precedence(m) is None]
     if not attention:
         scored = [m for m in markers if m.now_tier is not None]
-        return f"All {_count_phrase(len(scored), 'scored marker', 'scored markers')} in this system are optimal."
+        if not scored:
+            return "No scored markers in this system this round."
+        if len(scored) == 1:
+            return "Your 1 scored marker in this system is optimal."
+        return f"All {len(scored)} scored markers in this system are optimal."
     sentences = [marker_sentence(m) for m in attention[:3]]
     if len(attention) > 3:
-        sentences.append(f"{_count_phrase(len(attention) - 3, 'more marker', 'more markers')} in this system "
-                         "need attention.")
+        more = len(attention) - 3
+        sentences.append(f"{_count_phrase(more, 'more marker', 'more markers')} in this system "
+                         f"{plural(more, 'needs', 'need')} attention.")
     return " ".join(sentences)
 
 
@@ -211,13 +224,25 @@ def build_copy(record) -> dict:
     if baseline:
         bullets.append(f"<b>Starting point:</b> Your earliest bloodwork on file is from {baseline[0]}.")
     scored = sum(counts.values())
-    if scored:
-        bullets.append(f"<b>Where you are now:</b> {counts['optimal']} optimal, {counts['moderate']} moderate, "
-                       f"{counts['flag']} flagged across {_count_phrase(scored, 'scored marker', 'scored markers')}.")
+    if scored == 1:
+        tier = next(_TIER_WORDS[t] for t in ("optimal", "moderate", "flag") if counts[t])
+        bullets.append(f"<b>Where you are now:</b> Your 1 scored marker is {tier}.")
+    elif scored:
+        parts = [f"{counts[t]} {plural(counts[t], 'is', 'are')} {_TIER_WORDS[t]}" for t in ("optimal", "moderate", "flag")]
+        bullets.append(f"<b>Where you are now:</b> Of your {scored} scored markers, {parts[0]}, {parts[1]} "
+                       f"and {parts[2]}.")
     if priority:
-        bullets.append(f"<b>Remaining focus:</b> {marker_sentence(priority)}")
+        bullets.append(f"<b>What to focus on next:</b> {marker_sentence(priority)}")
     if not_retested:
         bullets.append(f"<b>Not retested this round:</b> {', '.join(m.name for m in not_retested)}.")
+    censored = [m for m in markers if is_censored(m.disp_now, m.now)]
+    if censored:
+        bullets.append(f"<b>{clinic_config.CENSORED_SUMMARY_LABEL}:</b> "
+                       f"{_count_phrase(len(censored), 'result was', 'results were')} "
+                       "reported by the lab as a limit (such as &lt;0.7 or &gt;2000) rather than an exact number: "
+                       f"{', '.join(m.name for m in censored)}. "
+                       f"{plural(len(censored), 'It is', 'These are')} shown exactly as printed and "
+                       f"{plural(len(censored), 'is', 'are')} not part of any score.")
     dexa_delta = _dexa_delta(record)
     if dexa_delta:
         bullets.append(f"<b>Body composition:</b> {dexa_delta}")

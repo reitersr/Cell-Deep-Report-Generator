@@ -204,7 +204,8 @@ def test_status_aware_estradiol_and_lh_fsh_scoring():
     assert "LH" in rendered_text
     assert "FSH" in rendered_text
     assert "0.1" in rendered_text
-    assert "Reference range pending" in rendered_text
+    assert "Not scored, no range printed" in rendered_text and "no range printed" in rendered_text
+    assert "Reference range pending" not in rendered_text and "lab-specific reference range" not in rendered_text
 
 
 def test_lab_printed_range_fallback_for_lh_fsh(tmp_path):
@@ -299,7 +300,7 @@ def test_rendered_retest_status_uses_current_value_not_score_tier():
     )
     html = template.bio_row_tr(marker, {})
     assert "Not retested" not in html
-    assert "Current result needs review" in html
+    assert "Shown as reported, not scored" in html and "needs review" not in html
 
 
 def test_capped_inequality_result_is_not_rendered_as_not_retested():
@@ -309,4 +310,4 @@ def test_capped_inequality_result_is_not_rendered_as_not_retested():
     )
     html = template.bio_row_tr(marker, {})
     assert "Not retested" not in html
-    assert "<0.7" in html
+    assert "&lt;0.7" in html and "Reported as a limit, not scored" in html

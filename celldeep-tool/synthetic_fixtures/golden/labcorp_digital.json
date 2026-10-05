@@ -1,0 +1,133 @@
+{
+  "first_draw_date": "",
+  "latest_draw_date": "03/02/2026",
+  "scored": [
+    {
+      "name": "Ferritin",
+      "then": null,
+      "then_date": "",
+      "now": "20",
+      "now_date": "03/02/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "18–300",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": "30-400",
+      "lab_flag_then": null,
+      "lab_flag_now": "L",
+      "history": []
+    },
+    {
+      "name": "Vitamin B12",
+      "then": null,
+      "then_date": "",
+      "now": "655",
+      "now_date": "03/02/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "600–1000",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": "232-1245",
+      "lab_flag_then": null,
+      "lab_flag_now": null,
+      "history": []
+    },
+    {
+      "name": "HbA1c",
+      "then": null,
+      "then_date": "",
+      "now": "5.4",
+      "now_date": "03/02/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "optimal <5.7%",
+      "range_source": null,
+      "unscored": null,
+      "lab_range_now": "4.8-5.6",
+      "lab_flag_then": null,
+      "lab_flag_now": null,
+      "history": []
+    }
+  ],
+  "lab_reported": [
+    {
+      "name": "Hemoglobin",
+      "group": "Complete Blood Count",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "17.6",
+          "lab_flag": "H",
+          "lab_range": "13.0-17.0"
+        }
+      ]
+    },
+    {
+      "name": "Hematocrit",
+      "group": "Complete Blood Count",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "52.3",
+          "lab_flag": "H",
+          "lab_range": "37.5-51.0"
+        }
+      ]
+    },
+    {
+      "name": "Platelet Count",
+      "group": "Complete Blood Count",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "250",
+          "lab_flag": null,
+          "lab_range": "150-450"
+        }
+      ]
+    },
+    {
+      "name": "Potassium",
+      "group": "Chemistry",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "5.6",
+          "lab_flag": "H",
+          "lab_range": "3.5-5.2"
+        }
+      ]
+    },
+    {
+      "name": "Synthetic Assay Y",
+      "group": "Other Lab-Flagged Results",
+      "results": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "0.2",
+          "lab_flag": "L",
+          "lab_range": "0.5-2.0"
+        }
+      ]
+    }
+  ],
+  "staff_unrecognized": [
+    {
+      "raw_name": "Synthetic Assay Y",
+      "raw_range": "0.5-2.0",
+      "cells": [
+        {
+          "date_display": "03/02/2026",
+          "disp_value": "0.2",
+          "lab_flag": "L"
+        }
+      ]
+    }
+  ],
+  "scan_summary": [],
+  "staff_notes": [
+    "LAB FLAG DIFFERS FROM CELLDEEP STATUS: Ferritin '20' (lab flag L, CellDeep optimal)"
+  ]
+}

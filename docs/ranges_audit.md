@@ -103,6 +103,8 @@ supplies thresholds.
 | Potassium | Chemistry | Not scored - clinic input needed |
 | Chloride | Chemistry | Not scored - clinic input needed |
 | Carbon Dioxide | Chemistry | Not scored - clinic input needed |
+| Bicarbonate | Chemistry | Not scored - clinic input needed |
+| Anion Gap | Chemistry | Not scored - clinic input needed |
 | Urea Nitrogen (BUN) | Chemistry | Not scored - clinic input needed |
 | BUN/Creatinine Ratio | Chemistry | Not scored - clinic input needed |
 | Calcium | Chemistry | Not scored - clinic input needed |
@@ -115,6 +117,7 @@ supplies thresholds.
 | Alkaline Phosphatase | Chemistry | Not scored - clinic input needed |
 | AST | Chemistry | Not scored - clinic input needed |
 | ALT | Chemistry | Not scored - clinic input needed |
+| GGT | Chemistry | Not scored - clinic input needed |
 | Iron, Total | Iron Studies | Not scored - clinic input needed |
 | Iron Binding Capacity | Iron Studies | Not scored - clinic input needed |
 | % Saturation | Iron Studies | Not scored - clinic input needed |

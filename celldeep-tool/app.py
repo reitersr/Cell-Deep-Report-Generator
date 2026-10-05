@@ -4,22 +4,95 @@ CellDeep Report Generator — Web App
 A minimal Flask wrapper around pipeline.py.
 """
 
+import hmac
 import os
 import json
+import sys
+import time
+from datetime import timedelta
 from pathlib import Path
 import threading
 import traceback
 import shutil
 import uuid
 
-from flask import Flask, abort, request, render_template, send_file, flash, redirect, url_for, jsonify
+from flask import (Flask, abort, request, render_template, send_file, flash, redirect, url_for, jsonify,
+                   session)
 
 import pipeline
+import tmp_cleanup
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "celldeep-dev-secret-change-in-production")
+# No secret in code: Render generates FLASK_SECRET_KEY; without it each process uses a random key.
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=True,
+                  PERMANENT_SESSION_LIFETIME=timedelta(hours=12))
 JOBS_DIR = Path("/tmp/celldeep_jobs")
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
+STAFF_PASSWORD_ENV = "CELLDEEP_STAFF_PASSWORD"
+_CLEANUP_INTERVAL_SECONDS = 15 * 60
+_last_cleanup = 0.0
+
+
+def _run_cleanup() -> None:
+    global _last_cleanup
+    _last_cleanup = time.time()
+    try:
+        removed = tmp_cleanup.cleanup(JOBS_DIR)
+        if removed:
+            print(f"tmp cleanup removed {removed} expired item(s)")
+    except OSError as error:
+        print(f"tmp cleanup failed: {type(error).__name__}")
+
+
+def _cleanup_loop() -> None:
+    while True:
+        _run_cleanup()
+        time.sleep(_CLEANUP_INTERVAL_SECONDS)
+
+
+if "pytest" not in sys.modules:  # tests call tmp_cleanup directly
+    threading.Thread(target=_cleanup_loop, daemon=True, name="celldeep-tmp-cleanup").start()
+
+
+@app.before_request
+def require_staff_login():
+    """Every page needs the shared staff password (CELLDEEP_STAFF_PASSWORD); nothing is public."""
+    if time.time() - _last_cleanup > _CLEANUP_INTERVAL_SECONDS and "pytest" not in sys.modules:
+        _run_cleanup()
+    if request.endpoint in ("login", "static") or session.get("staff_authenticated") is True:
+        return None
+    if request.path.startswith(("/generate/status", "/note/check")):
+        return jsonify({"status": "error", "error": "Staff login required"}), 401
+    return redirect(url_for("login", next=request.path))
+
+
+def _safe_next(target: str | None) -> str:
+    return target if target and target.startswith("/") and not target.startswith("//") else url_for("index")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    expected = os.environ.get(STAFF_PASSWORD_ENV)
+    if not expected:
+        return render_template("login.html", error="Staff login is not configured on this server.",
+                               configured=False), 503
+    if request.method == "POST":
+        supplied = request.form.get("password", "")
+        if hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+            session.clear()
+            session.permanent = True
+            session["staff_authenticated"] = True
+            return redirect(_safe_next(request.form.get("next")))
+        return render_template("login.html", error="Incorrect password.", configured=True,
+                               next=request.form.get("next", "")), 401
+    return render_template("login.html", configured=True, next=request.args.get("next", ""))
+
+
+@app.route("/logout", methods=["POST", "GET"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 VITALITY_FIELDS = (
     ("energy", "Energy"),
@@ -98,8 +171,10 @@ def _run_report_job(job_directory: Path, job_data: dict) -> None:
         )
         shutil.copyfile(review_path, job_directory / "review_notes.txt")
         _write_job_status(job_directory, "done")
-    except Exception as error:
-        _write_job_status(job_directory, "error", error=str(error))
+    except Exception:
+        job_id = job_directory.name
+        _write_job_status(job_directory, "error", error=f"Generation failed. Job ID: {job_id}", job_id=job_id)
+        print(f"generation failed job_id={job_id}")
         print(traceback.format_exc())
 
 
@@ -169,10 +244,11 @@ def generate():
         ).start()
         return render_template("generating.html", job_id=job_id)
 
-    except Exception as e:
-        error_detail = traceback.format_exc()
-        flash(f"Something went wrong generating this report: {str(e)}")
-        print(error_detail)
+    except Exception:
+        job_id = uuid.uuid4().hex
+        flash(f"Generation failed. Job ID: {job_id}")
+        print(f"generation failed job_id={job_id}")
+        print(traceback.format_exc())
         return redirect(url_for("index"))
 
 

@@ -25,6 +25,8 @@ import scoring
 from dexa_reference import dexa_percent_optimized
 from markers_reference import DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
 from unknown_marker_policy import STAFF_NOTE_MARKERS
+from html import escape as html_escape
+import clinic_config
 
 AQUA = "#81CADF"
 AQUA_DK = "#3E7C93"
@@ -333,6 +335,10 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .bio-date{{display:block; font-size:8px; color:{MUTE}; margin-top:2px; line-height:1.1;}}
 .lab-pill{{background:{MIDGRAY}22; color:{INK};}}
 .lab-flag{{font-weight:700; margin-left:3px;}}
+.dexa-est{{font-size:8px; font-weight:600; color:{MUTE}; text-transform:lowercase; margin-left:2px;}}
+.also-on-file{{font-size:8.5px; color:{MUTE}; margin-top:2px; line-height:1.25;}}
+.lab-flag-line{{display:block; font-size:8.5px; color:{MUTE}; margin-top:2px; line-height:1.2;}}
+.lab-flag-words{{font-size:10px; color:{MUTE}; font-weight:600;}}
 .bio-note{{font-size:9.5px; color:{DARKGRAY}; line-height:1.3; font-style:italic; max-width:6.2in;}}
 '''
 
@@ -502,6 +508,15 @@ def _latest_complete_dexa_reading(dexa_history: list[DexaReading]) -> DexaReadin
     return next((d for d in reversed(dexa_history) if _is_complete_dexa_reading(d)), dexa_history[-1])
 
 
+def _dexa_value(reading: DexaReading, field: str, suffix: str = "") -> str:
+    """A DEXA value as printed, with a short label when the scanner marked it "(e)" estimated."""
+    value = getattr(reading, field)
+    if value is None:
+        return f"{fmt(value)}{suffix}"
+    label = ' <span class="dexa-est">estimated</span>' if field in (reading.estimated or []) else ""
+    return f"{fmt(value)}{suffix}{label}"
+
+
 def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     if not record.dexa_history:
         return ""
@@ -519,15 +534,17 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
                 f'alt="{record.name} DEXA scan comparison"/>') if dexa_img_b64 else ""
     def _history_row(d: DexaReading) -> str:
         if d.vat_fat_mass_lb is not None:
-            vat_col = f'<span class="v">{d.vat_fat_mass_lb} lb VAT</span>'
+            vat_col = f'<span class="v">{_dexa_value(d, "vat_fat_mass_lb", " lb VAT")}</span>'
         elif d.visceral_fat_area_cm2 is not None:
-            vat_col = f'<span class="v">{d.visceral_fat_area_cm2} cm&sup2; VAT</span>'
+            vat_col = f'<span class="v">{_dexa_value(d, "visceral_fat_area_cm2", " cm&sup2; VAT")}</span>'
         else:
             vat_col = ""
         return (
             f'<div class="dexa-hist-row"><span class="d">{fmt_date(d.date_display)}</span>'
-            f'<span class="v">{fmt(d.total_mass_lb)} lb total</span><span class="v">{fmt(d.fat_mass_lb)} lb fat</span>'
-            f'<span class="v">{fmt(d.lean_mass_lb)} lb lean</span><span class="v">{fmt(d.body_fat_pct)} fat</span>'
+            f'<span class="v">{_dexa_value(d, "total_mass_lb", " lb total")}</span>'
+            f'<span class="v">{_dexa_value(d, "fat_mass_lb", " lb fat")}</span>'
+            f'<span class="v">{_dexa_value(d, "lean_mass_lb", " lb lean")}</span>'
+            f'<span class="v">{_dexa_value(d, "body_fat_pct", " fat")}</span>'
             f'{vat_col}</div>'
         )
 
@@ -550,17 +567,17 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
           <div class="dexa-row">
             <div class="dexa-row-lbl">When you came in &middot; {fmt_date(first.date_display)}</div>
             <div class="dexa-row-stats dim">
-              <div class="dexa-stat"><div class="num">{fmt(first.body_fat_pct)}</div><div class="cap">Body fat</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(first.fat_mass_lb)}</div><div class="cap">Fat mass, lb</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(first.lean_mass_lb)}</div><div class="cap">Lean mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(first, "body_fat_pct")}</div><div class="cap">Body fat</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(first, "fat_mass_lb")}</div><div class="cap">Fat mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(first, "lean_mass_lb")}</div><div class="cap">Lean mass, lb</div></div>
             </div>
           </div>
           <div class="dexa-row">
             <div class="dexa-row-lbl bright">Where you are now &middot; {fmt_date(latest.date_display)}</div>
             <div class="dexa-row-stats">
-              <div class="dexa-stat"><div class="num">{fmt(latest.body_fat_pct)}</div><div class="cap">Body fat</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(latest.fat_mass_lb)}</div><div class="cap">Fat mass, lb</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(latest.lean_mass_lb)}</div><div class="cap">Lean mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "body_fat_pct")}</div><div class="cap">Body fat</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "fat_mass_lb")}</div><div class="cap">Fat mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "lean_mass_lb")}</div><div class="cap">Lean mass, lb</div></div>
               <div class="dexa-stat"><div class="num" style="color:{color};">{fmt(structure_now)}%</div><div class="cap">Optimized</div></div>
             </div>
           </div>
@@ -570,9 +587,9 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
           <div class="dexa-row">
             <div class="dexa-row-lbl bright">Current scan &middot; {fmt_date(latest.date_display)}</div>
             <div class="dexa-row-stats">
-              <div class="dexa-stat"><div class="num">{fmt(latest.body_fat_pct)}</div><div class="cap">Body fat</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(latest.fat_mass_lb)}</div><div class="cap">Fat mass, lb</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(latest.lean_mass_lb)}</div><div class="cap">Lean mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "body_fat_pct")}</div><div class="cap">Body fat</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "fat_mass_lb")}</div><div class="cap">Fat mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "lean_mass_lb")}</div><div class="cap">Lean mass, lb</div></div>
               <div class="dexa-stat"><div class="num" style="color:{color};">{fmt(structure_now)}%</div><div class="cap">Optimized</div></div>
             </div>
           </div>
@@ -635,20 +652,52 @@ def protocol_section(record: PatientRecord, roll, copy):
     return ""
 
 
+def _html(text) -> str:
+    return html_escape(text or "")
+
+
+def _lab_flag_words(flag) -> str:
+    """' - lab flag High' for a printed flag; empty when the lab printed none. Never computed."""
+    if not flag:
+        return ""
+    return f'<span class="lab-flag-words"> - lab flag {_html(clinic_config.LAB_FLAG_WORDS.get(flag, flag))}</span>'
+
+
+def lab_flag_differs(m) -> bool:
+    """The lab printed H/L for the current result while CellDeep calls it optimal."""
+    return (bool(m.lab_flag_now) and m.lab_flag_now in clinic_config.LAB_FLAG_WORDS
+            and m.now_tier in clinic_config.LAB_FLAG_DISAGREES_WITH)
+
+
+def _lab_flag_line(m) -> str:
+    """'Lab flag: Low (lab range 38-380)' under a scored value whose lab flag disagrees."""
+    if not (clinic_config.SHOW_LAB_FLAG_WHEN_IT_DIFFERS and lab_flag_differs(m)):
+        return ""
+    lab_range = (m.lab_range_now or {}).get("display")
+    range_text = f" ({clinic_config.LAB_RANGE_LABEL} {_html(lab_range)})" if lab_range else ""
+    text = clinic_config.LAB_FLAG_LINE.format(flag=_html(clinic_config.LAB_FLAG_WORDS[m.lab_flag_now]),
+                                              lab_range=range_text)
+    return f'<span class="lab-flag-line">{text}</span>'
+
+
 def bio_row_tr(m, copy, color_override=None):
     # A capped/inequality result (e.g. "<0.7") is a real current reading even with now=None,
     # so all three of now/now_tier/disp_now must be empty before calling this "not retested".
     not_retested = m.now is None and m.now_tier is None and not m.disp_now
     unscored = m.unscored_reason == "missing_threshold"
+    censored_now = scoring.is_censored(m.disp_now, m.now)
     if unscored:
         color = MUTE
-        tier_word = "Reference range pending"
+        tier_word = clinic_config.NO_RANGE_CHIP_LABEL
     elif not_retested:
         color = MUTE
         tier_word = "Not retested"
+    elif censored_now:
+        color = MUTE
+        tier_word = clinic_config.CENSORED_CHIP_LABEL
     elif m.now_tier is None:
         color = MUTE
-        tier_word = "Current result needs review"
+        tier_word = clinic_config.UNSCORABLE_CHIP_LABEL
     else:
         color = color_override or TIER_COLOR.get(m.now_tier, MUTE)
         tier_word = {"optimal": "Optimal", "moderate": "Moderate", "flag": "Flagged"}[m.now_tier]
@@ -660,17 +709,24 @@ def bio_row_tr(m, copy, color_override=None):
         then_color = MUTE if unscored else TIER_COLOR.get(m.then_tier, YELLOW)
         then_date = f'<span class="bio-date">{fmt_date(m.then_date_display)}</span>' if m.then_date_display else ""
         then_cell = f'<span class="bio-pill" style="background:{then_color}22; color:{then_color};">{fmt(m.disp_then)}</span>{then_date}'
+    elif scoring.is_censored(m.disp_then, m.then):
+        then_date = f'<span class="bio-date">{fmt_date(m.then_date_display)}</span>' if m.then_date_display else ""
+        then_cell = (f'<span class="bio-pill" style="background:{MUTE}22; color:{MUTE};">{_html(m.disp_then)}</span>'
+                     f'{_lab_flag_words(m.lab_flag_then)}{then_date}')
     else:
         then_cell = f'<span class="bio-dash">{fmt(m.disp_then)}</span>'
     now_date = f'<span class="bio-date">{fmt_date(m.now_date_display)}</span>' if m.now_date_display else ""
-    now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{fmt(m.disp_now)}</span>{unit}{now_date}'
+    now_text = _html(m.disp_now) if censored_now else fmt(m.disp_now)
+    now_flag = _lab_flag_words(m.lab_flag_now) if censored_now else ""
+    now_cell = (f'<span class="bio-pill now" style="background:{bg}; color:{color};">{now_text}</span>'
+                f'{now_flag}{unit}{now_date}{_lab_flag_line(m)}')
     note_html = ""
     if note:
         note_text = _join_sentences(what, note)
         note_html = (f'<div class="bio-note"><b style="font-style:normal; color:{INK};">What this is:</b> '
                      f'{note_text}</div>') if note_text else ""
     row = f'''<div class="bio-table-row bio-tr" style="--c:{color};">
-      <div class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span>{note_html}</div>
+      <div class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span>{_also_on_file(m.full_history)}{note_html}</div>
       <div class="td-range">{m.disp_range}</div>
       <div class="td-then">{then_cell}</div>
       <div class="td-now">{now_cell}</div>
@@ -706,6 +762,16 @@ def bio_group(cat, record, copy, first_draw, latest_draw, show_headers=True):
             f'<div class="bio-table">{header_html}{first_row}</div></div>{narr_html}{remaining_rows}</div>')
 
 
+def _also_on_file(results) -> str:
+    """Every result between the earliest and latest shown, so no lab-flagged result is left out."""
+    parts = []
+    for result in results:
+        flag = result.get("lab_flag")
+        flag_text = f" (lab flag {_html(clinic_config.LAB_FLAG_WORDS.get(flag, flag))})" if flag else ""
+        parts.append(f"{_html(result.get('disp_value'))}{flag_text} on {fmt_date(result.get('date_display'))}")
+    return f'<div class="also-on-file">Also on file: {"; ".join(parts)}</div>' if parts else ""
+
+
 def _lab_result_cell(result) -> str:
     if result is None:
         return f'<span class="bio-dash">{fmt(None)}</span>'
@@ -727,8 +793,8 @@ def lab_reported_section(record: PatientRecord) -> str:
             latest = item.results[-1]
             earlier = item.results[0] if len(item.results) > 1 else None
             rows.append(f'''<div class="bio-table-row bio-tr lab-tr" style="--c:{MIDGRAY};">
-      <div class="td-name"><span class="bio-name">{item.name}</span></div>
-      <div class="td-range">{fmt(latest.get("lab_range"))}</div>
+      <div class="td-name"><span class="bio-name">{item.name}</span>{_also_on_file(item.results[1:-1])}</div>
+      <div class="td-range">{_html(latest.get("lab_range") or clinic_config.NO_RANGE_LABEL)}</div>
       <div class="td-then">{_lab_result_cell(earlier)}</div>
       <div class="td-now">{_lab_result_cell(latest)}</div>
     </div>''')
@@ -844,7 +910,9 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     next_30_sub = fmt(copy.get("next_30_sub", ""))
     next_90_label = fmt(copy.get("next_90_label", "Next 90 days"))
     next_90_sub = fmt(copy.get("next_90_sub", ""))
-    by_age_label = fmt(copy.get("by_age_label", f"By {record.age}" if record.age else "By target age"))
+    # The hero targets "your next birthday", so the step names the age the patient turns next.
+    by_age_label = fmt(copy.get("by_age_label", f"By {record.age + 1}" if record.age is not None
+                                else "By your next birthday"))
     by_age_sub = fmt(copy.get("by_age_sub", ""))
     overall_then_display = f"{overall_then}%" if overall_then is not None else fmt(overall_then)
     HTML = f'''<!DOCTYPE html>

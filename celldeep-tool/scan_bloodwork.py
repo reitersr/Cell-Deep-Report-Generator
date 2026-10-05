@@ -32,7 +32,7 @@ _ROW = _object({
 SCAN_SCHEMA = _object({
     "page": {"type": "integer"}, "specimen_id": _TEXT, "collected": _TEXT,
     "footer": _TEXT,
-    "patient_name": _TEXT, "illegible": {"type": "boolean"},
+    "patient_name": _TEXT, "date_of_birth": _TEXT, "illegible": {"type": "boolean"},
     "rows": {"type": "array", "items": _ROW},
     "out_of_range_summary": _nullable({"type": "array", "items": _SUMMARY_ROW}),
 })
@@ -47,6 +47,7 @@ Lab column. Do not transcribe reference values,
 footnotes, interpretations, or summary entries as result rows. Preserve URINALYSIS section identity.
 Copy every entry of LIST OF RESULTS PRINTED IN THE OUT OF RANGE COLUMN verbatim into
 out_of_range_summary; null means no such block, [] means a printed empty block.
+Copy the patient's date of birth exactly as printed into date_of_birth, or null.
 Absent metadata is null. Illegible fields are null with illegible=true, never guessed.
 Do not infer specimen ids, dates, patient names, section headings, or flags from other pages."""
 
@@ -126,7 +127,10 @@ def digital_patient_names(pages, group_lines, page_words):
             text = " ".join(word[4] for word in line)
             explicit = re.search(r"\bPatient(?: Name)?:\s*([A-Za-z ,'-]+)", text, re.I)
             if explicit:
-                names.add(explicit[1].strip())
+                # The name ends where the next printed label on the same line begins ("DOB:", "Sex", ...).
+                name = re.split(r"\s+(?:DOB|D\.?O\.?B|Date of Birth|Birth|Sex|Gender|Age|ID|MRN|Phone|Acct)\b",
+                                explicit[1], maxsplit=1, flags=re.I)[0]
+                names.add(name.strip(" ,"))
             elif line[0][1] < 50 and re.fullmatch(r"[A-Z][A-Z '-]+,\s*[A-Z][A-Z '-]+", text):
                 names.add(text)
     return names

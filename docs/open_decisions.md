@@ -63,6 +63,9 @@ staff review instead of being scored.
 
 ## 3. DOB, age and "By N" wording
 
+> **Status: implemented.** Age is computed from the printed DOB and the collection date (DOB never
+> stored); disagreeing DOB sources give no age and a staff notice; "By N" is the next-birthday age.
+
 **Evidence.**
 - Age is typed by staff (`app.py`, `age` form field). No date of birth is collected, and the
   parser deliberately ignores DOB lines in lab PDFs (`pipeline.py:429`, `_BIRTH_DATE_RE`).
@@ -85,6 +88,10 @@ number, with DOB staff-entered, never read from the lab PDF.
 
 ## 4. Caveat for DEXA "(e)" estimated values
 
+> **Status: partly implemented.** "(e)" values are now kept as an `estimated` field and shown with an
+> "estimated" label. Still open: whether estimated values should count toward the Structure score, and
+> option C (body fat % derived from masses).
+
 **Evidence.** DEXA reports mark some values as estimated with "(e)". The DEXA extraction prompt and
 schema (`extraction_prompt.py`, `dexa_history`) have no field for it, so an estimated value is
 indistinguishable from a measured one. Also, `scoring.py:100-126` (`normalize_dexa_body_fat`)
@@ -103,6 +110,8 @@ shows that computed value exactly like a printed one.
 approval (CLAUDE.md non-negotiable 4) and should be implemented together with item 5.
 
 ## 5. DEXA scan-history ordering and run-to-run nondeterminism
+
+> **Status: implemented** as proposed (`scan_dexa.py`, `test_dexa_two_reads.py`).
 
 **Evidence.**
 - One Claude call reads all DEXA PDFs (`pipeline.py:1517-1534`, `_extract_dexa_with_claude`).
@@ -146,6 +155,9 @@ repository.
 `docs/ranges_audit.md` in one reviewed change. No value is guessed here.
 
 ## 7. Lab H/L flag that disagrees with the CellDeep tier
+
+> **Status: implemented** (option C): neutral "Lab flag: ..." line, switch
+> `clinic_config.SHOW_LAB_FLAG_WHEN_IT_DIFFERS` (default on), and a staff-notes line.
 
 **Evidence.** Found by the `quest_digital` fixture (`synthetic_fixtures/golden/quest_digital.json`):
 Ferritin 20, printed **L** against the lab range 38-380, scores **optimal** against the male
@@ -194,6 +206,9 @@ scored.
 "Lab-printed fallback" to "CellDeep-calibrated" in the audit, with a test.
 
 ## 10. Real patient data in git history and in the DEXA prompt
+
+> **Status:** the specimen ID in `extraction_prompt.py` was replaced with a synthetic placeholder once the
+> old DEXA prompt stopped being called. Git history is unchanged and still needs the owner's decision.
 
 **Evidence.**
 - Phase 0 removed or replaced, in the working tree:

@@ -99,6 +99,10 @@ class Marker:
     # List of (date_display, value, disp_value) tuples, chronological. Empty list if only then/now exist.
     full_history: list = field(default_factory=list)
 
+    # the lab's own printed H/L flag for the then/now result, never computed
+    lab_flag_then: Optional[str] = None
+    lab_flag_now: Optional[str] = None
+
     # set by scoring.attach_scores() — declared here (not left dynamic) so dataclasses.asdict()
     # actually serializes them when the record is sent to the generation step.
     now_tier: Optional[str] = None
@@ -132,6 +136,7 @@ class DexaReading:
     vat_fat_mass_lb: Optional[float] = None   # None if this visit didn't measure VAT
     visceral_fat_area_cm2: Optional[float] = None  # None if this visit didn't report VAT area
     scan_image_b64: Optional[str] = None      # rendered body-composition scan page, if present in the source PDF
+    estimated: list = field(default_factory=list)  # fields the scanner printed with "(e)", e.g. ["vat_fat_mass_lb"]
 
 
 @dataclass

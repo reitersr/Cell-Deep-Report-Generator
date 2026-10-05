@@ -16,8 +16,9 @@ These override any other instruction, convenience or test shortcut.
    not committed.
 3. **Staff QA content never appears in the patient PDF.** Gate reasons, `source=scan`
    provenance, exclusions and review notices go only to the staff review notes.
-4. **Do not change `_extract_dexa_with_claude`** (in `pipeline.py`) or the prompt and schema it
-   sends (`extraction_prompt.py`). DEXA changes are proposals only (`docs/open_decisions.md`).
+4. **DEXA is read twice and gated.** `_extract_dexa_with_claude` reads every DEXA page twice via
+   `scan_dexa` and keeps a measurement only when both reads agree. Any change to DEXA reading must
+   keep that rule, the per-page patient-name check and the date-sorted history.
 5. **Deploys stay manual and owned by the clinic.** Never push to `main` directly; every change
    goes through a pull request. A PR may be merged only as described in "Pull request workflow"
    below; anything else waits for the owner.
@@ -31,12 +32,15 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/scan_bloodwork.py` | Image-only bloodwork pages: two independent vision reads per page and the deterministic gates that keep or exclude each row. |
 | `celldeep-tool/markers_reference.py` | Marker library: canonical names, exact aliases, CellDeep scoring thresholds. |
 | `celldeep-tool/lab_reported.py` | Lab-reported, not-scored tests (CBC, chemistry, urinalysis, ...): exact aliases, section-scoped; shown with printed range and the lab's H/L flag, never a CellDeep score. |
-| `celldeep-tool/scoring.py` | Pure scoring math, no AI. |
+| `celldeep-tool/clinic_config.py` | Clinic-decision defaults (censored results, lab flags, range labels); one comment per setting. |
+| `celldeep-tool/tmp_cleanup.py` | Deletes uploads, reports and audits from `/tmp` after six hours. |
+| `celldeep-tool/scoring.py` | Pure scoring math, no AI; `is_censored` for results printed as a limit. |
 | `celldeep-tool/generation_prompt.py` | Deterministic patient-facing copy (template fill, no AI). |
 | `celldeep-tool/template.py` | HTML/CSS renderer (locked V23 design) and PDF output via Playwright. |
 | `celldeep-tool/schema.py` | `PatientRecord` / `Marker` / `DexaReading` data contract. |
 | `celldeep-tool/unknown_marker_policy.py` | Staff review notice (`ExtractionReviewNotice`) and its plain-text format. |
-| `celldeep-tool/extraction_prompt.py` | DEXA Claude prompt/schema and the `marker_occurrences` shape. Do not change. |
+| `celldeep-tool/scan_dexa.py` | DEXA pages: two independent vision reads, agreement gates, date-sorted history, "(e)" estimated values. |
+| `celldeep-tool/extraction_prompt.py` | The `marker_occurrences` shape (`EXTRACTION_OUTPUT_SCHEMA`); its old prompt is no longer called. |
 | `celldeep-tool/protocol_reference.py`, `dexa_reference.py` | Protocol compound library; DEXA scoring helpers. |
 | `celldeep-tool/templates/provider_notes_template.md` | The structured provider-note format staff must follow. |
 | `celldeep-tool/synthetic_fixtures/` | Invented-data fixture builders. |
@@ -63,9 +67,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
 
 ## Data flow
 
-1. **Upload** (`app.generate`): patient name, age, sex, lab PDF, DEXA PDF(s), provider note,
-   Vitality Index, and the bloodwork Collected date (required when the lab PDF has image-only
-   pages). Runs `pipeline.run` in a background job.
+1. **Upload** (`app.generate`, staff login required via `CELLDEEP_STAFF_PASSWORD`): patient name,
+   age, sex, lab PDF, DEXA PDF(s), provider note, Vitality Index, and the bloodwork Collected date
+   (required when the lab PDF has image-only pages). Runs `pipeline.run` in a background job; a
+   failure shows "Generation failed. Job ID: <id>".
 2. **Bloodwork** (`pipeline.extract`):
    - Pages with a text layer: `_parse_bloodwork_tables` reads rows by printed column position
      under each page's own Current/Historical or In Range/Out of Range header. Names match
@@ -77,8 +82,15 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      and Collected date identify the pages.
    - `_merge_scan_occurrences` combines both sources; conflicting results for the same marker
      and date raise `BloodworkParseError`.
-3. **DEXA**: `_extract_dexa_with_claude` (unchanged Claude call).
-4. **Provider note**: `parse_provider_note` reads only the documented template sections.
+3. **DEXA**: `_extract_dexa_with_claude` renders every DEXA page and `scan_dexa` reads it twice; a
+   measurement is kept only when both reads agree, a scan date the reads disagree on drops the
+   whole scan, a page printing another patient's name is dropped, and kept scans are merged by date
+   and sorted oldest first. Outcomes open the staff notes (DEXA block).
+4. **Provider note**: `parse_provider_note` reads only the documented template sections
+   (including `## Treatment Status`); every other line is listed with its reason.
+4a. **Identity**: age comes from the printed date of birth and collection date when printed
+   (`_age_from_dob`; DOB never stored, disagreeing DOBs give no age); `name_header` lists the name
+   each source printed at the top of the staff notes.
 5. **Scoring** (`score_and_build_record`): reconciles occurrences into `Marker`s, scores with
    `markers_reference.py` thresholds, collects staff notices. Unrecognized rows that match
    `lab_reported.py`, and any other row the lab flagged H/L, become `record.lab_reported`
@@ -121,4 +133,6 @@ Standing instruction from the owner for every PR Claude opens:
 
 - Every production failure becomes a synthetic fixture and a failing test before it is fixed.
 - Keep exclusions explicit: when data cannot be trusted, drop it and say why in staff notes.
-- Log lines are value-free and name-free.
+- Log lines are value-free and name-free. File paths that reach logs never contain the patient's
+  name; the staff notice is written to the QA file, never printed.
+- Clinic decisions belong in `clinic_config.py`, not in code.

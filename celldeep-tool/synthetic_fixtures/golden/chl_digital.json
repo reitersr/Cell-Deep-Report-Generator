@@ -14,6 +14,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": "0.0-3.0",
+      "lab_flag_then": null,
+      "lab_flag_now": "H",
       "history": []
     },
     {
@@ -28,6 +30,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -42,6 +46,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -56,6 +62,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -70,6 +78,8 @@
       "range_source": "celldeep",
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -84,6 +94,8 @@
       "range_source": null,
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -98,6 +110,8 @@
       "range_source": "celldeep",
       "unscored": null,
       "lab_range_now": null,
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     },
     {
@@ -108,10 +122,12 @@
       "now_date": "03/02/2026",
       "then_tier": "optimal",
       "now_tier": "optimal",
-      "celldeep_range": "1.5-9.3",
+      "celldeep_range": "lab range 1.5-9.3",
       "range_source": "lab",
       "unscored": null,
       "lab_range_now": "1.5-9.3",
+      "lab_flag_then": null,
+      "lab_flag_now": null,
       "history": []
     }
   ],

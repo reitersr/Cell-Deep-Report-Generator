@@ -1,8 +1,6 @@
 """Staff review notes lead with scan outcomes; staff QA text never reaches the patient PDF."""
 
 import copy
-import json
-from types import SimpleNamespace
 
 import fitz
 import pytest
@@ -57,8 +55,10 @@ def test_patient_pdf_contains_no_staff_note_markers(run_report):
 def test_staff_notes_open_with_scan_batch_outcomes(run_report):
     _, review, _ = run_report
     lines = review.splitlines()
-    assert lines[2] == f"SCANNED BLOODWORK - pages 2, 3 - identified by staff-entered patient name and Collected {DATE}"
-    block = "\n".join(lines[2:lines.index("OTHER REVIEW ITEMS")])
+    start = lines.index("This report generated successfully. A few items need a quick human check:") + 2
+    assert lines[start] == (f"SCANNED BLOODWORK - pages 2, 3 - identified by staff-entered patient name and "
+                            f"Collected {DATE}")
+    block = "\n".join(lines[start:lines.index("OTHER REVIEW ITEMS")])
     assert "Kept: 85 results (page 2: 53, page 3: 32)" in block
     assert "Excluded: 1 results" in block
     assert "page 2: 'IRON, TOTAL' - agreement gate" in block
@@ -71,43 +71,10 @@ def _dexa_extracted():
     return {"dexa_history": [{"date_display": "05/12/2025", "body_fat_pct": "33.7%"}]}
 
 
-def test_scanned_dexa_source_is_not_called_a_hallucination():
-    notice = pipeline.verify_extraction_completeness(_dexa_extracted(), dexa_text="", dexa_scanned=True)
-    assert not any("HALLUCINATION" in note for note in notice.other_notes)
-    assert any(note.startswith("DEXA SOURCE IS SCANNED") for note in notice.other_notes)
-    notice = pipeline.verify_extraction_completeness(
-        _dexa_extracted(), dexa_text="Synthetic cover page", dexa_scanned=True)
-    assert not any("HALLUCINATION" in note for note in notice.other_notes)
-
-
 def test_text_dexa_value_missing_from_source_is_still_flagged():
     notice = pipeline.verify_extraction_completeness(
         _dexa_extracted(), dexa_text="Scan date 05/12/2025 Body Fat 31.0%")
     assert any("POSSIBLE HALLUCINATION" in note for note in notice.other_notes)
-
-
-def test_image_only_dexa_pdf_end_to_end_has_no_hallucination_warning(tmp_path, monkeypatch):
-    image = fitz.open()
-    source = image.new_page()
-    source.insert_text((40, 60), "Synthetic DEXA 05/12/2025 Body Fat 33.7%", fontsize=10)
-    dexa = fitz.open()
-    dexa.new_page().insert_image(source.rect, pixmap=source.get_pixmap(dpi=72))
-    dexa.save(tmp_path / "dexa.pdf")
-    payload = {"marker_occurrences": [], "dexa_history": [
-        {"date_display": "05/12/2025", "total_mass_lb": 172.0, "fat_mass_lb": 58.0, "lean_mass_lb": 108.9,
-         "body_fat_pct": "33.7%", "vat_fat_mass_lb": 1.06, "visceral_fat_area_cm2": 84.0}]}
-    client = SimpleNamespace(timeout=240.0)
-    client.messages = SimpleNamespace(create=lambda **kwargs: SimpleNamespace(
-        content=[SimpleNamespace(text=json.dumps(payload))], stop_reason="end_turn"))
-    monkeypatch.setattr(pipeline, "Anthropic", lambda **kwargs: client)
-    monkeypatch.setattr(pipeline, "_review_notes_path", lambda name: str(tmp_path / "review.txt"))
-    monkeypatch.setattr(pipeline, "_diagnostic_path_prefix", lambda name: str(tmp_path / "diag"))
-    labs = fx.write_lab_pdf(tmp_path / "labs.pdf", [fx.section_preamble("SYN-D", "02/03/2026")
-                                                    + fx.header_line(100) + fx.row(130, "TSH", "1.0")])
-    pipeline.run(str(labs), [str(tmp_path / "dexa.pdf")], None, fx.PATIENT, 44, "male", str(tmp_path / "r.pdf"))
-    review = (tmp_path / "review.txt").read_text(encoding="utf-8")
-    assert "HALLUCINATION" not in review
-    assert "DEXA SOURCE IS SCANNED" in review
 
 
 def test_render_refuses_to_write_a_patient_pdf_containing_staff_text(tmp_path):

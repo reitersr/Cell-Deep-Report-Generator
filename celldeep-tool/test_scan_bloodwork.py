@@ -147,6 +147,8 @@ class MockClient:
     def create(self, **kwargs):
         self.calls.append(kwargs)
         data = next(self.responses)
+        if isinstance(data, dict) and "rows" in data:
+            data = {"date_of_birth": None, **data}  # mocked pages that omit it printed no DOB
         return SimpleNamespace(content=[SimpleNamespace(text=json.dumps(data))], stop_reason="end_turn")
 
 

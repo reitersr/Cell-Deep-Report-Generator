@@ -7,8 +7,16 @@ sections is not read at all. Text inside these comment markers is ignored. -->
 
 ## Consultation Note
 
-<!-- Free text for the record. Treatment status (e.g. "on testosterone replacement therapy",
-"postmenopausal and on BHRT") is only recognized when stated explicitly here. -->
+<!-- Free text for the record. It is never read for protocol, concerns, targets or status; use the
+sections below. -->
+
+## Treatment Status
+
+<!-- Exactly one of: Yes, No, Not stated. This section decides the TRT and BHRT status used for
+scoring (e.g. LH/FSH suppression on TRT, postmenopausal BHRT targets). -->
+
+- On TRT: Not stated
+- Postmenopausal and on BHRT: Not stated
 
 ## Patient Concerns
 
