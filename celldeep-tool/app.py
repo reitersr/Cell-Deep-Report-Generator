@@ -79,6 +79,7 @@ def _run_report_job(job_directory: Path, job_data: dict) -> None:
             sex=job_data["sex"],
             out_path=str(job_directory / "report.pdf"),
             vitality_index=job_data["vitality_index"],
+            collected_date=job_data.get("collected_date"),
         )
         shutil.copyfile(review_path, job_directory / "review_notes.txt")
         _write_job_status(job_directory, "done")
@@ -94,6 +95,7 @@ def generate():
         age = request.form.get("age", "").strip()
         sex = request.form.get("sex", "").strip() or None
         note_text = request.form.get("note_text", "").strip() or None
+        collected_date = request.form.get("collected_date", "").strip() or None
         vitality_index = {
             label: request.form.get(f"vitality_{field}", "Not Assessed")
             for field, label in VITALITY_FIELDS
@@ -104,16 +106,27 @@ def generate():
             return redirect(url_for("index"))
 
         age = int(age) if age else None
+        labs_file = request.files.get("labs_pdf")
+        labs_bytes = labs_file.read() if labs_file and labs_file.filename else None
+        if labs_bytes and not collected_date and pipeline.has_scanned_pages(labs_bytes):
+            flash("This bloodwork PDF contains scanned pages. Enter the Bloodwork Collected Date "
+                  "so the scanned pages can be identified.")
+            return redirect(url_for("index"))
+        if collected_date:
+            try:
+                collected_date = pipeline.scan_collected_date(collected_date)
+            except ValueError as error:
+                flash(str(error))
+                return redirect(url_for("index"))
 
         job_id = uuid.uuid4().hex
         job_directory = _job_directory(job_id)
         job_directory.mkdir(parents=True, exist_ok=False)
 
         labs_path = None
-        labs_file = request.files.get("labs_pdf")
-        if labs_file and labs_file.filename:
+        if labs_bytes is not None:
             labs_path = job_directory / "labs.pdf"
-            labs_file.save(labs_path)
+            labs_path.write_bytes(labs_bytes)
 
         dexa_paths = []
         for index, dexa_file in enumerate(request.files.getlist("dexa_pdfs")):
@@ -130,6 +143,7 @@ def generate():
             "age": age,
             "sex": sex,
             "vitality_index": vitality_index,
+            "collected_date": collected_date,
         }
         _write_job_status(job_directory, "processing")
         threading.Thread(

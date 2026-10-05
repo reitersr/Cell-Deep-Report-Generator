@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 
 def test_version_reports_render_commit(monkeypatch):
     monkeypatch.setenv("RENDER_GIT_COMMIT", "d326491fullsha")
@@ -50,6 +52,7 @@ def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
             data={
                 "patient_name": "Test Patient",
                 "note_text": "Original note.",
+                "collected_date": "2026-04-24",
                 "labs_pdf": (io.BytesIO(b"synthetic input PDF"), "synthetic-labs.pdf"),
             },
         )
@@ -67,6 +70,7 @@ def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
     assert status["review_notes_url"] == f"/download/{job_id}/review-notes"
     assert app.app.test_client().get(status["report_url"]).data == b"synthetic report PDF"
     assert captured["note_text"] == "Original note."
+    assert captured["collected_date"] == "04/24/2026"
     assert captured["vitality_index"] == {
         label: "Not Assessed" for _, label in app.VITALITY_FIELDS
     }
@@ -109,3 +113,56 @@ def test_generate_status_surfaces_background_pipeline_errors(tmp_path, monkeypat
         "status": "error",
         "error": "Anthropic API timed out during extraction. Please retry the report.",
     }
+
+def test_invalid_collected_date_is_rejected_before_job_starts(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
+    with patch.object(app.pipeline, "run") as run:
+        response = app.app.test_client().post(
+            "/generate", data={"patient_name": "Test Patient", "collected_date": "2026-02-30"})
+    assert response.status_code == 302
+    run.assert_not_called()
+    assert not (tmp_path / "jobs").exists()
+
+
+def _lab_pdf_bytes(scanned):
+    import fitz
+
+    document = fitz.open()
+    document.new_page().insert_text((40, 60), "Collected: 01/27/2026  TSH 1.9", fontsize=10)
+    if scanned:
+        source = fitz.open()
+        source.new_page().insert_text((40, 60), "TSH 1.19", fontsize=10)
+        document.new_page().insert_image(document[0].rect, pixmap=source[0].get_pixmap(dpi=72))
+        source.close()
+    data = document.tobytes()
+    document.close()
+    return data
+
+
+def test_scanned_lab_pdf_requires_collected_date_before_job_starts(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
+    with patch.object(app.pipeline, "run") as run:
+        client = app.app.test_client()
+        response = client.post("/generate", data={
+            "patient_name": "Test Patient",
+            "labs_pdf": (io.BytesIO(_lab_pdf_bytes(scanned=True)), "scanned-labs.pdf"),
+        })
+        assert response.status_code == 302
+        assert "contains scanned pages" in client.get("/").get_data(as_text=True)
+    run.assert_not_called()
+    assert not (tmp_path / "jobs").exists()
+
+
+@pytest.mark.parametrize("scanned", [True, False])
+def test_lab_pdf_with_date_or_without_scans_starts_job(tmp_path, monkeypatch, scanned):
+    monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
+    pdf = _lab_pdf_bytes(scanned)
+    data = {"patient_name": "Test Patient", "labs_pdf": (io.BytesIO(pdf), "labs.pdf")}
+    if scanned:
+        data["collected_date"] = "2026-04-24"
+    with patch.object(app.pipeline, "run", return_value=str(tmp_path / "review.txt")):
+        (tmp_path / "review.txt").write_text("synthetic review", encoding="utf-8")
+        response = app.app.test_client().post("/generate", data=data)
+    assert response.status_code == 200
+    job_id = re.search(r'data-job-id="([a-f0-9]+)"', response.get_data(as_text=True)).group(1)
+    assert (tmp_path / "jobs" / job_id / "labs.pdf").read_bytes() == pdf
