@@ -16,8 +16,9 @@ These override any other instruction, convenience or test shortcut.
    not committed.
 3. **Staff QA content never appears in the patient PDF.** Gate reasons, `source=scan`
    provenance, exclusions and review notices go only to the staff review notes.
-4. **Do not change `_extract_dexa_with_claude`** (in `pipeline.py`) or the prompt and schema it
-   sends (`extraction_prompt.py`). DEXA changes are proposals only (`docs/open_decisions.md`).
+4. **DEXA is read twice and gated.** `_extract_dexa_with_claude` reads every DEXA page twice via
+   `scan_dexa` and keeps a measurement only when both reads agree. Any change to DEXA reading must
+   keep that rule, the per-page patient-name check and the date-sorted history.
 5. **Deploys stay manual and owned by the clinic.** Never push to `main` directly; every change
    goes through a pull request. A PR may be merged only as described in "Pull request workflow"
    below; anything else waits for the owner.
@@ -36,7 +37,8 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/template.py` | HTML/CSS renderer (locked V23 design) and PDF output via Playwright. |
 | `celldeep-tool/schema.py` | `PatientRecord` / `Marker` / `DexaReading` data contract. |
 | `celldeep-tool/unknown_marker_policy.py` | Staff review notice (`ExtractionReviewNotice`) and its plain-text format. |
-| `celldeep-tool/extraction_prompt.py` | DEXA Claude prompt/schema and the `marker_occurrences` shape. Do not change. |
+| `celldeep-tool/scan_dexa.py` | DEXA pages: two independent vision reads, agreement gates, date-sorted history, "(e)" estimated values. |
+| `celldeep-tool/extraction_prompt.py` | The `marker_occurrences` shape (`EXTRACTION_OUTPUT_SCHEMA`); its old prompt is no longer called. |
 | `celldeep-tool/protocol_reference.py`, `dexa_reference.py` | Protocol compound library; DEXA scoring helpers. |
 | `celldeep-tool/templates/provider_notes_template.md` | The structured provider-note format staff must follow. |
 | `celldeep-tool/synthetic_fixtures/` | Invented-data fixture builders. |
@@ -77,7 +79,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      and Collected date identify the pages.
    - `_merge_scan_occurrences` combines both sources; conflicting results for the same marker
      and date raise `BloodworkParseError`.
-3. **DEXA**: `_extract_dexa_with_claude` (unchanged Claude call).
+3. **DEXA**: `_extract_dexa_with_claude` renders every DEXA page and `scan_dexa` reads it twice; a
+   measurement is kept only when both reads agree, a scan date the reads disagree on drops the
+   whole scan, a page printing another patient's name is dropped, and kept scans are merged by date
+   and sorted oldest first. Outcomes open the staff notes (DEXA block).
 4. **Provider note**: `parse_provider_note` reads only the documented template sections.
 5. **Scoring** (`score_and_build_record`): reconciles occurrences into `Marker`s, scores with
    `markers_reference.py` thresholds, collects staff notices. Unrecognized rows that match

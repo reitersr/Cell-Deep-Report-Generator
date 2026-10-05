@@ -34,7 +34,6 @@ from schema import normalize_date_for_matching as _normalize_date_for_matching
 from markers_reference import MARKER_LIBRARY, resolve_marker_config, has_missing_thresholds
 from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
 from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
-from extraction_prompt import EXTRACTION_SYSTEM_PROMPT, EXTRACTION_OUTPUT_SCHEMA, build_extraction_user_message
 from generation_prompt import build_copy
 import lab_reported
 import scoring
@@ -347,12 +346,6 @@ def _parse_json_response(text, patient_name=None):
             with open("/tmp/extraction_completeness_log.txt", "a", encoding="utf-8") as log:
                 log.write(log_line + "\n")
             raise ValueError("Extraction produced unparseable output - please retry") from None
-
-
-def _pdf_content_block(path: str) -> dict:
-    with open(path, "rb") as f:
-        data = base64.standard_b64encode(f.read()).decode("utf-8")
-    return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}}
 
 
 def _pdf_text(path: str | None) -> str:
@@ -721,13 +714,10 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
         numeric = value.rstrip("%").strip()
         date_match = dexa_text.lower().find(date.lower()) if date else -1
         context = dexa_text[max(0, date_match - 500):date_match + 500] if date_match >= 0 else dexa_text
-        if numeric and (not dexa_text.strip() or (dexa_scanned and date_match < 0)):
-            # A scanned DEXA page has no text layer, so absence from the text proves nothing.
-            warning = (f"DEXA SOURCE IS SCANNED: body fat % for {date} = {value} cannot be checked against "
-                       "source text; compare it with the scan image")
-            notice.other_notes.append(warning)
-            log_lines.append(warning)
-        elif numeric and numeric not in context and value not in context:
+        # A scanned DEXA page has no text layer, so a verbatim search proves nothing there; its
+        # evidence is the two-read agreement gate, reported in the DEXA block of the staff notes.
+        if numeric and dexa_text.strip() and not (dexa_scanned and date_match < 0) \
+                and numeric not in context and value not in context:
             warning = (f"WARNING: DEXA BODY FAT % FOR {date} = {value} NOT FOUND VERBATIM IN SOURCE PDF - "
                        "POSSIBLE HALLUCINATION, NEEDS HUMAN REVIEW")
             notice.other_notes.append(warning)
@@ -1497,42 +1487,31 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None) -> tup
 # DEXA extraction (unchanged Claude path from before the deterministic bloodwork change)
 # ---------------------------------------------------------------------------
 
-def _marker_library_summary() -> str:
-    lines = []
-    for name, cfg in MARKER_LIBRARY.items():
-        aliases = ", ".join(cfg.get("aliases", []))
-        lines.append(f"- {name} (aliases: {aliases})")
-    return "\n".join(lines)
+def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], patient_name: str | None):
+    """Read every DEXA page twice and keep only measurements both reads agree on (scan_dexa.gate).
+    Returns (dexa_history, staff_notes, summary_lines)."""
+    import scan_bloodwork
+    import scan_dexa
 
-
-def _protocol_library_summary() -> str:
-    lines = []
-    for name, cfg in PROTOCOL_LIBRARY.items():
-        aliases = ", ".join(cfg.get("aliases", []))
-        cats = ", ".join(cfg["typical_categories"]) or "none (not expected to move labs)"
-        lines.append(f"- {name} (aliases: {aliases}) — typical target(s): {cats}")
-    return "\n".join(lines)
-
-
-def _extract_dexa_with_claude(client: Anthropic, dexa_pdfs: list[str], patient_name: str | None) -> list[dict]:
-    """Same request the original extract() made for DEXA PDFs; only its dexa_history is used."""
-    content = [_pdf_content_block(p) for p in dexa_pdfs]
-    content.append({
-        "type": "text",
-        "text": build_extraction_user_message(_marker_library_summary(), _protocol_library_summary(), None),
-    })
-    resp = _create_anthropic_message(
-        client,
-        "extraction",
-        model=MODEL,
-        max_tokens=16000,
-        system=EXTRACTION_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": content}],
-        output_config={"format": {"type": "json_schema", "schema": EXTRACTION_OUTPUT_SCHEMA}},
-    )
-    raw_text = "".join(block.text for block in resp.content if hasattr(block, "text"))
-    return _parse_json_response(raw_text, patient_name=patient_name).get("dexa_history", [])
-
+    if client is None:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            note = "DEXA NOT READ: no API key - enter DEXA results manually"
+            return [], [note], [f"DEXA - {note}"]
+        client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"],
+                           timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS, max_retries=ANTHROPIC_MAX_RETRIES)
+    pages, failures = [], []
+    for file_number, path in enumerate(dexa_pdfs, start=1):
+        with fitz.open(path) as document:
+            for page in document:
+                key = (file_number, page.number + 1)
+                try:
+                    reads = scan_dexa.read_page(page, f"file {key[0]} page {key[1]}", client,
+                                                _create_anthropic_message, MODEL)
+                except scan_bloodwork.ScanGateError as error:
+                    failures.append((key, error.reads, str(error)))
+                else:
+                    pages.append((key, reads))
+    return scan_dexa.gate(pages, patient_name, failures)
 
 def has_scanned_pages(pdf_bytes: bytes) -> bool:
     """True when a lab PDF has image-only pages, which only staff-entered identity can date."""
@@ -1845,7 +1824,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     scan_summary = _scan_summary(scan_numbers, scan_notes, collected_date) if scan_numbers else []
     lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
     lab_review_notes.extend(lab_notes)
-    dexa_history = _extract_dexa_with_claude(client, dexa_pdfs, patient_name) if dexa_pdfs else []
+    dexa_history, dexa_notes, dexa_summary = (_extract_dexa_with_claude(client, dexa_pdfs, patient_name)
+                                              if dexa_pdfs else ([], [], []))
     note = parse_provider_note(note_text)
 
     dated = [occ for occ in occurrences
@@ -1870,6 +1850,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "lab_reported": lab_items,
         "source_rows": row_audit,
         "scan_summary": scan_summary,
+        "dexa_summary": dexa_summary,
         "other_notes": [*lab_review_notes, *note["other_notes"]],
     }
 
@@ -2121,6 +2102,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     )
     notice.other_notes.extend(extracted.get("other_notes", []))
     notice.scan_summary = list(extracted.get("scan_summary", []))
+    notice.dexa_summary = list(extracted.get("dexa_summary", []))
     unrecognized_names = {" ".join(item["raw_name"].split()).casefold()
                           for item in extracted.get("unrecognized_markers", [])}
     notice.other_notes[:0] = coverage_gaps(extracted.get("source_rows", []), record, unrecognized_names)

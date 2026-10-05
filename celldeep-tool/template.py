@@ -333,6 +333,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .bio-date{{display:block; font-size:8px; color:{MUTE}; margin-top:2px; line-height:1.1;}}
 .lab-pill{{background:{MIDGRAY}22; color:{INK};}}
 .lab-flag{{font-weight:700; margin-left:3px;}}
+.dexa-est{{font-size:8px; font-weight:600; color:{MUTE}; text-transform:lowercase; margin-left:2px;}}
 .bio-note{{font-size:9.5px; color:{DARKGRAY}; line-height:1.3; font-style:italic; max-width:6.2in;}}
 '''
 
@@ -502,6 +503,15 @@ def _latest_complete_dexa_reading(dexa_history: list[DexaReading]) -> DexaReadin
     return next((d for d in reversed(dexa_history) if _is_complete_dexa_reading(d)), dexa_history[-1])
 
 
+def _dexa_value(reading: DexaReading, field: str, suffix: str = "") -> str:
+    """A DEXA value as printed, with a short label when the scanner marked it "(e)" estimated."""
+    value = getattr(reading, field)
+    if value is None:
+        return f"{fmt(value)}{suffix}"
+    label = ' <span class="dexa-est">estimated</span>' if field in (reading.estimated or []) else ""
+    return f"{fmt(value)}{suffix}{label}"
+
+
 def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     if not record.dexa_history:
         return ""
@@ -519,15 +529,17 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
                 f'alt="{record.name} DEXA scan comparison"/>') if dexa_img_b64 else ""
     def _history_row(d: DexaReading) -> str:
         if d.vat_fat_mass_lb is not None:
-            vat_col = f'<span class="v">{d.vat_fat_mass_lb} lb VAT</span>'
+            vat_col = f'<span class="v">{_dexa_value(d, "vat_fat_mass_lb", " lb VAT")}</span>'
         elif d.visceral_fat_area_cm2 is not None:
-            vat_col = f'<span class="v">{d.visceral_fat_area_cm2} cm&sup2; VAT</span>'
+            vat_col = f'<span class="v">{_dexa_value(d, "visceral_fat_area_cm2", " cm&sup2; VAT")}</span>'
         else:
             vat_col = ""
         return (
             f'<div class="dexa-hist-row"><span class="d">{fmt_date(d.date_display)}</span>'
-            f'<span class="v">{fmt(d.total_mass_lb)} lb total</span><span class="v">{fmt(d.fat_mass_lb)} lb fat</span>'
-            f'<span class="v">{fmt(d.lean_mass_lb)} lb lean</span><span class="v">{fmt(d.body_fat_pct)} fat</span>'
+            f'<span class="v">{_dexa_value(d, "total_mass_lb", " lb total")}</span>'
+            f'<span class="v">{_dexa_value(d, "fat_mass_lb", " lb fat")}</span>'
+            f'<span class="v">{_dexa_value(d, "lean_mass_lb", " lb lean")}</span>'
+            f'<span class="v">{_dexa_value(d, "body_fat_pct", " fat")}</span>'
             f'{vat_col}</div>'
         )
 
@@ -550,17 +562,17 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
           <div class="dexa-row">
             <div class="dexa-row-lbl">When you came in &middot; {fmt_date(first.date_display)}</div>
             <div class="dexa-row-stats dim">
-              <div class="dexa-stat"><div class="num">{fmt(first.body_fat_pct)}</div><div class="cap">Body fat</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(first.fat_mass_lb)}</div><div class="cap">Fat mass, lb</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(first.lean_mass_lb)}</div><div class="cap">Lean mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(first, "body_fat_pct")}</div><div class="cap">Body fat</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(first, "fat_mass_lb")}</div><div class="cap">Fat mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(first, "lean_mass_lb")}</div><div class="cap">Lean mass, lb</div></div>
             </div>
           </div>
           <div class="dexa-row">
             <div class="dexa-row-lbl bright">Where you are now &middot; {fmt_date(latest.date_display)}</div>
             <div class="dexa-row-stats">
-              <div class="dexa-stat"><div class="num">{fmt(latest.body_fat_pct)}</div><div class="cap">Body fat</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(latest.fat_mass_lb)}</div><div class="cap">Fat mass, lb</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(latest.lean_mass_lb)}</div><div class="cap">Lean mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "body_fat_pct")}</div><div class="cap">Body fat</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "fat_mass_lb")}</div><div class="cap">Fat mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "lean_mass_lb")}</div><div class="cap">Lean mass, lb</div></div>
               <div class="dexa-stat"><div class="num" style="color:{color};">{fmt(structure_now)}%</div><div class="cap">Optimized</div></div>
             </div>
           </div>
@@ -570,9 +582,9 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
           <div class="dexa-row">
             <div class="dexa-row-lbl bright">Current scan &middot; {fmt_date(latest.date_display)}</div>
             <div class="dexa-row-stats">
-              <div class="dexa-stat"><div class="num">{fmt(latest.body_fat_pct)}</div><div class="cap">Body fat</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(latest.fat_mass_lb)}</div><div class="cap">Fat mass, lb</div></div>
-              <div class="dexa-stat"><div class="num">{fmt(latest.lean_mass_lb)}</div><div class="cap">Lean mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "body_fat_pct")}</div><div class="cap">Body fat</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "fat_mass_lb")}</div><div class="cap">Fat mass, lb</div></div>
+              <div class="dexa-stat"><div class="num">{_dexa_value(latest, "lean_mass_lb")}</div><div class="cap">Lean mass, lb</div></div>
               <div class="dexa-stat"><div class="num" style="color:{color};">{fmt(structure_now)}%</div><div class="cap">Optimized</div></div>
             </div>
           </div>

@@ -85,6 +85,10 @@ number, with DOB staff-entered, never read from the lab PDF.
 
 ## 4. Caveat for DEXA "(e)" estimated values
 
+> **Status: partly implemented.** "(e)" values are now kept as an `estimated` field and shown with an
+> "estimated" label. Still open: whether estimated values should count toward the Structure score, and
+> option C (body fat % derived from masses).
+
 **Evidence.** DEXA reports mark some values as estimated with "(e)". The DEXA extraction prompt and
 schema (`extraction_prompt.py`, `dexa_history`) have no field for it, so an estimated value is
 indistinguishable from a measured one. Also, `scoring.py:100-126` (`normalize_dexa_body_fat`)
@@ -103,6 +107,8 @@ shows that computed value exactly like a printed one.
 approval (CLAUDE.md non-negotiable 4) and should be implemented together with item 5.
 
 ## 5. DEXA scan-history ordering and run-to-run nondeterminism
+
+> **Status: implemented** as proposed (`scan_dexa.py`, `test_dexa_two_reads.py`).
 
 **Evidence.**
 - One Claude call reads all DEXA PDFs (`pipeline.py:1517-1534`, `_extract_dexa_with_claude`).
@@ -194,6 +200,9 @@ scored.
 "Lab-printed fallback" to "CellDeep-calibrated" in the audit, with a test.
 
 ## 10. Real patient data in git history and in the DEXA prompt
+
+> **Status:** the specimen ID in `extraction_prompt.py` was replaced with a synthetic placeholder once the
+> old DEXA prompt stopped being called. Git history is unchanged and still needs the owner's decision.
 
 **Evidence.**
 - Phase 0 removed or replaced, in the working tree:

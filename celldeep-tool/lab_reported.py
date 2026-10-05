@@ -14,7 +14,6 @@ Any other printed result that the lab flagged H or L is also shown, under its pr
 no lab-flagged result is missing from the patient report.
 """
 
-import re
 
 from schema import normalize_date_for_matching
 

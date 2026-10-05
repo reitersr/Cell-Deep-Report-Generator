@@ -132,6 +132,7 @@ class DexaReading:
     vat_fat_mass_lb: Optional[float] = None   # None if this visit didn't measure VAT
     visceral_fat_area_cm2: Optional[float] = None  # None if this visit didn't report VAT area
     scan_image_b64: Optional[str] = None      # rendered body-composition scan page, if present in the source PDF
+    estimated: list = field(default_factory=list)  # fields the scanner printed with "(e)", e.g. ["vat_fat_mass_lb"]
 
 
 @dataclass
