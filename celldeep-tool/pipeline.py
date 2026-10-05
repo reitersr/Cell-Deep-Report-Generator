@@ -240,6 +240,7 @@ def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
             "date_display": occ.get("date_display", ""),
             "value": occ.get("value") if occ.get("value") is not None else 0,
             "disp_value": occ.get("disp_value", ""),
+            **({"lab_flag": occ["lab_flag"]} if occ.get("lab_flag") else {}),
         } for occ in unique_results[1:-1]]
 
         reconciled.append({

@@ -336,6 +336,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .lab-pill{{background:{MIDGRAY}22; color:{INK};}}
 .lab-flag{{font-weight:700; margin-left:3px;}}
 .dexa-est{{font-size:8px; font-weight:600; color:{MUTE}; text-transform:lowercase; margin-left:2px;}}
+.also-on-file{{font-size:8.5px; color:{MUTE}; margin-top:2px; line-height:1.25;}}
 .lab-flag-line{{display:block; font-size:8.5px; color:{MUTE}; margin-top:2px; line-height:1.2;}}
 .lab-flag-words{{font-size:10px; color:{MUTE}; font-weight:600;}}
 .bio-note{{font-size:9.5px; color:{DARKGRAY}; line-height:1.3; font-style:italic; max-width:6.2in;}}
@@ -723,7 +724,7 @@ def bio_row_tr(m, copy, color_override=None):
         note_html = (f'<div class="bio-note"><b style="font-style:normal; color:{INK};">What this is:</b> '
                      f'{note_text}</div>') if note_text else ""
     row = f'''<div class="bio-table-row bio-tr" style="--c:{color};">
-      <div class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span>{note_html}</div>
+      <div class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span>{_also_on_file(m.full_history)}{note_html}</div>
       <div class="td-range">{m.disp_range}</div>
       <div class="td-then">{then_cell}</div>
       <div class="td-now">{now_cell}</div>
@@ -759,6 +760,16 @@ def bio_group(cat, record, copy, first_draw, latest_draw, show_headers=True):
             f'<div class="bio-table">{header_html}{first_row}</div></div>{narr_html}{remaining_rows}</div>')
 
 
+def _also_on_file(results) -> str:
+    """Every result between the earliest and latest shown, so no lab-flagged result is left out."""
+    parts = []
+    for result in results:
+        flag = result.get("lab_flag")
+        flag_text = f" (lab flag {_html(clinic_config.LAB_FLAG_WORDS.get(flag, flag))})" if flag else ""
+        parts.append(f"{_html(result.get('disp_value'))}{flag_text} on {fmt_date(result.get('date_display'))}")
+    return f'<div class="also-on-file">Also on file: {"; ".join(parts)}</div>' if parts else ""
+
+
 def _lab_result_cell(result) -> str:
     if result is None:
         return f'<span class="bio-dash">{fmt(None)}</span>'
@@ -780,7 +791,7 @@ def lab_reported_section(record: PatientRecord) -> str:
             latest = item.results[-1]
             earlier = item.results[0] if len(item.results) > 1 else None
             rows.append(f'''<div class="bio-table-row bio-tr lab-tr" style="--c:{MIDGRAY};">
-      <div class="td-name"><span class="bio-name">{item.name}</span></div>
+      <div class="td-name"><span class="bio-name">{item.name}</span>{_also_on_file(item.results[1:-1])}</div>
       <div class="td-range">{_html(latest.get("lab_range") or clinic_config.NO_RANGE_LABEL)}</div>
       <div class="td-then">{_lab_result_cell(earlier)}</div>
       <div class="td-now">{_lab_result_cell(latest)}</div>
