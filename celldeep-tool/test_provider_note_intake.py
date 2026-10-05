@@ -97,8 +97,8 @@ def test_note_without_sections_is_not_read_and_every_line_is_listed():
                                        "    line 2: 'Started BPC-157 daily.' - text outside a '## ' section"]
 
 
-def test_upload_page_offers_template_download_and_note_check():
-    client = app.app.test_client()
+def test_upload_page_offers_template_download_and_note_check(staff_client):
+    client = staff_client
     page = client.get("/").get_data(as_text=True)
     assert 'href="/provider-note-template"' in page and 'id="check-note"' in page
     download = client.get("/provider-note-template")

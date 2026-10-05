@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CellDeep Staff Login</title>
+  <style>
+    body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; max-width: 380px; margin: 80px auto; padding: 0 20px; color: #373436; }
+    h1 { font-family: Georgia, serif; font-size: 22px; margin-bottom: 18px; }
+    label { display: block; font-weight: 700; font-size: 13px; margin: 0 0 6px; }
+    input[type=password] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
+    button { margin-top: 18px; background: #373436; color: #fff; border: none; padding: 11px 22px; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; width: 100%; }
+    .error { background: #B75B4E22; border: 1px solid #B75B4E; color: #7a3a30; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>CellDeep staff login</h1>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% if configured %}
+  <form method="post" action="{{ url_for('login') }}">
+    <input type="hidden" name="next" value="{{ next or '' }}">
+    <label for="password">Staff password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required autofocus>
+    <button type="submit">Sign in</button>
+  </form>
+  {% endif %}
+</body>
+</html>

@@ -10,10 +10,10 @@ from unittest.mock import patch
 import pytest
 
 
-def test_version_reports_render_commit(monkeypatch):
+def test_version_reports_render_commit(staff_client, monkeypatch):
     monkeypatch.setenv("RENDER_GIT_COMMIT", "d326491fullsha")
 
-    response = app.app.test_client().get("/version")
+    response = staff_client.get("/version")
 
     assert response.status_code == 200
     assert response.get_json() == {"commit": "d326491fullsha"}
@@ -31,7 +31,7 @@ def _wait_for_status(client, job_id, expected_status):
     raise AssertionError(f"job {job_id} did not reach {expected_status}")
 
 
-def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
+def test_generate_runs_as_disk_backed_background_job(staff_client, tmp_path, monkeypatch):
     captured = {}
     worker_started = threading.Event()
     release_worker = threading.Event()
@@ -47,7 +47,7 @@ def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
         return str(review_path)
 
     with patch.object(app.pipeline, "run", side_effect=fake_run):
-        response = app.app.test_client().post(
+        response = staff_client.post(
             "/generate",
             data={
                 "patient_name": "Test Patient",
@@ -60,15 +60,15 @@ def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
     assert response.status_code == 200
     job_id = re.search(r'data-job-id="([a-f0-9]+)"', response.get_data(as_text=True)).group(1)
     assert worker_started.wait(timeout=2)
-    processing_response = app.app.test_client().get(f"/generate/status/{job_id}")
+    processing_response = staff_client.get(f"/generate/status/{job_id}")
     assert processing_response.get_json() == {"status": "processing"}
     release_worker.set()
 
-    status_response, status = _wait_for_status(app.app.test_client(), job_id, "done")
+    status_response, status = _wait_for_status(staff_client, job_id, "done")
     assert status_response.status_code == 200
     assert status["report_url"] == f"/download/{job_id}/report"
     assert status["review_notes_url"] == f"/download/{job_id}/review-notes"
-    assert app.app.test_client().get(status["report_url"]).data == b"synthetic report PDF"
+    assert staff_client.get(status["report_url"]).data == b"synthetic report PDF"
     assert captured["note_text"] == "Original note."
     assert captured["collected_date"] == "04/14/2026"
     assert captured["vitality_index"] == {
@@ -77,7 +77,7 @@ def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
     assert Path(captured["labs_pdf"]).read_bytes() == b"synthetic input PDF"
 
 
-def test_unrecognized_lab_layout_fails_the_upload_job_visibly(tmp_path, monkeypatch):
+def test_unrecognized_lab_layout_fails_the_upload_job_visibly(staff_client, tmp_path, monkeypatch, capsys):
     import fitz
 
     monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
@@ -86,38 +86,39 @@ def test_unrecognized_lab_layout_fails_the_upload_job_visibly(tmp_path, monkeypa
     pdf_bytes = document.tobytes()
     document.close()
 
-    response = app.app.test_client().post("/generate", data={
+    response = staff_client.post("/generate", data={
         "patient_name": "Pat Synthetic",
         "labs_pdf": (io.BytesIO(pdf_bytes), "unknown-layout.pdf"),
     })
 
     job_id = re.search(r'data-job-id="([a-f0-9]+)"', response.get_data(as_text=True)).group(1)
-    _, status = _wait_for_status(app.app.test_client(), job_id, "error")
-    assert "zero recognized marker rows" in status["error"]
+    _, status = _wait_for_status(staff_client, job_id, "error")
+    assert status["error"] == f"Generation failed. Job ID: {job_id}"
     assert "report_url" not in status
+    log = capsys.readouterr().out
+    assert f"generation failed job_id={job_id}" in log and "zero recognized marker rows" in log
     assert not (tmp_path / "jobs" / job_id / "report.pdf").exists()
 
 
-def test_generate_status_surfaces_background_pipeline_errors(tmp_path, monkeypatch):
+def test_generate_status_shows_a_plain_failure_with_the_job_id(staff_client, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
 
     def fake_run(**_kwargs):
         raise pipeline.AnthropicAPIError("Anthropic API timed out during extraction. Please retry the report.")
 
     with patch.object(app.pipeline, "run", side_effect=fake_run):
-        response = app.app.test_client().post("/generate", data={"patient_name": "Test Patient"})
+        response = staff_client.post("/generate", data={"patient_name": "Test Patient"})
 
     job_id = re.search(r'data-job-id="([a-f0-9]+)"', response.get_data(as_text=True)).group(1)
-    _, status = _wait_for_status(app.app.test_client(), job_id, "error")
-    assert status == {
-        "status": "error",
-        "error": "Anthropic API timed out during extraction. Please retry the report.",
-    }
+    _, status = _wait_for_status(staff_client, job_id, "error")
+    assert status == {"status": "error", "error": f"Generation failed. Job ID: {job_id}", "job_id": job_id}
+    log = capsys.readouterr().out
+    assert f"generation failed job_id={job_id}" in log and "Anthropic API timed out" in log
 
-def test_invalid_collected_date_is_rejected_before_job_starts(tmp_path, monkeypatch):
+def test_invalid_collected_date_is_rejected_before_job_starts(staff_client, tmp_path, monkeypatch):
     monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
     with patch.object(app.pipeline, "run") as run:
-        response = app.app.test_client().post(
+        response = staff_client.post(
             "/generate", data={"patient_name": "Test Patient", "collected_date": "2026-02-30"})
     assert response.status_code == 302
     run.assert_not_called()
@@ -139,10 +140,10 @@ def _lab_pdf_bytes(scanned):
     return data
 
 
-def test_scanned_lab_pdf_requires_collected_date_before_job_starts(tmp_path, monkeypatch):
+def test_scanned_lab_pdf_requires_collected_date_before_job_starts(staff_client, tmp_path, monkeypatch):
     monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
     with patch.object(app.pipeline, "run") as run:
-        client = app.app.test_client()
+        client = staff_client
         response = client.post("/generate", data={
             "patient_name": "Test Patient",
             "labs_pdf": (io.BytesIO(_lab_pdf_bytes(scanned=True)), "scanned-labs.pdf"),
@@ -154,7 +155,7 @@ def test_scanned_lab_pdf_requires_collected_date_before_job_starts(tmp_path, mon
 
 
 @pytest.mark.parametrize("scanned", [True, False])
-def test_lab_pdf_with_date_or_without_scans_starts_job(tmp_path, monkeypatch, scanned):
+def test_lab_pdf_with_date_or_without_scans_starts_job(staff_client, tmp_path, monkeypatch, scanned):
     monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
     pdf = _lab_pdf_bytes(scanned)
     data = {"patient_name": "Test Patient", "labs_pdf": (io.BytesIO(pdf), "labs.pdf")}
@@ -162,7 +163,7 @@ def test_lab_pdf_with_date_or_without_scans_starts_job(tmp_path, monkeypatch, sc
         data["collected_date"] = "2026-04-14"
     with patch.object(app.pipeline, "run", return_value=str(tmp_path / "review.txt")):
         (tmp_path / "review.txt").write_text("synthetic review", encoding="utf-8")
-        response = app.app.test_client().post("/generate", data=data)
+        response = staff_client.post("/generate", data=data)
     assert response.status_code == 200
     job_id = re.search(r'data-job-id="([a-f0-9]+)"', response.get_data(as_text=True)).group(1)
     assert (tmp_path / "jobs" / job_id / "labs.pdf").read_bytes() == pdf
