@@ -66,6 +66,12 @@ class BloodworkParseError(RuntimeError):
     """A recognized bloodwork row or section could not be read under the column rule."""
 
 
+class BloodworkHardStop(BloodworkParseError):
+    """A parse failure that must stop the whole report: conflicting duplicate results or a
+    contradictory identity (e.g. one Order ID printing two Collected dates). Every other
+    BloodworkParseError excludes only the page or section it came from."""
+
+
 class AnthropicAPIError(RuntimeError):
     """An Anthropic API request could not complete."""
 
@@ -1354,7 +1360,7 @@ def _dedupe_bloodwork_rows(occurrences, audit):
             same_value = previous["value"] == occurrence["value"] and (
                 previous["value"] is not None or previous["disp_value"] == occurrence["disp_value"])
             if previous["status"] != occurrence["status"] or not same_value:
-                raise BloodworkParseError(
+                raise BloodworkHardStop(
                     f"{occurrence['name']} on {occurrence['date_display']}: conflicting results on "
                     f"pages {sources[key][0]} and {page}: "
                     f"{previous['disp_value'] or previous['status']!r} versus "
@@ -1370,7 +1376,8 @@ def _dedupe_bloodwork_rows(occurrences, audit):
     return list(unique.values())
 
 
-def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None) -> tuple[list[dict], list[dict]]:
+def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
+                            exclusions=None) -> tuple[list[dict], list[dict]]:
     """One rule for every Quest/Cleveland HeartLab section: each result printed in a test-name row is
     paired with the date governing its column - a Current-style column takes its section's own
     Collected: date, a Historical column takes the date printed in its own header. Sections are split
@@ -1406,25 +1413,34 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None) -> tup
             known = [_normalize_date_for_matching(d) for d in section["dates"]]
             key = _normalize_date_for_matching(date)
             if known and key not in known:
-                raise BloodworkParseError(
+                raise BloodworkHardStop(
                     f"Order ID {section['order_id']} prints conflicting Collected: dates "
                     f"{section['dates'][0]!r} and {date!r}")
             if key not in known:
                 section["dates"].append(date)
 
+    excluded = exclusions if exclusions is not None else []
+
+    def rollback(marks):
+        del occurrences[marks[0]:], unrecognized[marks[1]:], audit[marks[2]:]
+
     def flush(page):
         if state["header"] is not None and state["rows"]:
             state["section"]["_page"] = page_number
-            _parse_table_region(page, state["rows"], state["header"], state["section"],
-                                occurrences, unrecognized, audit, printed_lab_codes)
+            marks = (len(occurrences), len(unrecognized), len(audit))
+            try:
+                _parse_table_region(page, state["rows"], state["header"], state["section"],
+                                    occurrences, unrecognized, audit, printed_lab_codes)
+            except BloodworkHardStop:
+                raise
+            except BloodworkParseError as error:
+                # Exclude only this table region; never keep part of it or guess.
+                rollback(marks)
+                excluded.append({"page": page_number, "section": _section_label(state["section"]),
+                                 "reason": str(error)})
         state["rows"] = []
 
-    for page_number, page in enumerate(pdf_pages, 1):
-        state.update(header=None, excluded=False, await_dates=False, pending_dates=[], recent_lines=[])
-        page_words = _page_words(page)
-        if not page_words:
-            unreadable.append(page_number)
-            continue
+    def parse_page(page, page_words):
         for words in _group_lines(page_words, _LINE_TOLERANCE_PT):
             text = _line_text(words)
             order = _ORDER_ID_RE.search(text)
@@ -1494,6 +1510,23 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None) -> tup
                 continue
             state["rows"].append(words)
         flush(page)
+
+    for page_number, page in enumerate(pdf_pages, 1):
+        state.update(header=None, excluded=False, await_dates=False, pending_dates=[], recent_lines=[])
+        page_words = _page_words(page)
+        if not page_words:
+            unreadable.append(page_number)
+            continue
+        page_marks = (len(occurrences), len(unrecognized), len(audit))
+        try:
+            parse_page(page, page_words)
+        except BloodworkHardStop:
+            raise
+        except BloodworkParseError as error:
+            # Exclude only this page: everything it added is removed, nothing is guessed.
+            rollback(page_marks)
+            state.update(header=None, rows=[], excluded=False, await_dates=False, recent_lines=[])
+            excluded.append({"page": page_number, "section": "whole page", "reason": str(error)})
     if unreadable:
         warning = (f"Lab PDF pages {', '.join(map(str, unreadable))}: no readable text, "
                    "OCR not supported, manual review required")
@@ -1726,7 +1759,7 @@ def _merge_scan_occurrences(digital, scanned, row_audit):
         if previous is not None:
             if (previous["status"], previous["value"], previous["disp_value"]) != (
                     row["status"], row["value"], row["disp_value"]):
-                raise BloodworkParseError(
+                raise BloodworkHardStop(
                     f"{row['name']} on {row['date_display']}: conflicting results on pages {provenance[key]}")
             previous["source_label"] = previous["source_label"].split("; pages ", 1)[0] + \
                 "; pages " + ", ".join(map(str, sorted(set(provenance[key]))))
@@ -1896,6 +1929,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     occurrences, unrecognized, lab_review_notes = [], [], []
     row_audit = []
     scan_numbers = []
+    parse_exclusions = []  # pages/sections that could not be parsed deterministically
     dob_sources = []  # (source label, (y, m, d)); used only to compute age, never stored
     printed_names = []  # (source, page or None, name as printed) for the staff-notes header
     if labs_pdf:
@@ -1914,7 +1948,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                         dob_sources.append((f"lab page {page.number + 1}", dob))
             if digital_pages:
                 occurrences, unrecognized = _parse_bloodwork_tables(
-                    digital_pages, row_audit=row_audit, review_notes=lab_review_notes)
+                    digital_pages, row_audit=row_audit, review_notes=lab_review_notes,
+                    exclusions=parse_exclusions)
             if scans:
                 scanned, scan_unknown, scan_notes = _extract_scan_bloodwork(
                     scans, digital_pages, client, row_audit, patient_name, collected_date, dob_sources,
@@ -1954,6 +1989,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "lab_reported": lab_items,
         "source_rows": row_audit,
         "scan_summary": scan_summary,
+        "parse_exclusions": parse_exclusions,
         "dexa_summary": dexa_summary,
         "printed_names": printed_names,
         **_age_from_dob(dob_sources, latest["date_display"] if latest else None),
@@ -2224,6 +2260,13 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     notice.other_notes.extend(extracted.get("other_notes", []))
     notice.scan_summary = list(extracted.get("scan_summary", []))
     notice.dexa_summary = list(extracted.get("dexa_summary", []))
+    exclusions = extracted.get("parse_exclusions", [])
+    if exclusions:
+        pages = sorted({item["page"] for item in exclusions})
+        notice.incomplete = [
+            f"INCOMPLETE - pages/sections excluded: lab PDF page(s) {', '.join(map(str, pages))} could not be "
+            "parsed deterministically; their results are NOT in this report - review them by hand",
+            *[f"  - page {item['page']} ({item['section']}): {item['reason']}" for item in exclusions]]
     notice.name_header = name_header(extracted.get("name"), extracted.get("printed_names", []))
     unrecognized_names = {" ".join(item["raw_name"].split()).casefold()
                           for item in extracted.get("unrecognized_markers", [])}

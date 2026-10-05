@@ -63,6 +63,12 @@ Each readable bloodwork page must print its own Current/Historical column header
 dates), or In Range / Out of Range columns. Table state never carries across pages; readable
 pages without a header contribute no rows.
 
+A table section or page that cannot be parsed deterministically is excluded as a whole (nothing
+from it is kept or guessed) and the report is built from everything else. The staff notes then
+open with "INCOMPLETE - pages/sections excluded", listing each page, section and reason.
+Conflicting duplicate results for one marker and date, and one Order ID printing two Collected
+dates, still stop the report (`BloodworkHardStop`), as does a lab PDF where nothing parses.
+
 ### Scanned (image-only) pages
 
 Pages without readable text are rendered at 200 dpi and transcribed twice in independent

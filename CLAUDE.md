@@ -80,8 +80,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      vision model, and `scan_bloodwork.gate_staff_identified_reads` keeps a row only when both
      reads agree and it passes the value-format and flag-vs-range checks. Staff-entered name
      and Collected date identify the pages.
-   - `_merge_scan_occurrences` combines both sources; conflicting results for the same marker
-     and date raise `BloodworkParseError`.
+   - `_merge_scan_occurrences` combines both sources.
+   - A section or page that cannot be parsed is excluded whole and listed under "INCOMPLETE" at the
+     top of the staff notes; the rest of the report is built. `BloodworkHardStop` (conflicting
+     duplicate results, one Order ID with two Collected dates) still stops the job.
 3. **DEXA**: `_extract_dexa_with_claude` renders every DEXA page and `scan_dexa` reads it twice; a
    measurement is kept only when both reads agree, a scan date the reads disagree on drops the
    whole scan, a page printing another patient's name is dropped, and kept scans are merged by date
