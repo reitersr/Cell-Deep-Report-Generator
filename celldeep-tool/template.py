@@ -665,7 +665,8 @@ def _lab_flag_words(flag) -> str:
 
 def lab_flag_differs(m) -> bool:
     """The lab printed H/L for the current result while CellDeep calls it optimal."""
-    return bool(m.lab_flag_now) and m.lab_flag_now in clinic_config.LAB_FLAG_WORDS and m.now_tier == "optimal"
+    return (bool(m.lab_flag_now) and m.lab_flag_now in clinic_config.LAB_FLAG_WORDS
+            and m.now_tier in clinic_config.LAB_FLAG_DISAGREES_WITH)
 
 
 def _lab_flag_line(m) -> str:
@@ -673,9 +674,10 @@ def _lab_flag_line(m) -> str:
     if not (clinic_config.SHOW_LAB_FLAG_WHEN_IT_DIFFERS and lab_flag_differs(m)):
         return ""
     lab_range = (m.lab_range_now or {}).get("display")
-    range_text = f" (lab range {_html(lab_range)})" if lab_range else ""
-    word = _html(clinic_config.LAB_FLAG_WORDS[m.lab_flag_now])
-    return f'<span class="lab-flag-line">Lab flag: {word}{range_text}</span>'
+    range_text = f" ({clinic_config.LAB_RANGE_LABEL} {_html(lab_range)})" if lab_range else ""
+    text = clinic_config.LAB_FLAG_LINE.format(flag=_html(clinic_config.LAB_FLAG_WORDS[m.lab_flag_now]),
+                                              lab_range=range_text)
+    return f'<span class="lab-flag-line">{text}</span>'
 
 
 def bio_row_tr(m, copy, color_override=None):

@@ -1,7 +1,13 @@
-"""Clinic-decision defaults. Every setting here is a clinical or wording choice the clinic owns.
+"""Clinic-decision defaults for censored results, lab flags and range display.
 
-Change a value here (in a reviewed pull request) instead of editing code; nothing in this file is
-computed from patient data, and no setting may invent a value, range or status.
+Every setting here is a clinical or wording choice the clinic owns. Change a value here (in a reviewed
+pull request) instead of editing code. Nothing in this file is computed from patient data, and no
+setting may invent a value, range or status. test_clinic_config.py checks that every setting has its
+own comment and that its wording is not duplicated in code.
+
+Fixed rules that are NOT settings (they follow from "never infer"): a censored result is never
+converted to a number, never given a CellDeep tier and never counted in any score; the lab's flag is
+only ever the flag the lab printed, never computed.
 """
 
 # ---- Censored results (a value printed as a limit, e.g. "<0.7" or ">2000") -----------------------
@@ -19,6 +25,9 @@ CENSORED_CHIP_LABEL = "Reported as a limit, not scored"
 # "SEE NOTE"). Shown as printed, no CellDeep tier.
 UNSCORABLE_CHIP_LABEL = "Shown as reported, not scored"
 
+# Label of the patient summary bullet that counts censored results separately from the scores.
+CENSORED_SUMMARY_LABEL = "Reported as a limit"
+
 
 # ---- Lab flag that disagrees with the CellDeep status ----------------------------------------------
 
@@ -27,6 +36,15 @@ UNSCORABLE_CHIP_LABEL = "Shown as reported, not scored"
 # "Lab flag: Low (lab range 38-380)". The CellDeep status itself never changes. False hides the line;
 # the staff notes list every disagreement either way.
 SHOW_LAB_FLAG_WHEN_IT_DIFFERS = True
+
+# CellDeep statuses that count as disagreeing with a printed lab H/L flag. Default: only "optimal"
+# (a result the lab calls High or Low that CellDeep calls Optimal). Add "moderate" to also show the
+# line when CellDeep calls the result Moderate.
+LAB_FLAG_DISAGREES_WITH = ("optimal",)
+
+# Wording of the line under the value. {flag} is the word from LAB_FLAG_WORDS; {lab_range} is
+# " (lab range <printed range>)" when the lab printed one, otherwise empty.
+LAB_FLAG_LINE = "Lab flag: {flag}{lab_range}"
 
 
 # ---- Range shown for a marker without a CellDeep threshold -------------------------------------------

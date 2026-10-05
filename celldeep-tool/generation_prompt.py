@@ -13,6 +13,7 @@ from markers_reference import (CATEGORY_TAGLINES, DATA_TO_PATIENT_CATEGORY, MARK
                                NARRATIVE_CATEGORY_OVERRIDE, SYSTEM_ORDER)
 from schema import normalize_date_for_matching
 from scoring import is_censored
+import clinic_config
 
 PATIENT_SYSTEMS = ("Drive", "Pace", "Fuel", "Flow", "Repair", "Reserves")
 _TIER_WORDS = {"optimal": "optimal", "moderate": "moderate", "flag": "flagged"}
@@ -236,7 +237,8 @@ def build_copy(record) -> dict:
         bullets.append(f"<b>Not retested this round:</b> {', '.join(m.name for m in not_retested)}.")
     censored = [m for m in markers if is_censored(m.disp_now, m.now)]
     if censored:
-        bullets.append(f"<b>Reported as a limit:</b> {_count_phrase(len(censored), 'result was', 'results were')} "
+        bullets.append(f"<b>{clinic_config.CENSORED_SUMMARY_LABEL}:</b> "
+                       f"{_count_phrase(len(censored), 'result was', 'results were')} "
                        "reported by the lab as a limit (such as &lt;0.7 or &gt;2000) rather than an exact number: "
                        f"{', '.join(m.name for m in censored)}. "
                        f"{plural(len(censored), 'It is', 'These are')} shown exactly as printed and "
