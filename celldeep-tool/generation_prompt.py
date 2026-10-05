@@ -12,6 +12,7 @@ fact. "Baseline"/"starting point" claims resolve via min() on normalized date;
 from markers_reference import (CATEGORY_TAGLINES, DATA_TO_PATIENT_CATEGORY, MARKER_DESCRIPTIONS,
                                NARRATIVE_CATEGORY_OVERRIDE, SYSTEM_ORDER)
 from schema import normalize_date_for_matching
+from scoring import is_censored
 
 PATIENT_SYSTEMS = ("Drive", "Pace", "Fuel", "Flow", "Repair", "Reserves")
 _TIER_WORDS = {"optimal": "optimal", "moderate": "moderate", "flag": "flagged"}
@@ -218,6 +219,12 @@ def build_copy(record) -> dict:
         bullets.append(f"<b>Remaining focus:</b> {marker_sentence(priority)}")
     if not_retested:
         bullets.append(f"<b>Not retested this round:</b> {', '.join(m.name for m in not_retested)}.")
+    censored = [m for m in markers if is_censored(m.disp_now, m.now)]
+    if censored:
+        bullets.append(f"<b>Reported as a limit:</b> {_count_phrase(len(censored), 'result was', 'results were')} "
+                       "reported by the lab as a limit (such as &lt;0.7 or &gt;2000) rather than an exact number: "
+                       f"{', '.join(m.name for m in censored)}. These are shown as printed and are not part of "
+                       "any score.")
     dexa_delta = _dexa_delta(record)
     if dexa_delta:
         bullets.append(f"<b>Body composition:</b> {dexa_delta}")

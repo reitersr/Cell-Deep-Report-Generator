@@ -25,6 +25,8 @@ import scoring
 from dexa_reference import dexa_percent_optimized
 from markers_reference import DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
 from unknown_marker_policy import STAFF_NOTE_MARKERS
+from html import escape as html_escape
+import clinic_config
 
 AQUA = "#81CADF"
 AQUA_DK = "#3E7C93"
@@ -334,6 +336,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .lab-pill{{background:{MIDGRAY}22; color:{INK};}}
 .lab-flag{{font-weight:700; margin-left:3px;}}
 .dexa-est{{font-size:8px; font-weight:600; color:{MUTE}; text-transform:lowercase; margin-left:2px;}}
+.lab-flag-words{{font-size:10px; color:{MUTE}; font-weight:600;}}
 .bio-note{{font-size:9.5px; color:{DARKGRAY}; line-height:1.3; font-style:italic; max-width:6.2in;}}
 '''
 
@@ -647,20 +650,35 @@ def protocol_section(record: PatientRecord, roll, copy):
     return ""
 
 
+def _html(text) -> str:
+    return html_escape(text or "")
+
+
+def _lab_flag_words(flag) -> str:
+    """' - lab flag High' for a printed flag; empty when the lab printed none. Never computed."""
+    if not flag:
+        return ""
+    return f'<span class="lab-flag-words"> - lab flag {_html(clinic_config.LAB_FLAG_WORDS.get(flag, flag))}</span>'
+
+
 def bio_row_tr(m, copy, color_override=None):
     # A capped/inequality result (e.g. "<0.7") is a real current reading even with now=None,
     # so all three of now/now_tier/disp_now must be empty before calling this "not retested".
     not_retested = m.now is None and m.now_tier is None and not m.disp_now
     unscored = m.unscored_reason == "missing_threshold"
+    censored_now = scoring.is_censored(m.disp_now, m.now)
     if unscored:
         color = MUTE
         tier_word = "Reference range pending"
     elif not_retested:
         color = MUTE
         tier_word = "Not retested"
+    elif censored_now:
+        color = MUTE
+        tier_word = clinic_config.CENSORED_CHIP_LABEL
     elif m.now_tier is None:
         color = MUTE
-        tier_word = "Current result needs review"
+        tier_word = clinic_config.UNSCORABLE_CHIP_LABEL
     else:
         color = color_override or TIER_COLOR.get(m.now_tier, MUTE)
         tier_word = {"optimal": "Optimal", "moderate": "Moderate", "flag": "Flagged"}[m.now_tier]
@@ -672,10 +690,16 @@ def bio_row_tr(m, copy, color_override=None):
         then_color = MUTE if unscored else TIER_COLOR.get(m.then_tier, YELLOW)
         then_date = f'<span class="bio-date">{fmt_date(m.then_date_display)}</span>' if m.then_date_display else ""
         then_cell = f'<span class="bio-pill" style="background:{then_color}22; color:{then_color};">{fmt(m.disp_then)}</span>{then_date}'
+    elif scoring.is_censored(m.disp_then, m.then):
+        then_date = f'<span class="bio-date">{fmt_date(m.then_date_display)}</span>' if m.then_date_display else ""
+        then_cell = (f'<span class="bio-pill" style="background:{MUTE}22; color:{MUTE};">{_html(m.disp_then)}</span>'
+                     f'{_lab_flag_words(m.lab_flag_then)}{then_date}')
     else:
         then_cell = f'<span class="bio-dash">{fmt(m.disp_then)}</span>'
     now_date = f'<span class="bio-date">{fmt_date(m.now_date_display)}</span>' if m.now_date_display else ""
-    now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{fmt(m.disp_now)}</span>{unit}{now_date}'
+    now_text = _html(m.disp_now) if censored_now else fmt(m.disp_now)
+    now_flag = _lab_flag_words(m.lab_flag_now) if censored_now else ""
+    now_cell = f'<span class="bio-pill now" style="background:{bg}; color:{color};">{now_text}</span>{now_flag}{unit}{now_date}'
     note_html = ""
     if note:
         note_text = _join_sentences(what, note)

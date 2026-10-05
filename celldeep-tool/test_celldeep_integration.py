@@ -299,7 +299,7 @@ def test_rendered_retest_status_uses_current_value_not_score_tier():
     )
     html = template.bio_row_tr(marker, {})
     assert "Not retested" not in html
-    assert "Current result needs review" in html
+    assert "Shown as reported, not scored" in html and "needs review" not in html
 
 
 def test_capped_inequality_result_is_not_rendered_as_not_retested():
@@ -309,4 +309,4 @@ def test_capped_inequality_result_is_not_rendered_as_not_retested():
     )
     html = template.bio_row_tr(marker, {})
     assert "Not retested" not in html
-    assert "<0.7" in html
+    assert "&lt;0.7" in html and "Reported as a limit, not scored" in html

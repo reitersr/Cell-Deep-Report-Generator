@@ -241,6 +241,8 @@ def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
             "lab_range_now_lo": now_occ.get("lab_range_lo", 0) if now_occ else 0,
             "lab_range_now_hi": now_occ.get("lab_range_hi", 0) if now_occ else 0,
             "lab_range_now_display": now_occ.get("lab_range_display", "") if now_occ else "",
+            "lab_flag_then": (then_occ.get("lab_flag") or None) if then_occ else None,
+            "lab_flag_now": (now_occ.get("lab_flag") or None) if now_occ else None,
             "full_history": history,
         })
     return reconciled
@@ -1143,6 +1145,7 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
             "lab_range_lo": lab_lo,
             "lab_range_hi": lab_hi,
             "lab_range_display": lab_display,
+            "lab_flag": flags.get(index, "") if token is not None else "",
         })
     return True
 
@@ -1624,6 +1627,7 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         _parse_bloodwork_row(words, header, section, occurrences, unknown, row_name=name, allow_text=True)
         for occurrence in occurrences[start:]:
             occurrence["source_label"] += f"; pages {row['page']}"
+            occurrence["lab_flag"] = row["flag"] or "" if occurrence["disp_value"] else ""
         for item in unknown[unknown_start:]:
             for cell in item["cells"]:
                 cell["lab_flag"] = row["flag"] if cell["present"] else None
@@ -2037,6 +2041,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 now_date_display=raw.get("now_date_display"),
                 is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
                 full_history=raw.get("full_history", []),
+                lab_flag_then=raw.get("lab_flag_then"), lab_flag_now=raw.get("lab_flag_now"),
             )
             scoring_log_lines.append(f"OVERRIDE APPLIED: {canonical} range set to {lo}-{hi} per provider note")
         else:
@@ -2059,6 +2064,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 now_date_display=raw.get("now_date_display"),
                 is_good_then=raw.get("is_good_then"), is_good_now=raw.get("is_good_now"),
                 full_history=raw.get("full_history", []),
+                lab_flag_then=raw.get("lab_flag_then"), lab_flag_now=raw.get("lab_flag_now"),
             )
         scoring.attach_scores(m, sex=patient_sex, on_trt=on_trt)   # computes now_tier/then_tier/pct in place — pure math, no AI
         markers.append(m)
@@ -2100,6 +2106,14 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         lab_reported=[LabReportedResult(name=item["name"], group=item["group"], results=item["results"])
                       for item in extracted.get("lab_reported", [])],
     )
+    censored = [f"{m.name} {disp!r} on {date}" + (f" (lab flag {flag})" if flag else "")
+                for m in markers
+                for disp, value, date, flag in ((m.disp_then, m.then, m.then_date_display, m.lab_flag_then),
+                                                (m.disp_now, m.now, m.now_date_display, m.lab_flag_now))
+                if scoring.is_censored(disp, value)]
+    if censored:
+        notice.other_notes.append("CENSORED RESULTS (shown exactly as printed, excluded from every score): "
+                                  + "; ".join(censored))
     notice.other_notes.extend(extracted.get("other_notes", []))
     notice.scan_summary = list(extracted.get("scan_summary", []))
     notice.dexa_summary = list(extracted.get("dexa_summary", []))

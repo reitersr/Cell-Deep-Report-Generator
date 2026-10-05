@@ -326,9 +326,11 @@ EXTRACTION_OUTPUT_SCHEMA = {
                     "lab_range_lo": {"type": "number"},
                     "lab_range_hi": {"type": "number"},
                     "lab_range_display": {"type": "string"},
+                    # The lab's own printed H/L flag for this result, "" when none was printed.
+                    "lab_flag": {"type": "string"},
                 },
                 "required": ["name", "date_display", "source_label", "status", "value", "disp_value",
-                             "is_good", "lab_range_lo", "lab_range_hi", "lab_range_display"],
+                             "is_good", "lab_range_lo", "lab_range_hi", "lab_range_display", "lab_flag"],
             },
         },
         "dexa_history": {

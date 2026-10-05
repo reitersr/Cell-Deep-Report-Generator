@@ -8,6 +8,7 @@ runs identically every time given the same numbers. Tier and percentage
 are computed here, never left to the generation model to decide.
 """
 
+import re
 from schema import Marker
 
 
@@ -124,6 +125,11 @@ def normalize_dexa_body_fat(dexa_data: dict) -> dict:
     value = (fat_mass / total_mass) * 100
     dexa_data["body_fat_pct"] = f"{value:.1f}%"
     return dexa_data
+
+
+def is_censored(disp, value) -> bool:
+    """A result printed as a limit ("<0.7", ">2000", "<=5"): shown as printed, never scored."""
+    return value is None and bool(re.match(r"\s*(?:<=?|>=?|≤|≥)\s*\d", disp or ""))
 
 
 def score_bounded(value: float, direction: str, optimal: float, moderate: float, inclusive: bool = True):
