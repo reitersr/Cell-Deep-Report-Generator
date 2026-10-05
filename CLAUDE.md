@@ -67,7 +67,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
 
 ## Data flow
 
-1. **Upload** (`app.generate`, staff login required via `CELLDEEP_STAFF_PASSWORD`): patient name,
+1. **Upload** (`app.generate`, staff login required via `CELLDEEP_STAFF_PASSWORD`; sessions signed with
+   `CELLDEEP_SECRET_KEY`, else a key derived from the password, never a per-process random key;
+   every protected route goes through `app.is_staff_session`): patient name,
    age, sex, lab PDF, DEXA PDF(s), provider note, Vitality Index, and the bloodwork Collected date
    (required when the lab PDF has image-only pages). Runs `pipeline.run` in a background job; a
    failure shows "Generation failed. Job ID: <id>".
