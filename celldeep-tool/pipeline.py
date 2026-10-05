@@ -647,7 +647,8 @@ def _nearby_cadence(note_text: str, start: int, end: int) -> str | None:
 
 
 def verify_extraction_completeness(extracted: dict, provider_note_text: str = "",
-                                   lab_text: str = "", dexa_text: str = "") -> ExtractionReviewNotice:
+                                   lab_text: str = "", dexa_text: str = "",
+                                   dexa_scanned: bool = False) -> ExtractionReviewNotice:
     """Verify model omissions against source text without inventing lab values."""
     notice = ExtractionReviewNotice()
     log_lines = []
@@ -720,7 +721,13 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
         numeric = value.rstrip("%").strip()
         date_match = dexa_text.lower().find(date.lower()) if date else -1
         context = dexa_text[max(0, date_match - 500):date_match + 500] if date_match >= 0 else dexa_text
-        if numeric and numeric not in context and value not in context:
+        if numeric and (not dexa_text.strip() or (dexa_scanned and date_match < 0)):
+            # A scanned DEXA page has no text layer, so absence from the text proves nothing.
+            warning = (f"DEXA SOURCE IS SCANNED: body fat % for {date} = {value} cannot be checked against "
+                       "source text; compare it with the scan image")
+            notice.other_notes.append(warning)
+            log_lines.append(warning)
+        elif numeric and numeric not in context and value not in context:
             warning = (f"WARNING: DEXA BODY FAT % FOR {date} = {value} NOT FOUND VERBATIM IN SOURCE PDF - "
                        "POSSIBLE HALLUCINATION, NEEDS HUMAN REVIEW")
             notice.other_notes.append(warning)
@@ -1526,6 +1533,42 @@ def has_scanned_pages(pdf_bytes: bytes) -> bool:
         return False  # Unreadable PDFs fail visibly in the report job.
 
 
+def _has_image_only_pages(paths: list[str]) -> bool:
+    for path in paths:
+        with fitz.open(path) as document:
+            if any(not _page_words(page) for page in document):
+                return True
+    return False
+
+
+def _scan_summary(numbers: list[int], notes: list[str], collected_date: str | None) -> list[str]:
+    """The scanned-page outcome digest printed at the top of the staff notes."""
+    kept, excluded, pages, batch, mismatches = {}, [], [], [], []
+    for note in notes:
+        if note.startswith("STAFF REVIEW"):
+            mismatches.append(note)
+        elif match := re.match(r"source=scan page (\d+) accepted ", note):
+            kept[int(match[1])] = kept.get(int(match[1]), 0) + 1
+        elif match := re.match(r"source=scan page (\d+) excluded (.+?): (.+)$", note):
+            excluded.append(f"page {match[1]}: {match[2]} - {match[3]}")
+        elif match := re.match(r"source=scan page (\d+): (.+)$", note):
+            pages.append(f"page {match[1]}: {match[2]}")
+        elif note.startswith("source=scan pages"):
+            batch.append(note.split(": ", 1)[1] if ": " in note else note)
+    identity = (f"staff-entered patient name and Collected {collected_date}" if collected_date
+                else "printed page identity (no staff Collected date)")
+    lines = [f"SCANNED BLOODWORK - pages {', '.join(map(str, numbers))} - identified by {identity}",
+             f"  Kept: {sum(kept.values())} results"
+             + (f" ({', '.join(f'page {page}: {count}' for page, count in sorted(kept.items()))})" if kept else ""),
+             f"  Excluded: {len(excluded)} results"]
+    lines += [f"    - {item}" for item in excluded]
+    if pages:
+        lines.append("  Page outcomes:")
+        lines += [f"    - {item}" for item in pages]
+    lines += [f"  {item}" for item in batch + mismatches]
+    return lines
+
+
 def scan_collected_date(text: str) -> str:
     import scan_bloodwork as scan
 
@@ -1727,11 +1770,13 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     collected_date = scan_collected_date(collected_date) if collected_date else None
     occurrences, unrecognized, lab_review_notes = [], [], []
     row_audit = []
+    scan_numbers = []
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
             pages = list(document)
             digital_pages = [page for page in pages if _page_words(page)]
             scans = [page for page in pages if not _page_words(page)]
+            scan_numbers = [page.number + 1 for page in scans]
             if digital_pages:
                 occurrences, unrecognized = _parse_bloodwork_tables(
                     digital_pages, row_audit=row_audit, review_notes=lab_review_notes)
@@ -1741,6 +1786,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                 occurrences = _merge_scan_occurrences(occurrences, scanned, row_audit)
                 unrecognized.extend(scan_unknown)
                 lab_review_notes.extend(scan_notes)
+    scan_summary = _scan_summary(scan_numbers, scan_notes, collected_date) if scan_numbers else []
     lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
     lab_review_notes.extend(lab_notes)
     dexa_history = _extract_dexa_with_claude(client, dexa_pdfs, patient_name) if dexa_pdfs else []
@@ -1767,6 +1813,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "unrecognized_markers": unrecognized,
         "lab_reported": lab_items,
         "source_rows": row_audit,
+        "scan_summary": scan_summary,
         "other_notes": [*lab_review_notes, *note["other_notes"]],
     }
 
@@ -2017,6 +2064,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                       for item in extracted.get("lab_reported", [])],
     )
     notice.other_notes.extend(extracted.get("other_notes", []))
+    notice.scan_summary = list(extracted.get("scan_summary", []))
     unrecognized_names = {" ".join(item["raw_name"].split()).casefold()
                           for item in extracted.get("unrecognized_markers", [])}
     notice.other_notes[:0] = coverage_gaps(extracted.get("source_rows", []), record, unrecognized_names)
@@ -2066,6 +2114,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     # Protocol comes only from the note's structured Protocol section, never from scanning its prose.
     completeness_notice = verify_extraction_completeness(
         extracted, provider_note_text="", lab_text=raw_lab_text, dexa_text=raw_dexa_text,
+        dexa_scanned=_has_image_only_pages(dexa_pdfs),
     )
 
     print("Step 2/3: scoring (deterministic, no AI)...")

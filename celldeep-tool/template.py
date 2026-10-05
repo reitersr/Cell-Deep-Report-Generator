@@ -24,6 +24,7 @@ from schema import PatientRecord, DexaReading
 import scoring
 from dexa_reference import dexa_percent_optimized
 from markers_reference import DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERRIDE
+from unknown_marker_policy import STAFF_NOTE_MARKERS
 
 AQUA = "#81CADF"
 AQUA_DK = "#3E7C93"
@@ -742,6 +743,10 @@ def lab_reported_section(record: PatientRecord) -> str:
     </div>'''
 
 
+class StaffContentLeak(RuntimeError):
+    """Raised instead of writing a patient PDF that would contain staff-only QA text."""
+
+
 def render(record: PatientRecord, copy: dict, out_path: str,
            logo_traced_path: str | None = None, dexa_img_b64: str | None = None):
     """The single entry point. Produces a finished PDF at out_path."""
@@ -887,6 +892,10 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     {full_panel_html}
 </div>
 </body></html>'''
+
+    leaks = [marker for marker in STAFF_NOTE_MARKERS if marker in HTML]
+    if leaks:
+        raise StaffContentLeak(f"Staff QA text reached the patient report: {leaks}; report not written")
 
     html_path = out_path.replace(".pdf", ".html")
     import os
