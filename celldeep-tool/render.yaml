@@ -9,7 +9,9 @@ services:
         sync: false
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "0"
-      - key: FLASK_SECRET_KEY
+      # Stable session-signing key shared by every worker and restart (falls back to one derived from
+      # CELLDEEP_STAFF_PASSWORD when unset).
+      - key: CELLDEEP_SECRET_KEY
         generateValue: true
       # Shared staff password for the whole site; set it in the Render dashboard, never in code.
       - key: CELLDEEP_STAFF_PASSWORD

@@ -4,6 +4,7 @@ CellDeep Report Generator — Web App
 A minimal Flask wrapper around pipeline.py.
 """
 
+import hashlib
 import hmac
 import os
 import json
@@ -18,18 +19,37 @@ import uuid
 
 from flask import (Flask, abort, request, render_template, send_file, flash, redirect, url_for, jsonify,
                    session)
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import pipeline
 import tmp_cleanup
 
+STAFF_PASSWORD_ENV = "CELLDEEP_STAFF_PASSWORD"
+SECRET_KEY_ENV = "CELLDEEP_SECRET_KEY"
+
+
+def secret_key_from_environment() -> str | bytes:
+    """The session-signing key, identical in every process so a login survives worker restarts,
+    redeploys and multiple instances. CELLDEEP_SECRET_KEY (or the older FLASK_SECRET_KEY) wins; otherwise
+    it is derived from the staff password, so rotating the password also ends every session. Without
+    either, login is disabled anyway and a random key is used."""
+    explicit = os.environ.get(SECRET_KEY_ENV) or os.environ.get("FLASK_SECRET_KEY")
+    if explicit:
+        return explicit
+    password = os.environ.get(STAFF_PASSWORD_ENV)
+    if password:
+        return hmac.new(password.encode("utf-8"), b"celldeep-session-signing-key-v1", hashlib.sha256).hexdigest()
+    return os.urandom(32)
+
+
 app = Flask(__name__)
-# No secret in code: Render generates FLASK_SECRET_KEY; without it each process uses a random key.
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+app.secret_key = secret_key_from_environment()
+# Render terminates TLS and forwards plain HTTP with X-Forwarded-Proto/Host; trust exactly one proxy hop.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=True,
-                  PERMANENT_SESSION_LIFETIME=timedelta(hours=12))
+                  SESSION_COOKIE_PATH="/", PERMANENT_SESSION_LIFETIME=timedelta(hours=12))
 JOBS_DIR = Path("/tmp/celldeep_jobs")
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
-STAFF_PASSWORD_ENV = "CELLDEEP_STAFF_PASSWORD"
 _CLEANUP_INTERVAL_SECONDS = 15 * 60
 _last_cleanup = 0.0
 
@@ -55,12 +75,20 @@ if "pytest" not in sys.modules:  # tests call tmp_cleanup directly
     threading.Thread(target=_cleanup_loop, daemon=True, name="celldeep-tmp-cleanup").start()
 
 
+PUBLIC_ENDPOINTS = ("login", "static")
+
+
+def is_staff_session() -> bool:
+    """The one check every protected route uses (upload, status polling, downloads, note check...)."""
+    return session.get("staff_authenticated") is True
+
+
 @app.before_request
 def require_staff_login():
     """Every page needs the shared staff password (CELLDEEP_STAFF_PASSWORD); nothing is public."""
     if time.time() - _last_cleanup > _CLEANUP_INTERVAL_SECONDS and "pytest" not in sys.modules:
         _run_cleanup()
-    if request.endpoint in ("login", "static") or session.get("staff_authenticated") is True:
+    if request.endpoint in PUBLIC_ENDPOINTS or is_staff_session():
         return None
     if request.path.startswith(("/generate/status", "/note/check")):
         return jsonify({"status": "error", "error": "Staff login required"}), 401

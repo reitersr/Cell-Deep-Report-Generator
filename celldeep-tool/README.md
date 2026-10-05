@@ -31,7 +31,10 @@ local only) or `CELLDEEP_LIVE_VISION=1` skip otherwise.
 
 - **Staff login.** Every page requires the shared staff password from the `CELLDEEP_STAFF_PASSWORD`
   environment variable (set in the Render dashboard; never in code or logs). Without it the site
-  is locked. Sessions last 12 hours; "Sign out" is on the upload page.
+  is locked. Sessions last 12 hours; "Sign out" is on the upload page. Sessions are signed with
+  `CELLDEEP_SECRET_KEY` (set it to a long random value; if unset, a key derived from the staff
+  password is used), so a login survives worker restarts and redeploys. Changing the password or
+  the key signs everyone out.
 - **Automatic deletion.** Uploaded files, generated reports, review notes and extraction audits
   are deleted from `/tmp` six hours after their last write (`tmp_cleanup.py`; runs at startup,
   every 15 minutes and on requests).
