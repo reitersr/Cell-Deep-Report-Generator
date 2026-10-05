@@ -1,8 +1,9 @@
 # CellDeep Provider Notes
 
-<!-- Every line below a "## " heading must follow that section's format exactly. A note that doesn't
-is rejected and flagged for manual entry; it is never read any other way. Text inside these comment
-markers is ignored. -->
+<!-- Every line below a "## " heading must follow that section's format exactly. A line that doesn't
+is not read: it is listed (with its line number and the reason) on the upload page's "Check note
+format" button and in the staff QA file, and is never read any other way. A note with no "## "
+sections is not read at all. Text inside these comment markers is ignored. -->
 
 ## Consultation Note
 

@@ -27,6 +27,13 @@
     .row > div { flex: 1; }
     .result { border: 1px solid #6FA287; background: #6FA28718; padding: 16px; border-radius: 6px; margin-bottom: 20px; }
     .result a { display: block; color: #3E7C93; font-weight: 700; margin-top: 8px; }
+    button.secondary { width: auto; margin-top: 8px; padding: 7px 14px; font-size: 13px; background: #fff; color: #373436; border: 1px solid #373436; }
+    button.secondary:hover { background: #f3f1ef; }
+    .note-check { font-size: 12.5px; margin-top: 8px; padding: 10px 12px; border-radius: 6px; border: 1px solid #ccc; }
+    .note-check.ok { border-color: #6FA287; background: #6FA28718; }
+    .note-check.problems { border-color: #B75B4E; background: #B75B4E12; }
+    .note-check li { margin-top: 4px; }
+    .note-check code { white-space: pre-wrap; }
   </style>
 </head>
 <body>
@@ -79,8 +86,10 @@
     <div class="hint">Upload one or more. Leave blank if no DEXA this round.</div>
 
     <label>Provider's Consultation Note</label>
-    <textarea name="note_text" placeholder="Paste the structured provider note (see provider_notes_template.md)."></textarea>
-    <div class="hint">Must follow the structured provider-notes template. A note that doesn't is rejected and flagged for manual entry.</div>
+    <textarea id="note_text" name="note_text" placeholder="Paste the structured provider note."></textarea>
+    <div class="hint">Use the structured template: <a href="{{ url_for('provider_note_template') }}">download a blank provider note template</a>. Only lines that follow the template are read; any other line is listed for you and in the QA file, never guessed at.</div>
+    <button type="button" class="secondary" id="check-note">Check note format</button>
+    <div id="note-check" class="note-check" hidden></div>
 
     <fieldset>
       <legend>Vitality Index</legend>
@@ -109,5 +118,45 @@
 
     <button type="submit">Generate Report</button>
   </form>
+  <script>
+    document.getElementById("check-note").addEventListener("click", async () => {
+      const box = document.getElementById("note-check");
+      const body = new FormData();
+      body.append("note_text", document.getElementById("note_text").value);
+      box.hidden = false;
+      box.className = "note-check";
+      box.textContent = "Checking...";
+      try {
+        const response = await fetch("{{ url_for('check_note') }}", { method: "POST", body });
+        const result = await response.json();
+        box.textContent = "";
+        const summary = document.createElement("div");
+        if (!result.read && !result.rejected.length) {
+          summary.textContent = "No note entered.";
+        } else if (!result.read) {
+          summary.textContent = "No '## ' sections found, so nothing in this note will be read.";
+        } else {
+          summary.textContent = "Sections read: " + result.sections.join(", ") + ". " +
+            (result.rejected.length ? result.rejected.length + " line(s) will NOT be read:" : "Every line will be read.");
+        }
+        box.appendChild(summary);
+        if (result.rejected.length) {
+          const list = document.createElement("ul");
+          for (const item of result.rejected) {
+            const entry = document.createElement("li");
+            const text = document.createElement("code");
+            text.textContent = item.text;
+            entry.append("Line " + item.line + ": ", text, " - " + item.reason);
+            list.appendChild(entry);
+          }
+          box.appendChild(list);
+        }
+        box.className = "note-check " + (result.read && !result.rejected.length ? "ok" : "problems");
+      } catch (error) {
+        box.className = "note-check problems";
+        box.textContent = "Could not check the note: " + error;
+      }
+    });
+  </script>
 </body>
 </html>

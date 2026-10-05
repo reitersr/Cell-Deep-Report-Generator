@@ -37,6 +37,21 @@ def index():
     return render_template("index.html")
 
 
+NOTE_TEMPLATE = Path(__file__).resolve().parent / "templates" / "provider_notes_template.md"
+
+
+@app.route("/provider-note-template", methods=["GET"])
+def provider_note_template():
+    return send_file(NOTE_TEMPLATE, as_attachment=True, mimetype="text/markdown",
+                     download_name="celldeep_provider_note_template.md")
+
+
+@app.route("/note/check", methods=["POST"])
+def check_note():
+    """Which lines of a pasted provider note will be read, and why any others will not."""
+    return jsonify(pipeline.check_provider_note(request.form.get("note_text", "")))
+
+
 @app.route("/version", methods=["GET"])
 def version():
     response = jsonify({"commit": os.environ.get("RENDER_GIT_COMMIT", "unknown")})

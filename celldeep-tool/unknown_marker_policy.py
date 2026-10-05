@@ -56,7 +56,7 @@ class ExtractionReviewNotice:
 STAFF_NOTE_MARKERS = (
     "source=scan", "gate:", "STAFF REVIEW", "COVERAGE GAP", "NEEDS HUMAN REVIEW", "manual review required",
     "LAB-REPORTED CONFLICT", "PATIENT NAME MISMATCH", "SCANNED BLOODWORK", "ERROR: missing threshold",
-    "Unrecognized marker", "POSSIBLE HALLUCINATION", "PROVIDER NOTE REJECTED",
+    "Unrecognized marker", "POSSIBLE HALLUCINATION", "PROVIDER NOTE REJECTED", "PROVIDER NOTE:", "LINE(S) NOT READ",
 )
 
 

@@ -1678,12 +1678,22 @@ _PATIENT_SYSTEMS = ("Drive", "Pace", "Fuel", "Flow", "Repair", "Reserves", "Stru
 _VITALITY_VALUES = ("No Concern", "Some Concern", "Significant Concern", "Not Assessed")
 
 
-def _parse_structured_note(note_text: str) -> dict:
+def _parse_structured_note(note_text: str):
+    """Read the documented '## ' template line by line. A line that matches its section's format is
+    read; every other line is returned in `rejected` with its line number and reason, and is never
+    interpreted any other way. Returns (parsed, rejected, sections_seen, accepted_text)."""
     parsed = {"protocol": [], "pain_points": [], "marker_overrides": [], "vitality_index": {}}
-    text = re.sub(r"<!--.*?-->", "", note_text, flags=re.DOTALL)
+    # Blank out comments but keep their newlines so reported line numbers match the note as typed.
+    text = re.sub(r"<!--.*?-->", lambda match: "\n" * match.group(0).count("\n"), note_text, flags=re.DOTALL)
     section = None
-    seen = set()
+    seen = []
+    rejected = []
+    accepted_lines = []
     systems = {system.lower(): system for system in _PATIENT_SYSTEMS}
+
+    def reject(number, line, reason):
+        rejected.append({"line": number, "text": line, "reason": reason})
+
     for number, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line:
@@ -1691,31 +1701,47 @@ def _parse_structured_note(note_text: str) -> dict:
         if line.startswith("## "):
             name = line[3:].strip().lower()
             if name not in _NOTE_SECTIONS:
-                raise ProviderNoteFormatError(f"line {number}: unknown section {line[3:].strip()!r}")
-            if name in seen:
-                raise ProviderNoteFormatError(f"line {number}: section {line[3:].strip()!r} appears twice")
-            seen.add(name)
-            section = name
+                reject(number, line, "unknown section; expected one of: "
+                       + ", ".join(f"'## {title.title()}'" for title in _NOTE_SECTIONS))
+                section = "unknown"
+            elif name in seen:
+                reject(number, line, "section appears twice; only the first one is read")
+                section = "duplicate"
+            else:
+                seen.append(name)
+                section = name
+                accepted_lines.append(line)
             continue
         if section is None:
             if line.startswith("# "):
-                continue
-            raise ProviderNoteFormatError(f"line {number}: text outside a '## ' section")
+                accepted_lines.append(line)
+            else:
+                reject(number, line, "text outside a '## ' section")
+            continue
+        if section in ("unknown", "duplicate"):
+            reject(number, line, f"under {'an unknown' if section == 'unknown' else 'a repeated'} section "
+                   "heading, so it is not read")
+            continue
         if section == "consultation note":
+            accepted_lines.append(line)
             continue
         if not line.startswith("- "):
-            raise ProviderNoteFormatError(f"line {number}: expected a '- ' item under {section!r}")
+            reject(number, line, f"expected a '- ' item under '## {section.title()}'")
+            continue
         item = line[2:].strip()
         if section == "patient concerns":
             match = re.fullmatch(r"(?P<text>[^|\"]+?)\s*\|\s*Systems?:\s*(?P<systems>[^|]+)", item)
             names = [s.strip().lower() for s in match.group("systems").split(",")] if match else []
             if not match or not names or any(s not in systems for s in names):
-                raise ProviderNoteFormatError(f"line {number}: concern must read '<concern> | Systems: <system>, ...'")
+                reject(number, line, "concern must read '- <concern> | Systems: <system>, ...' using "
+                       + ", ".join(_PATIENT_SYSTEMS))
+                continue
             parsed["pain_points"].append({"text": match.group("text"), "categories": [systems[s] for s in names]})
         elif section == "protocol":
             match = re.fullmatch(r"(?P<name>[^|]+?)(?:\s*\|\s*Cadence:\s*(?P<cadence>[^|]+?))?", item)
             if not match:
-                raise ProviderNoteFormatError(f"line {number}: protocol item must read '<compound> | Cadence: <cadence>'")
+                reject(number, line, "protocol item must read '- <compound> | Cadence: <cadence>'")
+                continue
             known = lookup_protocol_item(match.group("name"))
             config = known[1] if known else {}
             parsed["protocol"].append({
@@ -1728,38 +1754,58 @@ def _parse_structured_note(note_text: str) -> dict:
             match = re.fullmatch(r"(?P<marker>[^:]+):\s*(?P<lo>\d+(?:\.\d+)?)\s*[-–]\s*(?P<hi>\d+(?:\.\d+)?)", item)
             marker = markers_reference_lookup(match.group("marker")) if match else None
             if not marker:
-                raise ProviderNoteFormatError(f"line {number}: target must read '<recognized marker>: <lo>-<hi>'")
+                reject(number, line, "target must read '- <recognized marker>: <lo>-<hi>'"
+                       + (f"; {match.group('marker').strip()!r} is not a recognized marker" if match else ""))
+                continue
             parsed["marker_overrides"].append({"marker": marker[0], "lo": float(match.group("lo")),
                                                "hi": float(match.group("hi"))})
         elif section == "vitality index":
             match = re.fullmatch(r"(?P<label>[^:]+):\s*(?P<value>.+)", item)
             label = match.group("label").strip() if match else ""
             if label == "Physical Performance":
+                accepted_lines.append(line)
                 continue
             if label not in scoring.VITALITY_LABELS or match.group("value").strip() not in _VITALITY_VALUES:
-                raise ProviderNoteFormatError(f"line {number}: unrecognized Vitality Index entry {item!r}")
+                reject(number, line, "Vitality Index entry must read '- <domain>: <"
+                       + " / ".join(_VITALITY_VALUES) + ">' for one of " + ", ".join(scoring.VITALITY_LABELS))
+                continue
             parsed["vitality_index"][label] = match.group("value").strip()
-    if not seen:
-        raise ProviderNoteFormatError("no structured '## ' sections found")
+        accepted_lines.append(line)
     if "vitality index" in seen:
         for label in scoring.VITALITY_LABELS:
             parsed["vitality_index"].setdefault(label, "Not Assessed")
-    return parsed
+    return parsed, rejected, seen, "\n".join(accepted_lines)
+
+
+def check_provider_note(note_text: str | None) -> dict:
+    """What the parser will read from a note, for the upload page's format check."""
+    if not note_text or not note_text.strip():
+        return {"read": False, "sections": [], "rejected": []}
+    _, rejected, seen, _ = _parse_structured_note(note_text)
+    return {"read": bool(seen), "sections": [title.title() for title in seen], "rejected": rejected}
 
 
 def parse_provider_note(note_text: str | None) -> dict:
-    """A note that doesn't follow the structured template is rejected and flagged for manual entry -
-    its content is never read any other way."""
+    """Read only lines that follow the structured template; list every other line for staff with its
+    reason. Free text is never mined for protocol, concerns, targets or status."""
     result = {"accepted": False, "protocol": [], "pain_points": [], "marker_overrides": [],
-              "vitality_index": {}, "other_notes": []}
+              "vitality_index": {}, "other_notes": [], "accepted_text": None}
     if not note_text or not note_text.strip():
         return result
-    try:
-        result.update(_parse_structured_note(note_text), accepted=True)
-    except ProviderNoteFormatError as error:
+    parsed, rejected, seen, accepted_text = _parse_structured_note(note_text)
+    listing = [f"    line {item['line']}: {item['text']!r} - {item['reason']}" for item in rejected]
+    if not seen:
         result["other_notes"].append(
-            f"PROVIDER NOTE REJECTED - {error} - NOTE WAS NOT READ; ENTER PROTOCOL, CONCERNS, TARGETS, AND "
-            "STATUS MANUALLY USING THE PROVIDER NOTES TEMPLATE")
+            "PROVIDER NOTE REJECTED - no structured '## ' sections found - NOTE WAS NOT READ; ENTER PROTOCOL, "
+            "CONCERNS, TARGETS, AND STATUS MANUALLY USING THE PROVIDER NOTES TEMPLATE")
+        result["other_notes"].extend(listing)
+        return result
+    result.update(parsed, accepted=True, accepted_text=accepted_text)
+    if rejected:
+        result["other_notes"].append(
+            f"PROVIDER NOTE: {len(rejected)} LINE(S) NOT READ - the rest of the note was read; fix these lines "
+            "in the note or enter them manually:")
+        result["other_notes"].extend(listing)
     return result
 
 
@@ -1809,7 +1855,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "pain_points": note["pain_points"],
         "marker_overrides": note["marker_overrides"],
         "vitality_index": note["vitality_index"],
-        "provider_note_raw": note_text if note["accepted"] else None,
+        "provider_note_raw": note["accepted_text"] if note["accepted"] else None,
         "unrecognized_markers": unrecognized,
         "lab_reported": lab_items,
         "source_rows": row_audit,
