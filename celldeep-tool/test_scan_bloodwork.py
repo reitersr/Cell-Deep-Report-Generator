@@ -216,6 +216,69 @@ def test_same_name_in_different_sections_is_not_ambiguous():
     }
 
 
+def test_rowless_page_without_identity_does_not_reject_batch():
+    data = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    continuation = {
+        "page": 4, "specimen_id": None, "collected": None, "patient_name": None,
+        "illegible": True, "rows": [], "out_of_range_summary": None,
+    }
+    data.append([copy.deepcopy(continuation), copy.deepcopy(continuation)])
+    accepted, notes = gate(data)
+    assert len(accepted) == len(GOLDEN)
+    assert len(notes) == 1 and "page 4: rowless page" in notes[0]
+
+
+@pytest.mark.parametrize("reading", [0, 1, None])
+def test_rowful_page_without_specimen_identity_rejects_batch(reading):
+    data = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    for page in data[0]:
+        page["specimen_id"] = None
+    if reading is not None:
+        data[0][1 - reading]["rows"] = []
+    with pytest.raises(scan.ScanGateError, match="specimen gate:.*page 2"):
+        gate(data)
+
+
+def test_rowless_specimen_pages_supply_identity_and_split_summary():
+    template = payloads()
+    summary = template[1]["out_of_range_summary"]
+    template[1]["out_of_range_summary"] = None
+    for page in template:
+        page["patient_name"] = None
+        page["collected"] = None
+    for number, block in [(4, summary[:5]), (5, summary[5:])]:
+        template.append({
+            "page": number, "specimen_id": "SYN-SCAN-001", "collected": "04/24/2026",
+            "patient_name": "Synthetic, Pat", "illegible": False,
+            "rows": [], "out_of_range_summary": block,
+        })
+    accepted, notes = gate([[copy.deepcopy(page), copy.deepcopy(page)] for page in template])
+    assert len(accepted) == len(GOLDEN)
+    assert all(row["date"] == "04/24/2026" for row in accepted)
+    assert notes == []
+
+
+def test_rowless_summary_without_specimen_still_rejects():
+    data = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    for page in data[1]:
+        page["rows"] = []
+        page["specimen_id"] = None
+    with pytest.raises(scan.ScanGateError, match="summary gate: specimen identity missing"):
+        gate(data)
+
+
+def test_rowless_page_preserves_metadata_and_patient_checks():
+    data = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    for page in data[1]:
+        page.update(rows=[], specimen_id=None, out_of_range_summary=None,
+                    patient_name="Different, Person")
+    with pytest.raises(scan.ScanGateError, match="patient gate: name mismatch"):
+        gate(data)
+    data[1][1]["patient_name"] = None
+    with pytest.raises(scan.ScanGateError, match="metadata agreement gate:"):
+        gate(data)
+
+
 @pytest.mark.parametrize("failure", ["summary", "date", "conflicting_dates", "name", "metadata"])
 def test_batch_gates_raise(failure):
     data = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]

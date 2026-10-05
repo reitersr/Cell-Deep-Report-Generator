@@ -170,17 +170,15 @@ def gate_reads(reads, digital_names, result_re, date_re, normalize_date):
         raise ScanGateError("patient gate: digital patient name missing or conflicting")
     dates = {}
     specimens = {}
+    notes = []
     for pair in reads:
         first, second = pair
         for field in ("specimen_id", "collected", "patient_name"):
             if first[field] != second[field]:
                 raise ScanGateError(f"metadata agreement gate: {field} differs on page {first['page']}")
-        if first["illegible"] or not first["specimen_id"]:
-            raise ScanGateError(f"specimen gate: missing or illegible identity on page {first['page']}")
-        specimen = first["specimen_id"]
-        specimens.setdefault(specimen, []).append(pair)
         if first["patient_name"] and name_key(first["patient_name"]) not in expected_names:
             raise ScanGateError(f"patient gate: name mismatch on page {first['page']}")
+        normalized = None
         if first["collected"]:
             match = date_re.match(first["collected"])
             if not match:
@@ -194,8 +192,21 @@ def gate_reads(reads, digital_names, result_re, date_re, normalize_date):
                 calendar_date(*normalized)
             except ValueError as error:
                 raise ScanGateError(f"date gate: invalid date on page {first['page']}") from error
+        has_rows = bool(first["rows"] or second["rows"])
+        if not first["specimen_id"] and not has_rows:
+            if first["out_of_range_summary"] or second["out_of_range_summary"]:
+                raise ScanGateError(
+                    f"summary gate: specimen identity missing for summary on page {first['page']}")
+            notes.append(f"source=scan page {first['page']}: rowless page without specimen identity; "
+                         "no rows contributed")
+            continue
+        if first["illegible"] or not first["specimen_id"]:
+            raise ScanGateError(f"specimen gate: missing or illegible identity on page {first['page']}")
+        specimen = first["specimen_id"]
+        specimens.setdefault(specimen, []).append(pair)
+        if normalized is not None:
             dates.setdefault(specimen, {})[normalized] = date
-    accepted, notes = [], []
+    accepted = []
     for specimen, pairs in specimens.items():
         if len(dates.get(specimen, set())) != 1:
             raise ScanGateError(f"date gate: missing or conflicting Collected dates for pages "

@@ -26,6 +26,11 @@ agree, and any printed patient name must match the digital header. A failed
 summary, identity, or date gate rejects the entire scan batch with a staff
 review notice. Never substitute a date or infer text. A row absent from one
 read cannot enter the report.
+Rowful pages require a readable specimen identity; their date and printed
+patient identity may come from other pages of that specimen. Rowless pages
+without a specimen identity contribute no rows and produce a staff note
+instead of rejecting the batch. Summary blocks still require a specimen
+identity for attribution, including when split across rowless pages.
 
 Accepted scan rows use the same exact aliases and unknown-marker review
 policy as digital rows. Their `source=scan` provenance, accepted raw values,
