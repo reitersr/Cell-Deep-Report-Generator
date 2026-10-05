@@ -514,7 +514,8 @@ class _FakeClaude:
     def create(self, **kwargs):
         _FakeClaude.calls.append(kwargs)
         page = int(re.search(r"page (\d+)", kwargs["messages"][0]["content"][1]["text"])[1])
-        payload = json.dumps({"page": page, "patient_name": None, "illegible": False, "scans": _DEXA_SCANS})
+        payload = json.dumps({"page": page, "patient_name": None, "date_of_birth": None, "illegible": False,
+                              "scans": _DEXA_SCANS})
         return type("Response", (), {"content": [type("Block", (), {"text": payload})()]})()
 
 

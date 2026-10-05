@@ -138,7 +138,8 @@ def _scan_pages(first_page):
     ]
     summary = [{"name": "TESTOSTERONE, FREE", "result_text": "190.0 H", "flag": None, "illegible": False},
                {"name": "ABSOLUTE LYMPHOCYTES", "result_text": "790", "flag": "L", "illegible": False}]
-    base = {"specimen_id": None, "collected": None, "footer": None, "patient_name": PATIENT, "illegible": False}
+    base = {"specimen_id": None, "collected": None, "footer": None, "patient_name": PATIENT, "date_of_birth": None,
+            "illegible": False}
     return [{**base, "page": one, "rows": rows_one, "out_of_range_summary": None},
             {**base, "page": two, "rows": rows_two, "out_of_range_summary": summary}]
 

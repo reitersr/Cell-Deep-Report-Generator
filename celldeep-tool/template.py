@@ -897,7 +897,9 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     next_30_sub = fmt(copy.get("next_30_sub", ""))
     next_90_label = fmt(copy.get("next_90_label", "Next 90 days"))
     next_90_sub = fmt(copy.get("next_90_sub", ""))
-    by_age_label = fmt(copy.get("by_age_label", f"By {record.age}" if record.age else "By target age"))
+    # The hero targets "your next birthday", so the step names the age the patient turns next.
+    by_age_label = fmt(copy.get("by_age_label", f"By {record.age + 1}" if record.age is not None
+                                else "By your next birthday"))
     by_age_sub = fmt(copy.get("by_age_sub", ""))
     overall_then_display = f"{overall_then}%" if overall_then is not None else fmt(overall_then)
     HTML = f'''<!DOCTYPE html>

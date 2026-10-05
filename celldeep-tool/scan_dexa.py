@@ -29,7 +29,7 @@ FIELDS = {  # schema field -> (DexaReading field, staff label)
 }
 _SCAN = _object({"date": _TEXT, **{name: _TEXT for name in FIELDS}})
 DEXA_SCHEMA = _object({
-    "page": {"type": "integer"}, "patient_name": _TEXT, "illegible": {"type": "boolean"},
+    "page": {"type": "integer"}, "patient_name": _TEXT, "date_of_birth": _TEXT, "illegible": {"type": "boolean"},
     "scans": {"type": "array", "items": _SCAN},
 })
 DEXA_PROMPT = """Transcribe this DEXA body composition report page literally. Never infer, calculate,
@@ -40,7 +40,8 @@ measurements exactly as printed for that date, including any "(e)" estimate mark
 total_mass, fat_mass and lean_mass in pounds (lb); body_fat_pct (percent body fat, total body);
 vat_mass (visceral adipose tissue mass in lb); vat_area (visceral adipose tissue area in cm2).
 A measurement that is not printed for that date, or is printed only in other units, is null.
-Never copy a value from one date to another. Copy the patient name exactly as printed, or null.
+Never copy a value from one date to another. Copy the patient name and date of birth exactly as
+printed, or null.
 Use the PDF page number provided. Illegible fields are null with illegible=true, never guessed.
 A page with no scan measurements returns scans: []."""
 
@@ -112,7 +113,7 @@ def _display(day):
     return f"{day[1]:02d}/{day[2]:02d}/{day[0]:04d}"
 
 
-def gate(pages, patient_name, failures=()):
+def gate(pages, patient_name, failures=(), dob_sink=None):
     """pages: [((file, page), [read1, read2])]; failures: [((file, page), partial_reads, reason)].
     Returns (history, staff_notes, summary_lines). history is sorted oldest first and is a list of
     DexaReading-shaped dicts with an extra 'estimated' list of DexaReading field names."""
@@ -136,6 +137,10 @@ def gate(pages, patient_name, failures=()):
                               "differs from the staff-entered name; page excluded - confirm which patient it belongs to")
             log(key, counts, 0, 0, "excluded", "patient gate: printed name differs from staff entry")
             continue
+        if dob_sink is not None:
+            dobs = {scan_date(read.get("date_of_birth")) for read in reads}
+            if len(dobs) == 1 and None not in dobs:
+                dob_sink.append((f"{label}", dobs.pop()))
         by_date, unreadable = [], 0
         for read in reads:
             dates = {}

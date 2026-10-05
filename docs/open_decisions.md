@@ -63,6 +63,9 @@ staff review instead of being scored.
 
 ## 3. DOB, age and "By N" wording
 
+> **Status: implemented.** Age is computed from the printed DOB and the collection date (DOB never
+> stored); disagreeing DOB sources give no age and a staff notice; "By N" is the next-birthday age.
+
 **Evidence.**
 - Age is typed by staff (`app.py`, `age` form field). No date of birth is collected, and the
   parser deliberately ignores DOB lines in lab PDFs (`pipeline.py:429`, `_BIRTH_DATE_RE`).

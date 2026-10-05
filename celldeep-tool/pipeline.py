@@ -1500,7 +1500,8 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None) -> tup
 # DEXA extraction (unchanged Claude path from before the deterministic bloodwork change)
 # ---------------------------------------------------------------------------
 
-def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], patient_name: str | None):
+def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], patient_name: str | None,
+                              dob_sink: list | None = None):
     """Read every DEXA page twice and keep only measurements both reads agree on (scan_dexa.gate).
     Returns (dexa_history, staff_notes, summary_lines)."""
     import scan_bloodwork
@@ -1524,7 +1525,7 @@ def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], pa
                     failures.append((key, error.reads, str(error)))
                 else:
                     pages.append((key, reads))
-    return scan_dexa.gate(pages, patient_name, failures)
+    return scan_dexa.gate(pages, patient_name, failures, dob_sink)
 
 def has_scanned_pages(pdf_bytes: bytes) -> bool:
     """True when a lab PDF has image-only pages, which only staff-entered identity can date."""
@@ -1571,13 +1572,45 @@ def _scan_summary(numbers: list[int], notes: list[str], collected_date: str | No
     return lines
 
 
+_DOB_RE = re.compile(r"\b(?:DOB|D\.O\.B\.?|Date of Birth|Birth Date)\s*[:#]?\s*(" + _PRINTED_DATE_RE.pattern + ")",
+                     re.IGNORECASE)
+
+
+def _printed_dob(text):
+    import scan_dexa
+    return scan_dexa.scan_date(text) if text else None
+
+
+def _age_from_dob(dob_sources: list, collected: str | None) -> dict:
+    """Age on the collection date from the printed date(s) of birth. The DOB itself is not returned.
+    Sources that disagree, or a DOB after the collection date, give no age and a staff notice."""
+    if not dob_sources:
+        return {"age_from_dob": None, "dob_notes": []}
+    labels = ", ".join(dict.fromkeys(label for label, _ in dob_sources))
+    if len({dob for _, dob in dob_sources}) > 1:
+        return {"age_from_dob": None, "dob_conflict": True, "dob_notes": [
+            f"DOB CONFLICT: the printed dates of birth differ between sources ({labels}); no age is shown in the "
+            "report - confirm the patient's age"]}
+    day = _normalize_date_for_matching(collected or "")
+    if not isinstance(day, tuple):
+        return {"age_from_dob": None, "dob_notes": [
+            "AGE NOT COMPUTED: a date of birth is printed but there is no bloodwork collection date"]}
+    dob = dob_sources[0][1]
+    age = day[0] - dob[0] - ((day[1], day[2]) < (dob[1], dob[2]))
+    if not 0 <= age <= 120:
+        return {"age_from_dob": None, "dob_conflict": True, "dob_notes": [
+            f"DOB CONFLICT: the printed date of birth ({labels}) does not fit the collection date; no age is shown"]}
+    return {"age_from_dob": age, "dob_notes": []}
+
+
 def scan_collected_date(text: str) -> str:
     import scan_bloodwork as scan
 
     return scan.staff_collected_date(text)
 
 
-def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_name=None, collected_date=None):
+def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_name=None, collected_date=None,
+                            dob_sink=None):
     import scan_bloodwork as scan
 
     numbers = [page.number + 1 for page in pages]
@@ -1602,6 +1635,11 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
             reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL))
         except scan.ScanGateError as error:
             failures.append((page.number + 1, error.reads, str(error)))
+    if dob_sink is not None:
+        for pair in reads:
+            dobs = {_printed_dob(page.get("date_of_birth")) for page in pair}
+            if len(dobs) == 1 and None not in dobs:
+                dob_sink.append((f"scanned lab page {pair[0]['page']}", dobs.pop()))
     lab_codes = {
         match[1] for page in digital_pages
         for match in re.finditer(r"\(\d+\)\s*\(([A-Z][A-Z0-9]{1,5})\)", _line_text(_page_words(page)))
@@ -1820,25 +1858,30 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     occurrences, unrecognized, lab_review_notes = [], [], []
     row_audit = []
     scan_numbers = []
+    dob_sources = []  # (source label, (y, m, d)); used only to compute age, never stored
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
             pages = list(document)
             digital_pages = [page for page in pages if _page_words(page)]
             scans = [page for page in pages if not _page_words(page)]
             scan_numbers = [page.number + 1 for page in scans]
+            for page in digital_pages:
+                for match in _DOB_RE.finditer(page.get_text()):
+                    if (dob := _printed_dob(match.group(1))) is not None:
+                        dob_sources.append((f"lab page {page.number + 1}", dob))
             if digital_pages:
                 occurrences, unrecognized = _parse_bloodwork_tables(
                     digital_pages, row_audit=row_audit, review_notes=lab_review_notes)
             if scans:
                 scanned, scan_unknown, scan_notes = _extract_scan_bloodwork(
-                    scans, digital_pages, client, row_audit, patient_name, collected_date)
+                    scans, digital_pages, client, row_audit, patient_name, collected_date, dob_sources)
                 occurrences = _merge_scan_occurrences(occurrences, scanned, row_audit)
                 unrecognized.extend(scan_unknown)
                 lab_review_notes.extend(scan_notes)
     scan_summary = _scan_summary(scan_numbers, scan_notes, collected_date) if scan_numbers else []
     lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
     lab_review_notes.extend(lab_notes)
-    dexa_history, dexa_notes, dexa_summary = (_extract_dexa_with_claude(client, dexa_pdfs, patient_name)
+    dexa_history, dexa_notes, dexa_summary = (_extract_dexa_with_claude(client, dexa_pdfs, patient_name, dob_sources)
                                               if dexa_pdfs else ([], [], []))
     note = parse_provider_note(note_text)
 
@@ -1865,6 +1908,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "source_rows": row_audit,
         "scan_summary": scan_summary,
         "dexa_summary": dexa_summary,
+        **_age_from_dob(dob_sources, latest["date_display"] if latest else None),
         "other_notes": [*lab_review_notes, *note["other_notes"]],
     }
 
@@ -2161,6 +2205,21 @@ def markers_reference_lookup(raw_name: str):
     return lookup_marker(raw_name)
 
 
+def resolve_age(extracted: dict, staff_age: int | None) -> int | None:
+    """Printed DOB + collection date wins; conflicting DOBs mean no age at all; otherwise the staff entry."""
+    notes = extracted.setdefault("other_notes", [])
+    notes[:0] = extracted.get("dob_notes", [])
+    if extracted.get("dob_conflict"):
+        return None
+    computed = extracted.get("age_from_dob")
+    if computed is None:
+        return staff_age
+    if staff_age is not None and staff_age != computed:
+        notes.insert(0, f"AGE CHECK: staff-entered age {staff_age} differs from the age computed from the printed "
+                        f"date of birth and collection date ({computed}); the report uses {computed}")
+    return computed
+
+
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitality_index=None,
         collected_date=None):
     raw_lab_text = _pdf_text(labs_pdf)
@@ -2175,7 +2234,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client,
                         collected_date=collected_date)
     extracted["name"] = patient_name
-    extracted["age"] = age
+    extracted["age"] = resolve_age(extracted, age)
     extracted["sex"] = sex
     if vitality_index:
         extracted["vitality_index"] = vitality_index
