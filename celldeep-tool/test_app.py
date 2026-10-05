@@ -50,6 +50,7 @@ def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
             data={
                 "patient_name": "Test Patient",
                 "note_text": "Original note.",
+                "collected_date": "2026-04-24",
                 "labs_pdf": (io.BytesIO(b"synthetic input PDF"), "synthetic-labs.pdf"),
             },
         )
@@ -67,6 +68,7 @@ def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
     assert status["review_notes_url"] == f"/download/{job_id}/review-notes"
     assert app.app.test_client().get(status["report_url"]).data == b"synthetic report PDF"
     assert captured["note_text"] == "Original note."
+    assert captured["collected_date"] == "04/24/2026"
     assert captured["vitality_index"] == {
         label: "Not Assessed" for _, label in app.VITALITY_FIELDS
     }
@@ -109,3 +111,12 @@ def test_generate_status_surfaces_background_pipeline_errors(tmp_path, monkeypat
         "status": "error",
         "error": "Anthropic API timed out during extraction. Please retry the report.",
     }
+
+def test_invalid_collected_date_is_rejected_before_job_starts(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
+    with patch.object(app.pipeline, "run") as run:
+        response = app.app.test_client().post(
+            "/generate", data={"patient_name": "Test Patient", "collected_date": "2026-02-30"})
+    assert response.status_code == 302
+    run.assert_not_called()
+    assert not (tmp_path / "jobs").exists()

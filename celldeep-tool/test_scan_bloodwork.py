@@ -537,6 +537,136 @@ def test_invalid_calendar_date_rejected():
     assert any("date gate: invalid date" in note for note in notes)
 
 
+def staff_gate(data, failures=()):
+    return scan.gate_staff_identified_reads(data, "04/24/2026", failures)
+
+
+def test_staff_identity_skips_printed_metadata_gates(capsys):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    pairs[0][1]["footer"] = "SPECIMEN: SYN-SCAN-001 PAGE 1 OF 7"
+    pairs[1][0].update(illegible=True, specimen_id=None, collected=None, footer=None)
+    pairs[1][1].update(patient_name="Different, Person", collected="04/23/2026")
+    accepted, notes = staff_gate(pairs)
+    assert notes == []
+    assert [(row["name"], row["result_text"], row["flag"], row["reference_range"]) for row in accepted] == GOLDEN
+    assert all(row["date"] == "04/24/2026" and row["source"] == "scan" for row in accepted)
+    lines = capsys.readouterr().out.splitlines()
+    assert sum('identity="staff"' in line and "verdict=kept" in line for line in lines) == 2
+    assert not any("Synthetic" in line or "Different" in line for line in lines)
+
+
+@pytest.mark.parametrize("field", ["result_text", "flag", "reference_range", "missing", "duplicate"])
+def test_staff_identity_keeps_only_rows_both_reads_agree_on(field):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    row = pairs[0][1]["rows"][0]
+    if field == "missing":
+        pairs[0][1]["rows"].pop(0)
+    elif field == "duplicate":
+        pairs[0][1]["rows"].append(copy.deepcopy(row))
+    else:
+        row[field] = {"result_text": "58", "flag": "L", "reference_range": "50-170"}[field]
+    accepted, notes = staff_gate(pairs)
+    assert len(accepted) == len(GOLDEN) - 1
+    assert all(row["name"] != "IRON, TOTAL" for row in accepted)
+    assert len(notes) == 1 and "excluded 'IRON, TOTAL': agreement gate" in notes[0]
+
+
+def test_staff_identity_does_not_apply_digital_layout_gates():
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    for page in pairs[0]:
+        page["rows"][0].update(column=None, section=None)
+    accepted, notes = staff_gate(pairs)
+    assert notes == []
+    assert len(accepted) == len(GOLDEN)
+
+
+@pytest.mark.parametrize("reading", [0, 1])
+def test_staff_summary_excludes_only_contradicted_rows(reading):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    summary = pairs[1][reading]["out_of_range_summary"]
+    summary[0]["result_text"] = "31"
+    del summary[1:3]
+    accepted, notes = staff_gate(pairs)
+    assert len(accepted) == len(GOLDEN) - 1
+    assert all(row["name"] != "FERRITIN" for row in accepted)
+    assert notes == ["source=scan page 2 excluded 'FERRITIN': "
+                     "summary gate: row disagrees with printed out-of-range summary"]
+
+
+def test_staff_empty_summary_does_not_exclude_rows():
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    for page in pairs[1]:
+        page["out_of_range_summary"] = []
+    accepted, notes = staff_gate(pairs)
+    assert len(accepted) == len(GOLDEN) and notes == []
+
+
+def test_staff_rowless_page_is_notice_only(capsys):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    rowless = {"page": 4, "specimen_id": None, "collected": None, "patient_name": None, "footer": None,
+               "illegible": True, "rows": [], "out_of_range_summary": None}
+    pairs.append([copy.deepcopy(rowless), copy.deepcopy(rowless)])
+    accepted, notes = staff_gate(pairs)
+    assert len(accepted) == len(GOLDEN)
+    assert notes == ["source=scan page 4: no result rows read; notice only"]
+    assert any("page=4" in line and "verdict=notice" in line for line in capsys.readouterr().out.splitlines())
+
+
+def test_staff_page_with_no_agreeing_rows_is_reported():
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    pairs[0][1]["rows"] = []
+    accepted, notes = staff_gate(pairs)
+    assert len(accepted) == len(GOLDEN) - 54
+    assert sum("row present" in note or "agreement gate" in note for note in notes) == 54
+    assert notes[-1] == "source=scan page 2: row gates: no rows passed; page excluded"
+
+
+def test_staff_failed_transcription_is_page_local(capsys):
+    pairs = [[copy.deepcopy(page), copy.deepcopy(page)] for page in payloads()]
+    accepted, notes = staff_gate(pairs[1:], [(2, [pairs[0][0]], "schema gate: invalid JSON on page 2")])
+    assert len(accepted) == len(GOLDEN) - 54
+    assert notes == ["source=scan page 2: schema gate: invalid JSON on page 2; page excluded"]
+    assert any("page=2 rows_read=54/null" in line for line in capsys.readouterr().out.splitlines())
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("04/24/2026", "04/24/2026"), ("4/24/2026", "04/24/2026"), ("2026-04-24", "04/24/2026"),
+    ("02/30/2026", None), ("April 24", None), ("", None),
+])
+def test_staff_collected_date(text, expected):
+    if expected:
+        assert scan.staff_collected_date(text) == expected
+    else:
+        with pytest.raises(ValueError, match="Collected date"):
+            scan.staff_collected_date(text)
+
+
+def test_pipeline_uses_staff_identity_for_scanned_pages(mixed_pdf, tmp_path):
+    data = payloads()
+    for page in data:
+        page.update(collected=None, patient_name=None, specimen_id=None, footer=None)
+    reads = [copy.deepcopy(page) for page in data for _ in (1, 2)]
+    reads[1]["footer"] = "PAGE 1 OF 7"
+    reads[2]["illegible"] = True
+    extracted = pipeline.extract(str(mixed_pdf), [], None, patient_name="Synthetic, Pat",
+                                 collected_date="2026-04-24", client=MockClient(reads),
+                                 audit_root=str(tmp_path))
+    assert extracted["latest_draw_date"] == "04/24/2026"
+    assert sum(" accepted " in note for note in extracted["other_notes"]) == len(GOLDEN)
+    assert not any("excluded" in note or "REJECTED" in note for note in extracted["other_notes"])
+    assert any("staff-entered" in note for note in extracted["other_notes"])
+    values = {(item["name"], item["date_display"]): item for item in extracted["marker_occurrences"]}
+    assert values["TSH", "04/24/2026"]["disp_value"] == "1.19"
+
+
+def test_pipeline_without_staff_date_keeps_printed_identity_gates(mixed_pdf, tmp_path):
+    reads = [copy.deepcopy(page) for page in payloads() for _ in (1, 2)]
+    reads[1]["footer"] = "PAGE 1 OF 7"
+    extracted = pipeline.extract(str(mixed_pdf), [], None, patient_name="Synthetic, Pat",
+                                 client=MockClient(reads), audit_root=str(tmp_path))
+    assert any("metadata agreement gate: footer differs" in note for note in extracted["other_notes"])
+
+
 SOURCE = Path(__file__).parent / "real_fixtures" / "bloodwork_fixture_01.pdf"
 
 

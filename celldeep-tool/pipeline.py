@@ -1504,16 +1504,28 @@ def _extract_dexa_with_claude(client: Anthropic, dexa_pdfs: list[str], patient_n
     return _parse_json_response(raw_text, patient_name=patient_name).get("dexa_history", [])
 
 
-def _extract_scan_bloodwork(pages, digital_pages, client, row_audit):
+def scan_collected_date(text: str) -> str:
+    import scan_bloodwork as scan
+
+    return scan.staff_collected_date(text)
+
+
+def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_name=None, collected_date=None):
     import scan_bloodwork as scan
 
     numbers = [page.number + 1 for page in pages]
     notes = []
     failures = []
+    # Staff-entered patient and Collected date identify every scanned page in place of printed metadata.
+    staff = bool(patient_name and collected_date)
     if client is None:
         if not os.environ.get("ANTHROPIC_API_KEY"):
-            scan.gate_reads([], set(), _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching,
-                            [(number, [], "client gate: no API key") for number in numbers])
+            failures = [(number, [], "client gate: no API key") for number in numbers]
+            if staff:
+                scan.gate_staff_identified_reads([], collected_date, failures)
+            else:
+                scan.gate_reads([], set(), _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching,
+                                failures)
             return [], [], [f"source=scan pages {numbers}: client gate failed: no API key; manual review required"]
         client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"],
                            timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS, max_retries=ANTHROPIC_MAX_RETRIES)
@@ -1523,13 +1535,18 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit):
             reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL))
         except scan.ScanGateError as error:
             failures.append((page.number + 1, error.reads, str(error)))
-    digital_names = scan.digital_patient_names(digital_pages, _group_lines, _page_words)
-    try:
-        accepted, notes = scan.gate_reads(
-            reads, digital_names, _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching, failures)
-    except scan.ScanGateError as error:
-        return [], [], error.notes + [
-            f"source=scan pages {numbers}: {error}; ALL SCAN ROWS REJECTED; manual review required"]
+    if staff:
+        accepted, notes = scan.gate_staff_identified_reads(reads, collected_date, failures)
+        notes.insert(0, f"source=scan pages {numbers}: identified by staff-entered patient name and "
+                        f"Collected {collected_date}; printed footer/header/name/date not gated")
+    else:
+        digital_names = scan.digital_patient_names(digital_pages, _group_lines, _page_words)
+        try:
+            accepted, notes = scan.gate_reads(
+                reads, digital_names, _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching, failures)
+        except scan.ScanGateError as error:
+            return [], [], error.notes + [
+                f"source=scan pages {numbers}: {error}; ALL SCAN ROWS REJECTED; manual review required"]
     occurrences, unknown = [], []
     lab_codes = {
         match[1] for page in digital_pages
@@ -1677,8 +1694,9 @@ def parse_provider_note(note_text: str | None) -> dict:
 
 def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             patient_name: str | None = None, audit_root: str | None = None,
-            client: Anthropic | None = None) -> dict:
+            client: Anthropic | None = None, collected_date: str | None = None) -> dict:
     """Parse readable labs and notes deterministically; gate scan transcription; extract DEXA via Claude."""
+    collected_date = scan_collected_date(collected_date) if collected_date else None
     occurrences, unrecognized, lab_review_notes = [], [], []
     row_audit = []
     if labs_pdf:
@@ -1691,7 +1709,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                     digital_pages, row_audit=row_audit, review_notes=lab_review_notes)
             if scans:
                 scanned, scan_unknown, scan_notes = _extract_scan_bloodwork(
-                    scans, digital_pages, client, row_audit)
+                    scans, digital_pages, client, row_audit, patient_name, collected_date)
                 occurrences = _merge_scan_occurrences(occurrences, scanned, row_audit)
                 unrecognized.extend(scan_unknown)
                 lab_review_notes.extend(scan_notes)
@@ -1973,7 +1991,8 @@ def markers_reference_lookup(raw_name: str):
     return lookup_marker(raw_name)
 
 
-def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitality_index=None):
+def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitality_index=None,
+        collected_date=None):
     raw_lab_text = _pdf_text(labs_pdf)
     raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
     client = Anthropic(
@@ -1983,7 +2002,8 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     ) if dexa_pdfs else None
 
     print("Step 1/3: parsing source documents...")
-    extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client)
+    extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client,
+                        collected_date=collected_date)
     extracted["name"] = patient_name
     extracted["age"] = age
     extracted["sex"] = sex
@@ -2030,6 +2050,7 @@ if __name__ == "__main__":
     ap.add_argument("--patient-name", required=True)
     ap.add_argument("--age", type=int)
     ap.add_argument("--sex", choices=["male", "female"])
+    ap.add_argument("--collected-date", help="Collected date identifying scanned bloodwork pages (MM/DD/YYYY)")
     ap.add_argument("--out", default="report.pdf")
     args = ap.parse_args()
 
@@ -2038,4 +2059,5 @@ if __name__ == "__main__":
         with open(args.note) as f:
             note_text = f.read()
 
-    run(args.labs, args.dexa, note_text, args.patient_name, args.age, args.sex, args.out)
+    run(args.labs, args.dexa, note_text, args.patient_name, args.age, args.sex, args.out,
+        collected_date=args.collected_date)

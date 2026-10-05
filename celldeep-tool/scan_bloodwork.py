@@ -130,6 +130,20 @@ def digital_patient_names(pages, group_lines, page_words):
     return names
 
 
+def staff_collected_date(text):
+    """Return a staff-entered Collected date (MM/DD/YYYY or YYYY-MM-DD) as MM/DD/YYYY."""
+    us = re.fullmatch(r"\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*", text or "")
+    iso = re.fullmatch(r"\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*", text or "")
+    if not (us or iso):
+        raise ValueError(f"Collected date {text!r} must be MM/DD/YYYY")
+    month, day, year = map(int, us.groups() if us else (iso[2], iso[3], iso[1]))
+    try:
+        calendar_date(year, month, day)
+    except ValueError as error:
+        raise ValueError(f"Collected date {text!r} is not a calendar date") from error
+    return f"{month:02d}/{day:02d}/{year:04d}"
+
+
 def _row_key(row):
     return row["name"], row["result_text"], row["flag"]
 
@@ -192,6 +206,74 @@ def _footer_sequence(footer):
     if match and 1 <= int(match[1]) <= int(match[2]):
         return int(match[1]), int(match[2])
     return None
+
+
+def gate_staff_identified_reads(reads, collected, failures=()):
+    """Staff-entered patient name and Collected date identify every scanned page, so printed
+    footer/header/name/date are not gated. A row is kept only when both reads agree on its
+    value, flag and reference range; the printed summary excludes only rows it contradicts."""
+    notes = []
+    accepted = []
+
+    def note(message):
+        notes.append(message)
+        print(message)
+
+    summaries = ({}, {})
+    for pair in reads:
+        for reading, page in enumerate(pair):
+            for entry in page["out_of_range_summary"] or []:
+                if not entry["illegible"] and entry["name"] and entry["result_text"]:
+                    summaries[reading].setdefault(entry["name"], set()).add(_row_key(entry)[1:])
+
+    def row_reason(rows):
+        first, second = rows
+        if len(first) != 1 or len(second) != 1:
+            return "agreement gate: missing or duplicate row in independent reads"
+        first, second = first[0], second[0]
+        if any(first[key] != second[key] for key in ("result_text", "flag", "reference_range")):
+            return "agreement gate: independent reads disagree on value, flag or range"
+        if first["illegible"] or second["illegible"] or not first["name"] or not first["result_text"]:
+            return "legibility gate: null or illegible row"
+        if any(entries and _row_key(first)[1:] not in entries
+               for entries in (summary.get(first["name"]) for summary in summaries)):
+            return "summary gate: row disagrees with printed out-of-range summary"
+        return None
+
+    pages = []
+    for pair in reads:
+        number = pair[0]["page"]
+        identities = {}
+        for reading, page in enumerate(pair):
+            for row in page["rows"]:
+                identities.setdefault((row["name"], row["section"]), ([], []))[reading].append(row)
+        kept = 0
+        for rows in identities.values():
+            reason = row_reason(rows)
+            for row in rows[0] if reason is None else rows[0] or rows[1]:
+                if reason:
+                    note(f"source=scan page {number} excluded {row['name']!r}: {reason}")
+                else:
+                    accepted.append({**row, "date": collected, "specimen_id": None, "source": "scan"})
+                    kept += 1
+        if not identities:
+            reason = "no result rows read; notice only"
+            note(f"source=scan page {number}: {reason}")
+        else:
+            reason = None if kept else "row gates: no rows passed"
+            if reason:
+                note(f"source=scan page {number}: {reason}; page excluded")
+        pages.append((number, [len(page["rows"]) for page in pair], kept, reason))
+    for number, partial_reads, reason in failures:
+        note(f"source=scan page {number}: {reason}; page excluded")
+        counts = [len(page["rows"]) for page in partial_reads]
+        pages.append((number, counts + [None] * (2 - len(counts)), 0, reason))
+    for number, counts, kept, reason in sorted(pages, key=lambda item: item[0]):
+        verdict = "kept" if kept else "notice" if reason and reason.endswith("notice only") else "excluded"
+        print(f"source=scan page={number} rows_read={json.dumps(counts[0])}/{json.dumps(counts[1])} "
+              f"identity=\"staff\" date={json.dumps(collected)} rows_kept={kept} verdict={verdict} "
+              f"reason={json.dumps(reason or 'passed')}")
+    return accepted, notes
 
 
 def gate_reads(reads, digital_names, result_re, date_re, normalize_date, failures=()):
