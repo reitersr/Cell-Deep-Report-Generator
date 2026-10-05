@@ -56,7 +56,8 @@ def _printed_cell_bands(page):
 
 
 @pytest.mark.skipif(not SOURCE.is_file(), reason="Local real bloodwork fixture is absent")
-def test_real_bloodwork_page_local_headers_and_unreadable_scans(tmp_path, capsys):
+def test_real_bloodwork_page_local_headers_and_unreadable_scans(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with fitz.open(SOURCE) as document:
         pages = list(document)
         results = pipeline._parse_bloodwork_tables(pages[:8])
@@ -81,7 +82,7 @@ def test_real_bloodwork_page_local_headers_and_unreadable_scans(tmp_path, capsys
     assert extracted["marker_occurrences"] == results[0]
     assert extracted["unrecognized_markers"] == results[1]
     _, notice = pipeline.score_and_build_record(extracted)
-    assert warnings[0] in pipeline.format_review_notice(notice)
+    assert "client gate failed: no API key" in pipeline.format_review_notice(notice)
 
 
 @pytest.mark.skipif(not SOURCE.is_file(), reason="Local real bloodwork fixture is absent")

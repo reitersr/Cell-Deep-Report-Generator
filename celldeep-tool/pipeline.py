@@ -1504,6 +1504,74 @@ def _extract_dexa_with_claude(client: Anthropic, dexa_pdfs: list[str], patient_n
     return _parse_json_response(raw_text, patient_name=patient_name).get("dexa_history", [])
 
 
+def _extract_scan_bloodwork(pages, digital_pages, client, row_audit):
+    import scan_bloodwork as scan
+
+    numbers = [page.number + 1 for page in pages]
+    notes = []
+    if client is None:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return [], [], [f"source=scan pages {numbers}: client gate failed: no API key; manual review required"]
+        client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"],
+                           timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS, max_retries=ANTHROPIC_MAX_RETRIES)
+    try:
+        reads = [scan.read_page(page, client, _create_anthropic_message, MODEL) for page in pages]
+        digital_names = scan.digital_patient_names(digital_pages, _group_lines, _page_words)
+        accepted, notes = scan.gate_reads(
+            reads, digital_names, _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching)
+    except scan.ScanGateError as error:
+        return [], [], [f"source=scan pages {numbers}: {error}; ALL SCAN ROWS REJECTED; manual review required"]
+    occurrences, unknown = [], []
+    lab_codes = {
+        match[1] for page in digital_pages
+        for match in re.finditer(r"\(\d+\)\s*\(([A-Z][A-Z0-9]{1,5})\)", _line_text(_page_words(page)))
+    }
+    header = _bloodwork_header([
+        (40, 90, 70, 100, "Test"), (220, 90, 260, 100, "Current"),
+        (320, 90, 350, 100, "Reference"), (352, 90, 380, 100, "Range"),
+    ])
+    for row in accepted:
+        section = {"order_id": None, "dates": [row["date"]], "heading": row["section"]}
+        name = _clean_row_name(row["name"], lab_codes)
+        value = row["result_text"]
+        words = [(220, 120, 240, 130, value)]
+        if row["reference_range"]:
+            words.append((320, 120, 380, 130, row["reference_range"]))
+        start, unknown_start = len(occurrences), len(unknown)
+        _parse_bloodwork_row(words, header, section, occurrences, unknown, row_name=name, allow_text=True)
+        for occurrence in occurrences[start:]:
+            occurrence["source_label"] += f"; pages {row['page']}"
+        row_audit.append({
+            "page": row["page"], "name": name, "section": row["section"],
+            "occurrences": [dict(item) for item in occurrences[start:]], "unrecognized": unknown[unknown_start:],
+        })
+        notes.append(f"source=scan page {row['page']} accepted {row['name']!r}: "
+                     f"{row['result_text']!r}, flag={row['flag']!r}, Collected={row['date']}")
+    return occurrences, unknown, notes
+
+
+def _merge_scan_occurrences(digital, scanned, row_audit):
+    provenance = {}
+    for row in row_audit:
+        for occurrence in row["occurrences"]:
+            key = (occurrence["name"], _normalize_date_for_matching(occurrence["date_display"]))
+            provenance.setdefault(key, []).append(row["page"])
+    combined = { (row["name"], _normalize_date_for_matching(row["date_display"])): row for row in digital}
+    for row in scanned:
+        key = (row["name"], _normalize_date_for_matching(row["date_display"]))
+        previous = combined.get(key)
+        if previous is not None:
+            if (previous["status"], previous["value"], previous["disp_value"]) != (
+                    row["status"], row["value"], row["disp_value"]):
+                raise BloodworkParseError(
+                    f"{row['name']} on {row['date_display']}: conflicting results on pages {provenance[key]}")
+            previous["source_label"] = previous["source_label"].split("; pages ", 1)[0] + \
+                "; pages " + ", ".join(map(str, sorted(set(provenance[key]))))
+        else:
+            combined[key] = row
+    return list(combined.values())
+
+
 # ---------------------------------------------------------------------------
 # Structured provider notes (see templates/provider_notes_template.md)
 # ---------------------------------------------------------------------------
@@ -1601,13 +1669,23 @@ def parse_provider_note(note_text: str | None) -> dict:
 def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             patient_name: str | None = None, audit_root: str | None = None,
             client: Anthropic | None = None) -> dict:
-    """Step 1: bloodwork and provider note parsed deterministically; DEXA PDFs (if any) via Claude."""
+    """Parse readable labs and notes deterministically; gate scan transcription; extract DEXA via Claude."""
     occurrences, unrecognized, lab_review_notes = [], [], []
     row_audit = []
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
-            occurrences, unrecognized = _parse_bloodwork_tables(
-                list(document), row_audit=row_audit, review_notes=lab_review_notes)
+            pages = list(document)
+            digital_pages = [page for page in pages if _page_words(page)]
+            scans = [page for page in pages if not _page_words(page)]
+            if digital_pages:
+                occurrences, unrecognized = _parse_bloodwork_tables(
+                    digital_pages, row_audit=row_audit, review_notes=lab_review_notes)
+            if scans:
+                scanned, scan_unknown, scan_notes = _extract_scan_bloodwork(
+                    scans, digital_pages, client, row_audit)
+                occurrences = _merge_scan_occurrences(occurrences, scanned, row_audit)
+                unrecognized.extend(scan_unknown)
+                lab_review_notes.extend(scan_notes)
     dexa_history = _extract_dexa_with_claude(client, dexa_pdfs, patient_name) if dexa_pdfs else []
     note = parse_provider_note(note_text)
 

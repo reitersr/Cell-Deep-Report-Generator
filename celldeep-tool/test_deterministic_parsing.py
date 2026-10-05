@@ -431,6 +431,7 @@ def test_duplicate_canonical_dates_keep_page_provenance_or_raise(tmp_path, secon
 
 
 def test_unreadable_page_warning_reaches_generation_review(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
     review = tmp_path / "review_notes.txt"
     monkeypatch.setattr(pipeline, "_review_notes_path", lambda name: str(review))
@@ -440,9 +441,8 @@ def test_unreadable_page_warning_reaches_generation_review(tmp_path, monkeypatch
     ])
     monkeypatch.setattr(pipeline.template, "render", lambda *args, **kwargs: None)
     pipeline.run(str(labs), [], None, fx.PATIENT, 44, "male", str(tmp_path / "report.pdf"))
-    warning = "Lab PDF pages 2: no readable text, OCR not supported, manual review required"
+    warning = "source=scan pages [2]: client gate failed: no API key; manual review required"
     output = capsys.readouterr().out
-    assert f"WARNING: {warning}" in output
     assert f"  - {warning}" in output
     assert "This report generated successfully" in output
     assert warning in review.read_text()

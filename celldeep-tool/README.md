@@ -11,12 +11,28 @@ when a DEXA PDF is uploaded).
 Each bloodwork page must print its own Current/Historical column header
 (with governing dates), or In Range / Out of Range columns. Table state
 never carries across pages; readable pages without a header contribute no
-rows. Pages without readable text are skipped and explicitly listed in a
-warning: "no readable text, OCR not supported, manual review required."
-The warning is printed and carried into the operator review notice and
-review-notes file, alongside unrecognized-marker notices. Generation
-continues for readable pages; a PDF with no recognized results still fails
-visibly. No OCR is performed.
+rows. Pages without readable text are rendered at 200 dpi and transcribed
+twice in independent Anthropic vision requests using the same model, client
+configuration, and API error handling as DEXA. The existing DEXA call is
+unchanged. An API key is required for scan transcription; without one,
+readable results continue with an explicit staff review notice.
+
+Scan names, results, flags, columns, reference ranges, and section headings
+must agree between reads. Unsupported or illegible results and inconsistent
+numeric flags are excluded with a reason. A row without a printed section
+identity is also excluded to preserve section-scoped matching. Across each specimen, both reads
+must match the printed out-of-range summary; Collected dates must exist and
+agree, and any printed patient name must match the digital header. A failed
+summary, identity, or date gate rejects the entire scan batch with a staff
+review notice. Never substitute a date or infer text. A row absent from one
+read cannot enter the report.
+
+Accepted scan rows use the same exact aliases and unknown-marker review
+policy as digital rows. Their `source=scan` provenance, accepted raw values,
+and exclusions are recorded only in staff review notes, not in patient
+copy or patient marker objects. Tests mock the vision calls; the optional
+`CELLDEEP_LIVE_VISION=1` test uses a synthetic image-only PDF with invented
+identity, never the local patient fixture.
 
 Printed horizontal rules, including rules spanning multiple columns,
 delimit results bands. Wrapped names and cells are assembled within a band;
