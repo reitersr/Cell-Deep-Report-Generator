@@ -10,8 +10,8 @@ IMPORTANT — this is a starting point, not a substitute for the note itself.
 A compound's actual target category for a given patient should be narrowed
 by the generation step to whichever of its typical categories actually has
 a moderate/flagged marker for THAT patient (exactly how Omega-3 HP-D was
-tied to Flow for Star specifically, because Lp-PLA2 and Omega-3 Index were
-her actual flagged/moderate markers there — not because Omega-3 always
+tied to Flow for the calibration reference patient specifically, because
+that patient's flagged/moderate markers there were in Flow — not because Omega-3 always
 means Flow for every patient). If a compound's typical categories don't
 overlap with anything moderate/flagged for this patient, generation should
 state the compound's purpose plainly without forcing a category link.

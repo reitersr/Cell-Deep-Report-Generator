@@ -4,12 +4,12 @@ CellDeep Report Generator — Template Renderer
 Ported from build_final_v7.py (the locked V23 reference). CSS is copied
 VERBATIM — every value, every rule, unchanged, because that is the locked
 design and nothing about it is open to variation per patient. What changed
-is every place that used to read a Star-specific module-level constant now
+is every place that used to read a reference-patient module-level constant now
 reads from the PatientRecord and the generated copy dict passed into render().
 
 This file has not been run end-to-end (no live API access during
 development — see pipeline.py). The first real test should be running the
-full pipeline against Star's actual source material and confirming the
+full pipeline against the reference patient's source material and confirming the
 output matches V23 pixel for pixel, since that's the one case we already
 know the correct answer to.
 """

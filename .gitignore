@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 celldeep-tool/synthetic_fixtures/*.pdf
 celldeep-tool/synthetic_fixtures/out/
+# Generated code exports and archives may embed patient data; never commit them.
+claude_review_export.md
+*.zip

@@ -130,7 +130,7 @@ def payloads():
     return [{
         "page": number, "specimen_id": "SYN-SCAN-001",
         "footer": f"SPECIMEN: SYN-SCAN-001 PAGE {number - 1} OF 2",
-        "collected": "04/24/2026 09:15" if number == 3 else None,
+        "collected": "04/14/2026 09:15" if number == 3 else None,
         "patient_name": "Synthetic, Pat", "illegible": False,
         "rows": [row for row in rows if row["page"] == number],
         "out_of_range_summary": summary if number == 3 else None,
@@ -164,7 +164,7 @@ def test_golden_gates():
     assert notes == []
     assert len(accepted) == len(GOLDEN)
     assert [(row["name"], row["result_text"], row["flag"], row["reference_range"]) for row in accepted] == GOLDEN
-    assert all(row["date"] == "04/24/2026" and row["source"] == "scan" for row in accepted)
+    assert all(row["date"] == "04/14/2026" and row["source"] == "scan" for row in accepted)
 
 
 @pytest.mark.parametrize("failure", ["flag", "disagreement", "grammar", "illegible", "section"])
@@ -253,14 +253,14 @@ def test_rowless_specimen_pages_supply_identity_and_split_summary():
         page["collected"] = None
     for number, block in [(4, summary[:5]), (5, summary[5:])]:
         template.append({
-            "page": number, "specimen_id": "SYN-SCAN-001", "collected": "04/24/2026",
+            "page": number, "specimen_id": "SYN-SCAN-001", "collected": "04/14/2026",
             "footer": None,
             "patient_name": "Synthetic, Pat", "illegible": False,
             "rows": [], "out_of_range_summary": block,
         })
     accepted, notes = gate([[copy.deepcopy(page), copy.deepcopy(page)] for page in template])
     assert len(accepted) == len(GOLDEN)
-    assert all(row["date"] == "04/24/2026" for row in accepted)
+    assert all(row["date"] == "04/14/2026" for row in accepted)
     assert notes == []
 
 
@@ -363,7 +363,7 @@ def test_page_log_format_and_privacy(capsys):
     gate(pairs)
     assert capsys.readouterr().out.splitlines() == [
         f'source=scan page={number} rows_read={count}/{count} specimen_id="SYN-SCAN-001" '
-        'name_matched=yes date="04/24/2026" verdict=kept reason="passed"'
+        'name_matched=yes date="04/14/2026" verdict=kept reason="passed"'
         for number, count in ((2, 54), (3, len(GOLDEN) - 54))
     ]
 
@@ -419,7 +419,7 @@ def test_partial_transcription_still_contributes_contradiction_evidence(capsys):
 
 @pytest.fixture
 def mixed_pdf(tmp_path):
-    digital = fx.section_preamble("SYN-SCAN-DIGITAL", "01/27/2026") + fx.header_line(100, ("01/07/2026",))
+    digital = fx.section_preamble("SYN-SCAN-DIGITAL", "02/03/2026") + fx.header_line(100, ("01/13/2026",))
     for index, name in enumerate(("TSH", "Testosterone, Total", "Free Testosterone", "FSH", "LH",
                                  "PSA Total", "Ferritin", "Vitamin D", "Vitamin B12", "HbA1c", "Glucose",
                                  "Cortisol, Total", "Estradiol", "Creatinine")):
@@ -434,8 +434,8 @@ def test_mocked_merge_and_staff_only_provenance(mixed_pdf, tmp_path):
     for call in client.calls:
         assert call["model"] == pipeline.MODEL
         assert call["output_config"]["format"]["schema"] == scan.SCAN_SCHEMA
-    assert extracted["first_draw_date"] == "01/07/2026"
-    assert extracted["latest_draw_date"] == "04/24/2026"
+    assert extracted["first_draw_date"] == "01/13/2026"
+    assert extracted["latest_draw_date"] == "04/14/2026"
     record, notice = pipeline.score_and_build_record(extracted)
     expected = {"TSH": "1.19", "Testosterone, Total": "1193", "Free Testosterone": "210.0",
                 "FSH": "<0.7", "LH": "<0.2", "PSA Total": "0.53", "Ferritin": "32",
@@ -444,7 +444,7 @@ def test_mocked_merge_and_staff_only_provenance(mixed_pdf, tmp_path):
                 "Estradiol": "34", "Creatinine": "0.91"}
     values = {(item["name"], item["date_display"]): item for item in extracted["marker_occurrences"]}
     for name, value in expected.items():
-        assert values[name, "04/24/2026"]["disp_value"] == value
+        assert values[name, "04/14/2026"]["disp_value"] == value
     assert all("source" not in item and "scan" not in item["source_label"]
                for item in extracted["marker_occurrences"])
     assert "source=scan" in pipeline.format_review_notice(notice)
@@ -460,7 +460,7 @@ def test_bad_transcription_does_not_prevent_next_page(mixed_pdf, tmp_path, capsy
     page = payloads()[1]
     client = MockClient([None, page, page])
     extracted = pipeline.extract(str(mixed_pdf), [], None, client=client, audit_root=str(tmp_path))
-    assert extracted["latest_draw_date"] == "04/24/2026"
+    assert extracted["latest_draw_date"] == "04/14/2026"
     assert any("page 2: schema gate" in note for note in extracted["other_notes"])
     lines = capsys.readouterr().out.splitlines()
     assert any("page=2 rows_read=null/null" in line and "verdict=excluded" in line for line in lines)
@@ -471,7 +471,7 @@ def test_summary_mismatch_preserves_other_scan_rows(mixed_pdf, tmp_path):
     data = payloads()
     data[1]["out_of_range_summary"] = []
     extracted = pipeline.extract(str(mixed_pdf), [], None, client=client_for(data), audit_root=str(tmp_path))
-    assert any(item["date_display"] == "04/24/2026" for item in extracted["marker_occurrences"])
+    assert any(item["date_display"] == "04/14/2026" for item in extracted["marker_occurrences"])
     assert any("summary gate" in note for note in extracted["other_notes"])
     assert not any("ALL SCAN ROWS REJECTED" in note for note in extracted["other_notes"])
 
@@ -515,7 +515,7 @@ def test_invalid_transcription_is_visibly_rejected(mixed_pdf, tmp_path, failure)
         stop_reason="max_tokens" if failure == "truncated" else "end_turn",
     )
     extracted = pipeline.extract(str(mixed_pdf), [], None, client=client, audit_root=str(tmp_path))
-    assert extracted["latest_draw_date"] == "01/27/2026"
+    assert extracted["latest_draw_date"] == "02/03/2026"
     assert any("gate:" in note and "page excluded" in note for note in extracted["other_notes"])
     assert not any("ALL SCAN ROWS REJECTED" in note for note in extracted["other_notes"])
 
@@ -538,7 +538,7 @@ def test_invalid_calendar_date_rejected():
 
 
 def staff_gate(data, failures=()):
-    return scan.gate_staff_identified_reads(data, "04/24/2026", pipeline._CELL_VALUE_RE,
+    return scan.gate_staff_identified_reads(data, "04/14/2026", pipeline._CELL_VALUE_RE,
                                             "Pat Synthetic", failures)
 
 
@@ -550,7 +550,7 @@ def test_staff_identity_skips_printed_metadata_gates(capsys):
     accepted, notes = staff_gate(pairs)
     assert notes == []
     assert [(row["name"], row["result_text"], row["flag"], row["reference_range"]) for row in accepted] == GOLDEN
-    assert all(row["date"] == "04/24/2026" and row["source"] == "scan" for row in accepted)
+    assert all(row["date"] == "04/14/2026" and row["source"] == "scan" for row in accepted)
     lines = capsys.readouterr().out.splitlines()
     assert sum('identity="staff"' in line and "verdict=kept" in line for line in lines) == 2
     assert not any("Synthetic" in line for line in lines)
@@ -667,8 +667,8 @@ def test_staff_failed_transcription_is_page_local(capsys):
 
 
 @pytest.mark.parametrize(("text", "expected"), [
-    ("04/24/2026", "04/24/2026"), ("4/24/2026", "04/24/2026"), ("2026-04-24", "04/24/2026"),
-    ("02/30/2026", None), ("April 24", None), ("", None),
+    ("04/14/2026", "04/14/2026"), ("4/14/2026", "04/14/2026"), ("2026-04-14", "04/14/2026"),
+    ("02/30/2026", None), ("April 14", None), ("", None),
 ])
 def test_staff_collected_date(text, expected):
     if expected:
@@ -687,15 +687,15 @@ def test_pipeline_uses_staff_identity_for_scanned_pages(mixed_pdf, tmp_path):
     reads[2]["illegible"] = True
     reads[3]["patient_name"] = "Different, Person"
     extracted = pipeline.extract(str(mixed_pdf), [], None, patient_name="Synthetic, Pat",
-                                 collected_date="2026-04-24", client=MockClient(reads),
+                                 collected_date="2026-04-14", client=MockClient(reads),
                                  audit_root=str(tmp_path))
-    assert extracted["latest_draw_date"] == "04/24/2026"
+    assert extracted["latest_draw_date"] == "04/14/2026"
     assert sum(" accepted " in note for note in extracted["other_notes"]) == len(GOLDEN)
     assert not any("excluded" in note or "REJECTED" in note for note in extracted["other_notes"])
     assert extracted["other_notes"][0].startswith("STAFF REVIEW - PATIENT NAME MISMATCH: source=scan page 3")
     assert any("identified by staff-entered" in note for note in extracted["other_notes"])
     values = {(item["name"], item["date_display"]): item for item in extracted["marker_occurrences"]}
-    assert values["TSH", "04/24/2026"]["disp_value"] == "1.19"
+    assert values["TSH", "04/14/2026"]["disp_value"] == "1.19"
 
 
 def test_pipeline_without_staff_date_keeps_printed_identity_gates(mixed_pdf, tmp_path):
@@ -725,15 +725,15 @@ def test_real_digital_rows_merge_with_mocked_golden(tmp_path):
             if min(21, 15 + index // 13) == number:
                 page_rows.append({**row, "page": number})
         data.append({
-            "page": number, "specimen_id": "SYN-MOCKED-SCAN", "collected": "04/24/2026 09:15" if number == 21 else None,
+            "page": number, "specimen_id": "SYN-MOCKED-SCAN", "collected": "04/14/2026 09:15" if number == 21 else None,
             "footer": f"SPECIMEN: SYN-MOCKED-SCAN PAGE {number - 14} OF 7",
             "patient_name": next(iter(names)), "illegible": False,
             "rows": page_rows, "out_of_range_summary": summary if number == 20 else None,
         })
     extracted = pipeline.extract(str(SOURCE), [], None, client=client_for(data), audit_root=str(tmp_path))
-    assert extracted["first_draw_date"] == "01/07/2026"
-    assert extracted["latest_draw_date"] == "04/24/2026"
-    latest = {row["name"]: row for row in extracted["marker_occurrences"] if row["date_display"] == "04/24/2026"}
+    assert extracted["first_draw_date"] == "01/13/2026"
+    assert extracted["latest_draw_date"] == "04/14/2026"
+    latest = {row["name"]: row for row in extracted["marker_occurrences"] if row["date_display"] == "04/14/2026"}
     assert latest["TSH"]["disp_value"] == "1.19"
     assert latest["Testosterone, Total"]["disp_value"] == "1193"
     assert latest["Glucose (fasting)"]["disp_value"] == "82"
@@ -750,14 +750,14 @@ def _synthetic_live_pdf(tmp_path):
     preamble = [
         (40, 40, "Order ID: SYN-LIVE"),
         (40, 54, "Patient Name: TEST, PATIENT"),
-        (40, 68, "Collected: 01/27/2026"),
+        (40, 68, "Collected: 02/03/2026"),
     ]
     for x, y, text in preamble + fx.header_line(100) + fx.row(130, "TSH", "1.35"):
         digital.insert_text((x, y), text, fontsize=9)
     image_doc = fitz.open()
     source = image_doc.new_page()
     for point, text in [
-        ((40, 40), "Patient Name: TEST, PATIENT"), ((40, 60), "Collected: 04/24/2026"),
+        ((40, 40), "Patient Name: TEST, PATIENT"), ((40, 60), "Collected: 04/14/2026"),
         ((40, 80), "SPECIMEN: SPECIMEN-A"), ((40, 100), "ROUTINE PANELS"),
         ((40, 120), "Test Name"), ((220, 120), "In Range"), ((320, 120), "Out of Range"),
         ((430, 120), "Reference Range"), ((40, 150), "TSH"), ((220, 150), "1.19"),
@@ -802,4 +802,4 @@ def test_live_synthetic_scan(tmp_path):
     assert len(accepted) == 6
     assert excluded == []
     assert any(row["name"] == "TSH" and row["disp_value"] == "1.19"
-               and row["date_display"] == "04/24/2026" for row in extracted["marker_occurrences"])
+               and row["date_display"] == "04/14/2026" for row in extracted["marker_occurrences"])

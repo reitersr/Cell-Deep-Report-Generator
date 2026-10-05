@@ -6,7 +6,7 @@ only to recognize which known marker a lab value corresponds to (by name,
 allowing for common aliases/formatting differences across lab vendors) and
 pull the value out. The scoring configuration (what counts as optimal,
 moderate, flagged) comes from HERE — the same clinical definitions we
-calibrated and corrected against Star Hawkins' real CHL panel and Priscilla's
+calibrated and corrected against the calibration reference patient's CHL panel and Priscilla's
 brand-approved tier logic. This keeps scoring consistent patient to patient,
 lab to lab, rather than re-derived per document.
 
@@ -14,7 +14,7 @@ If extraction encounters a marker NOT in this table, that is a real, expected
 case (different lab, different panel) — see unknown_marker_policy.py for how
 the pipeline handles it. It is NEVER silently invented here.
 
-Corrections applied during calibration (verified against Star's real CHL PDF,
+Corrections applied during calibration (verified against the reference patient's CHL PDF,
 not the original invented thresholds):
   - Lp-PLA2 Activity: binary optimal/high, no moderate zone (moderate == optimal)
   - Myeloperoxidase: moderate ceiling corrected to 539

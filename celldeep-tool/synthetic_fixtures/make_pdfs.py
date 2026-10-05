@@ -15,7 +15,7 @@ def make_pdf(path: str, text: str):
     doc.close()
 
 
-# ---- SYN-COMPLETE-1 (Star-analog): both draws complete, every marker has real then+now ----
+# ---- SYN-COMPLETE-1 (reference-analog): both draws complete, every marker has real then+now ----
 make_pdf(f"{OUT}/syn_complete_1.pdf", """
 SYNTHETIC TEST LAB REPORT - FAKE DATA, NOT A REAL PATIENT
 Patient: Synthetic Test Patient One (SYN-COMPLETE-1)

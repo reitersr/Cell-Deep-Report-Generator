@@ -92,7 +92,10 @@ def test_real_bloodwork_golden_values_and_sections():
         results, unknown = pipeline._parse_bloodwork_tables(list(document)[:8], row_audit=audit)
         source_bands = {page.number + 1: _printed_cell_bands(page) for page in list(document)[:8]}
     found = {(item["name"], item["date_display"]): item for item in results}
-    current, historical = "01/27/2026", "01/07/2026"
+    # Draw dates come from the local PDF itself so no real date is stored in the repository.
+    dates = sorted({item["date_display"] for item in results}, key=pipeline._normalize_date_for_matching)
+    assert len(dates) == 2
+    historical, current = dates
     for name, now, then in [
         ("hs-CRP", "0.3", ">20.0"),
         ("Estradiol", "62", "12"),

@@ -28,7 +28,7 @@ _MONTH_NAMES = {
 
 def normalize_date_for_matching(date_str: str):
     """Best-effort normalization so the same real draw date printed differently across two
-    reports (e.g. "04/24/2026" vs "April 24, 2026") is recognized as one draw for reconciliation.
+    reports (e.g. "04/14/2026" vs "April 14, 2026") is recognized as one draw for reconciliation.
     Falls back to the raw stripped/lowercased string when the format isn't recognized - this only
     affects whether two occurrences get grouped together, it never invents or alters a date used
     for display."""
@@ -110,7 +110,7 @@ class Marker:
 @dataclass
 class DexaReading:
     """One DEXA scan. VAT/SAT are optional per-reading — not every visit re-measures them."""
-    date_display: str          # e.g. "May 21, 2025"
+    date_display: str          # e.g. "May 12, 2025"
     # A scan may be partial (e.g. a follow-up visit that only re-measured VAT) — any metric the
     # source didn't actually report stays None, never a fabricated 0, so the template can render
     # it honestly (a dash) instead of a real-looking zero measurement.

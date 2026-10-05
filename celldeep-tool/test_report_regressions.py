@@ -1,7 +1,6 @@
-"""Regression coverage for the five systemic issues found in a real regenerated report
-(patient referred to internally as "Evan Walker"). No real Evan Walker source PDFs exist in
-this workspace, so every fixture here is synthetic/fake data built to reproduce the same
-underlying pipeline conditions, not a copy of the real report.
+"""Regression coverage for systemic issues found in a regenerated production report.
+Every fixture here is synthetic data built to reproduce the same underlying pipeline
+conditions; no patient names, identifiers, dates or source documents are used.
 
 Issue 1: duplicate marker rows with conflicting/matching "then" values (alias collapsing).
 Issue 2: DEXA scans with fabricated 0 total/fat/lean alongside a real VAT reading.
@@ -120,28 +119,28 @@ def test_extraction_sentinel_partial_scan_becomes_null_not_fabricated():
     # -1 / "" is the real extraction-schema encoding for "not measured" (see extraction_prompt.py -
     # these fields can't be true JSON null without exceeding the API's nullable-field limit)
     normalized = scoring.normalize_dexa_body_fat({
-        "date_display": "Jan 27, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
-        "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 1.23,
+        "date_display": "Feb 3, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
+        "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 1.31,
     })
     assert normalized["total_mass_lb"] is None
     assert normalized["fat_mass_lb"] is None
     assert normalized["lean_mass_lb"] is None
     assert normalized["body_fat_pct"] is None
-    assert normalized["vat_fat_mass_lb"] == 1.23
+    assert normalized["vat_fat_mass_lb"] == 1.31
 
 
 def test_zero_sentinel_partial_scan_becomes_null_not_fabricated():
     # defense-in-depth: even if a sentinel is missed and 0 slips through instead, an all-zero
     # reading alongside a real, nonzero VAT reading is still treated as a partial scan
     normalized = scoring.normalize_dexa_body_fat({
-        "date_display": "Jan 27, 2026", "total_mass_lb": 0, "fat_mass_lb": 0,
-        "lean_mass_lb": 0, "body_fat_pct": None, "vat_fat_mass_lb": 1.23,
+        "date_display": "Feb 3, 2026", "total_mass_lb": 0, "fat_mass_lb": 0,
+        "lean_mass_lb": 0, "body_fat_pct": None, "vat_fat_mass_lb": 1.31,
     })
     assert normalized["total_mass_lb"] is None
     assert normalized["fat_mass_lb"] is None
     assert normalized["lean_mass_lb"] is None
     assert normalized["body_fat_pct"] is None
-    assert normalized["vat_fat_mass_lb"] == 1.23
+    assert normalized["vat_fat_mass_lb"] == 1.31
 
 
 def test_genuine_zero_is_not_misread_as_partial_scan():
@@ -160,8 +159,8 @@ def test_partial_scan_renders_dashes_not_zero_in_history_table(tmp_path):
             DexaReading(date_display="Jan 1, 2026", total_mass_lb=170.0, fat_mass_lb=56.0,
                         lean_mass_lb=110.0, body_fat_pct="33.0%", vat_fat_mass_lb=2.0),
             DexaReading(**scoring.normalize_dexa_body_fat({
-                "date_display": "Jan 27, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
-                "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 1.23,
+                "date_display": "Feb 3, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
+                "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 1.31,
             })),
         ],
     )
@@ -174,7 +173,7 @@ def test_partial_scan_renders_dashes_not_zero_in_history_table(tmp_path):
     )
     with fitz.open(output) as rendered:
         text = "\n".join(page.get_text() for page in rendered)
-    assert "1.23" in text  # real VAT value still shown
+    assert "1.31" in text  # printed VAT value still shown
     assert "— lb total" in text
     assert "— lb fat" in text
     assert "— lb lean" in text
@@ -252,35 +251,34 @@ def test_single_dexa_scan_vat_area_shown_in_history_table_not_blank():
 # zeros) - this is about WHICH scan the snapshot ("Where you are now") panel uses at all.
 # ---------------------------------------------------------------------------
 
-def _evan_walker_dexa_history():
-    # Real dates/VAT values from Evan Walker's actual 7-scan history (established earlier in this
-    # conversation): three trailing VAT-only follow-ups (Jan 27, Feb 18, Feb 27, 2026) sort last
-    # chronologically but have no real body-composition data, and May 28, 2026 - a later, complete
+def _partial_followup_dexa_history():
+    # Synthetic history with the production shape: three trailing VAT-only follow-ups (Feb 3, Feb 24, Mar 9, 2026) sort last
+    # chronologically but have no real body-composition data, and June 3, 2026 - a later, complete
     # scan - is the true most recent usable reading.
     return [
         DexaReading(date_display="Jan 1, 2026", total_mass_lb=170.0, fat_mass_lb=56.0,
                     lean_mass_lb=110.0, body_fat_pct="33.0%", vat_fat_mass_lb=2.0),
         DexaReading(**scoring.normalize_dexa_body_fat({
-            "date_display": "Jan 27, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
-            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 1.23,
+            "date_display": "Feb 3, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
+            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 1.31,
         })),
         DexaReading(**scoring.normalize_dexa_body_fat({
-            "date_display": "Feb 18, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
-            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 0.82,
+            "date_display": "Feb 24, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
+            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 0.86,
         })),
         DexaReading(**scoring.normalize_dexa_body_fat({
-            "date_display": "Feb 27, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
-            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 0.72,
+            "date_display": "Mar 9, 2026", "total_mass_lb": -1, "fat_mass_lb": -1,
+            "lean_mass_lb": -1, "body_fat_pct": "", "vat_fat_mass_lb": 0.77,
         })),
-        DexaReading(date_display="May 28, 2026", total_mass_lb=158.0, fat_mass_lb=42.0,
+        DexaReading(date_display="June 3, 2026", total_mass_lb=158.0, fat_mass_lb=42.0,
                     lean_mass_lb=113.0, body_fat_pct="26.6%", vat_fat_mass_lb=0.6),
     ]
 
 
 def test_current_dexa_scan_skips_trailing_partial_scans_for_a_real_complete_one():
-    record = PatientRecord(name="Evan Walker DEXA Selection", dexa_history=_evan_walker_dexa_history())
+    record = PatientRecord(name="Synthetic DEXA Selection", dexa_history=_partial_followup_dexa_history())
     latest = template._latest_complete_dexa_reading(record.dexa_history)
-    assert latest.date_display == "May 28, 2026"
+    assert latest.date_display == "June 3, 2026"
     assert latest.total_mass_lb == 158.0
 
 
@@ -288,8 +286,8 @@ def test_build_rollups_structure_score_skips_trailing_partial_scans():
     """Issue 1 regression: build_rollups() must select the same complete scan dexa_panel()
     displays, not the raw last dexa_history entry - a trailing VAT-only recheck (no body-fat
     or VAT-area data) must never zero out the Structure score."""
-    record = PatientRecord(name="Evan Walker DEXA Selection", sex="male",
-                            dexa_history=_evan_walker_dexa_history())
+    record = PatientRecord(name="Synthetic DEXA Selection", sex="male",
+                            dexa_history=_partial_followup_dexa_history())
     roll, _order, _overall_now, _overall_then, has_dexa = template.build_rollups(
         record, None, None, False
     )
@@ -299,19 +297,19 @@ def test_build_rollups_structure_score_skips_trailing_partial_scans():
 
 
 def test_dexa_panel_snapshot_uses_the_real_latest_complete_scan_not_the_last_list_entry():
-    record = PatientRecord(name="Evan Walker DEXA Selection", dexa_history=_evan_walker_dexa_history())
+    record = PatientRecord(name="Synthetic DEXA Selection", dexa_history=_partial_followup_dexa_history())
     roll = {"Structure": {"now": 90}}
     html = template.dexa_panel(record, _copy_for_render(headlines={"Structure": "Real headline."}), roll, None)
     assert "Where you are now" in html
     now_idx = html.find("Where you are now")
     now_section = html[now_idx:now_idx + 600]
-    assert "May 28, 2026" in now_section
-    assert "42.0" in now_section  # fat mass, lb - real May 28 value, never the trailing partial scan
-    assert "Feb 27, 2026" not in now_section
+    assert "June 3, 2026" in now_section
+    assert "42.0" in now_section  # fat mass, lb - real June 3 value, never the trailing partial scan
+    assert "Mar 9, 2026" not in now_section
 
 
 def test_dexa_panel_renders_all_seven_real_scan_dates_in_full_history():
-    history = _evan_walker_dexa_history() + [
+    history = _partial_followup_dexa_history() + [
         DexaReading(date_display="Jun 10, 2026", total_mass_lb=157.0, fat_mass_lb=41.0,
                     lean_mass_lb=114.0, body_fat_pct="26.1%", vat_fat_mass_lb=0.58),
         DexaReading(date_display="Jul 2, 2026", total_mass_lb=156.0, fat_mass_lb=40.0,
@@ -322,8 +320,8 @@ def test_dexa_panel_renders_all_seven_real_scan_dates_in_full_history():
                                {"Structure": {"now": 90}}, None)
 
     history_section = html[html.index("Full scan history"):]
-    for date in ("January 1, 2026", "January 27, 2026", "February 18, 2026", "February 27, 2026",
-                 "May 28, 2026", "June 10, 2026", "July 2, 2026"):
+    for date in ("January 1, 2026", "February 3, 2026", "February 24, 2026", "March 9, 2026",
+                 "June 3, 2026", "June 10, 2026", "July 2, 2026"):
         assert date in history_section
     assert history_section.count('class="dexa-hist-row"') == 7
 
@@ -332,44 +330,43 @@ def test_dexa_panel_renders_all_seven_real_scan_dates_in_full_history():
 # Issue 6: a marker present only in a secondary same-draw lab report (e.g. a separate Quest
 # Diagnostics report for the same specimen/draw date as the primary Cleveland HeartLab panel)
 # was dropped entirely instead of being captured as that draw's "now" value. Confirmed real
-# case: the CHL Cardiometabolic report for the 04/24/2026 draw states urinalysis was
+# case: the CHL Cardiometabolic report for the 04/14/2026 draw states urinalysis was
 # "Test Not Performed / No specimen received," but the separate Quest report for that exact
-# same draw date/specimen (MR421967F) DID run it, with Occult Blood = Negative. That Negative
+# same draw date/specimen DID run it, with Occult Blood = Negative. That Negative
 # result must surface as "now" for Urinalysis — Occult Blood; it was being lost.
-# No real Evan Walker source PDFs exist in this workspace (same caveat as Issue 1-5 above), so
-# the fixtures below reproduce the same underlying condition synthetically.
+# The fixtures below reproduce the same underlying condition synthetically.
 # ---------------------------------------------------------------------------
 
 def test_occurrence_reconciliation_uses_only_dated_actual_results():
     occurrences = [
-        {"name": "Free T3", "date_display": "01/07/2026", "source_label": "CHL",
+        {"name": "Free T3", "date_display": "01/13/2026", "source_label": "CHL",
          "status": "reported", "value": 3.5, "disp_value": "3.5", "is_good": None,
          "lab_range_lo": 2.0, "lab_range_hi": 4.4, "lab_range_display": "2.0-4.4"},
         {"name": "Free T3", "date_display": "02/01/2026", "source_label": "CHL",
          "status": "reported", "value": 2.9, "disp_value": "2.9", "is_good": None,
          "lab_range_lo": 2.0, "lab_range_hi": 4.4, "lab_range_display": "2.0-4.4"},
-        {"name": "Free T3", "date_display": "04/24/2026", "source_label": "Quest MR421967F",
+        {"name": "Free T3", "date_display": "04/14/2026", "source_label": "Quest SYN-SPECIMEN-02",
          "status": "reported", "value": 3.5, "disp_value": "3.5", "is_good": None,
          "lab_range_lo": 2.0, "lab_range_hi": 4.4, "lab_range_display": "2.0-4.4"},
-        {"name": "Glucose (fasting)", "date_display": "04/24/2026", "source_label": "CHL",
+        {"name": "Glucose (fasting)", "date_display": "04/14/2026", "source_label": "CHL",
          "status": "reported", "value": 92, "disp_value": "92", "is_good": None,
          "lab_range_lo": 70, "lab_range_hi": 99, "lab_range_display": "70-99"},
-        {"name": "Glucose (fasting)", "date_display": "04/24/2026", "source_label": "Quest MR421967F",
+        {"name": "Glucose (fasting)", "date_display": "04/14/2026", "source_label": "Quest SYN-SPECIMEN-02",
          "status": "reported", "value": 92, "disp_value": "92.0", "is_good": None,
          "lab_range_lo": 70, "lab_range_hi": 99, "lab_range_display": "70-99"},
-        {"name": "Urinalysis", "date_display": "04/24/2026", "source_label": "CHL",
+        {"name": "Urinalysis", "date_display": "04/14/2026", "source_label": "CHL",
          "status": "not_performed", "value": None, "disp_value": "", "is_good": None,
          "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
-        {"name": "Occult Blood", "date_display": "04/24/2026", "source_label": "Quest MR421967F",
+        {"name": "Occult Blood", "date_display": "04/14/2026", "source_label": "Quest SYN-SPECIMEN-02",
          "status": "reported", "value": None, "disp_value": "Negative", "is_good": True,
          "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
-        {"name": "Myeloperoxidase", "date_display": "01/07/2026", "source_label": "CHL",
+        {"name": "Myeloperoxidase", "date_display": "01/13/2026", "source_label": "CHL",
          "status": "reported", "value": 300, "disp_value": "300", "is_good": None,
          "lab_range_lo": 0, "lab_range_hi": 539, "lab_range_display": "0-539"},
-        {"name": "Myeloperoxidase", "date_display": "04/24/2026", "source_label": "CHL",
+        {"name": "Myeloperoxidase", "date_display": "04/14/2026", "source_label": "CHL",
          "status": "not_performed", "value": None, "disp_value": "", "is_good": None,
          "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
-        {"name": "hs-CRP", "date_display": "04/24/2026", "source_label": "CHL",
+        {"name": "hs-CRP", "date_display": "04/14/2026", "source_label": "CHL",
          "status": "reported", "value": 0.3, "disp_value": "0.3", "is_good": None,
          "lab_range_lo": 0, "lab_range_hi": 10, "lab_range_display": "0-10"},
         {"name": "hs-CRP", "date_display": "", "source_label": "CHL current",
@@ -392,17 +389,17 @@ def test_occurrence_reconciliation_uses_only_dated_actual_results():
     assert occult["is_good_now"] is True
     assert by_name["Myeloperoxidase"]["now"] is None
     assert by_name["Myeloperoxidase"]["then"] == 300
-    assert by_name["Myeloperoxidase"]["then_date_display"] == "01/07/2026"
+    assert by_name["Myeloperoxidase"]["then_date_display"] == "01/13/2026"
     assert by_name["hs-CRP"]["now"] == 0.3
     assert by_name["hs-CRP"]["then"] is None
 
 
 def test_occurrence_reconciliation_reads_dates_embedded_in_report_column_labels():
     occurrences = [
-        {"name": "Total Cholesterol", "date_display": "Historical (01/07/2026)",
+        {"name": "Total Cholesterol", "date_display": "Historical (01/13/2026)",
          "status": "reported", "value": 180, "disp_value": "180", "is_good": None,
          "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
-        {"name": "Total Cholesterol", "date_display": "Current (04/24/2026)",
+        {"name": "Total Cholesterol", "date_display": "Current (04/14/2026)",
          "status": "reported", "value": 200, "disp_value": "200", "is_good": None,
          "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
     ]
@@ -415,13 +412,13 @@ def test_occurrence_reconciliation_reads_dates_embedded_in_report_column_labels(
 
 def test_occurrence_history_is_sorted_by_date_not_source_order():
     occurrences = [
-        {"name": "TSH", "date_display": "04/24/2026", "status": "reported", "value": 3.0,
+        {"name": "TSH", "date_display": "04/14/2026", "status": "reported", "value": 3.0,
          "disp_value": "3.0", "is_good": None, "lab_range_lo": 0, "lab_range_hi": 0,
          "lab_range_display": ""},
         {"name": "TSH", "date_display": "02/01/2026", "status": "reported", "value": 2.0,
          "disp_value": "2.0", "is_good": None, "lab_range_lo": 0, "lab_range_hi": 0,
          "lab_range_display": ""},
-        {"name": "TSH", "date_display": "01/07/2026", "status": "reported", "value": 1.0,
+        {"name": "TSH", "date_display": "01/13/2026", "status": "reported", "value": 1.0,
          "disp_value": "1.0", "is_good": None, "lab_range_lo": 0, "lab_range_hi": 0,
          "lab_range_display": ""},
     ]
@@ -437,9 +434,9 @@ def test_occurrence_history_is_sorted_by_date_not_source_order():
 
 def test_hscrp_three_real_values_uses_true_baseline_then():
     reconciled = pipeline.reconcile_marker_occurrences([
-        _dated_occurrence("hs-CRP", "01/07/2026", 20.0, ">20.0"),
-        _dated_occurrence("hs-CRP", "01/27/2026", 0.3),
-        {"name": "hs-CRP", "date_display": "04/24/2026", "status": "unscored",
+        _dated_occurrence("hs-CRP", "01/13/2026", 20.0, ">20.0"),
+        _dated_occurrence("hs-CRP", "02/03/2026", 0.3),
+        {"name": "hs-CRP", "date_display": "04/14/2026", "status": "unscored",
          "value": None, "disp_value": "<3.0", "is_good": None,
          "lab_range_lo": 0, "lab_range_hi": 3, "lab_range_display": "<3.0"},
     ])
@@ -450,7 +447,7 @@ def test_hscrp_three_real_values_uses_true_baseline_then():
     assert raw["now"] is None
     assert raw["disp_now"] == "<3.0"
     assert raw["full_history"] == [{
-        "date_display": "01/27/2026", "value": 0.3, "disp_value": "0.3",
+        "date_display": "02/03/2026", "value": 0.3, "disp_value": "0.3",
     }]
 
 
@@ -459,9 +456,9 @@ def test_hscrp_latest_occurrence_wins_now_even_when_mistagged_not_performed():
     status field is mistagged "not_performed" - it must still win "now" as the latest
     occurrence, exactly like FSH's identically-shaped threshold occurrence does."""
     reconciled = pipeline.reconcile_marker_occurrences([
-        _dated_occurrence("hs-CRP", "01/07/2026", 20.0, ">20.0"),
-        _dated_occurrence("hs-CRP", "01/27/2026", 0.3),
-        {"name": "hs-CRP", "date_display": "04/24/2026", "source_label": "Quest",
+        _dated_occurrence("hs-CRP", "01/13/2026", 20.0, ">20.0"),
+        _dated_occurrence("hs-CRP", "02/03/2026", 0.3),
+        {"name": "hs-CRP", "date_display": "04/14/2026", "source_label": "Quest",
          "status": "not_performed", "value": None, "disp_value": "<3.0", "is_good": None,
          "lab_range_lo": 0, "lab_range_hi": 3, "lab_range_display": "<3.0"},
     ])
@@ -469,12 +466,12 @@ def test_hscrp_latest_occurrence_wins_now_even_when_mistagged_not_performed():
 
     assert raw["then"] == 20.0
     assert raw["disp_then"] == ">20.0"
-    assert raw["then_date_display"] == "01/07/2026"
+    assert raw["then_date_display"] == "01/13/2026"
     assert raw["now"] is None
     assert raw["disp_now"] == "<3.0"
-    assert raw["now_date_display"] == "04/24/2026"
+    assert raw["now_date_display"] == "04/14/2026"
     assert raw["full_history"] == [{
-        "date_display": "01/27/2026", "value": 0.3, "disp_value": "0.3",
+        "date_display": "02/03/2026", "value": 0.3, "disp_value": "0.3",
     }]
 
 
@@ -484,7 +481,7 @@ def test_hscrp_latest_occurrence_wins_now_even_when_mistagged_not_performed():
     ("Free Testosterone", [(66.3, "66.3"), (310.1, "310.1"), (210.0, "210.0")]),
 ])
 def test_three_occurrences_keep_earliest_then_latest_now_and_dates_paired(name, values):
-    dates = ["01/07/2026", "01/27/2026", "04/24/2026"]
+    dates = ["01/13/2026", "02/03/2026", "04/14/2026"]
     occurrences = [
         dict(_dated_occurrence(name, date, value, disp_value),
              status="unscored" if value is None else "reported")
@@ -506,16 +503,16 @@ def test_three_occurrences_keep_earliest_then_latest_now_and_dates_paired(name, 
 
 def test_fsh_lh_threshold_results_remain_current_when_numeric_value_is_null():
     occurrences = [
-        {"name": "FSH", "date_display": "01/07/2026", "status": "reported",
+        {"name": "FSH", "date_display": "01/13/2026", "status": "reported",
          "value": 2.0, "disp_value": "2.0", "is_good": None,
          "lab_range_lo": 1, "lab_range_hi": 10, "lab_range_display": "1-10"},
-        {"name": "FSH", "date_display": "04/24/2026", "status": "reported",
+        {"name": "FSH", "date_display": "04/14/2026", "status": "reported",
          "value": None, "disp_value": "<0.7", "is_good": None,
          "lab_range_lo": 1, "lab_range_hi": 10, "lab_range_display": "1-10"},
-        {"name": "LH", "date_display": "01/07/2026", "status": "reported",
+        {"name": "LH", "date_display": "01/13/2026", "status": "reported",
          "value": 1.5, "disp_value": "1.5", "is_good": None,
          "lab_range_lo": 1, "lab_range_hi": 10, "lab_range_display": "1-10"},
-        {"name": "LH", "date_display": "04/24/2026", "status": "reported",
+        {"name": "LH", "date_display": "04/14/2026", "status": "reported",
          "value": None, "disp_value": "<0.2", "is_good": None,
          "lab_range_lo": 1, "lab_range_hi": 10, "lab_range_display": "1-10"},
     ]
@@ -535,7 +532,7 @@ def test_hormone_precedence_ignores_undated_chl_and_uses_later_real_date():
         "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": "",
     }
     dated_quest = {
-        "name": "Estradiol", "date_display": "04/24/2026", "source_label": "Quest MR421967F",
+        "name": "Estradiol", "date_display": "04/14/2026", "source_label": "Quest SYN-SPECIMEN-02",
         "status": "reported", "value": 42, "disp_value": "42", "is_good": None,
         "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": "",
     }
@@ -581,8 +578,8 @@ def _dated_occurrence(name, date_display, value, disp_value=None):
 
 def test_lone_older_marker_is_then_not_now_and_renders_its_real_date():
     reconciled = pipeline.reconcile_marker_occurrences([
-        _dated_occurrence("Myeloperoxidase", "01/07/2026", 300),
-        _dated_occurrence("hs-CRP", "04/24/2026", 0.3),
+        _dated_occurrence("Myeloperoxidase", "01/13/2026", 300),
+        _dated_occurrence("hs-CRP", "04/14/2026", 0.3),
     ])
     raw = next(marker for marker in reconciled if marker["name"] == "Myeloperoxidase")
     record, _ = pipeline.score_and_build_record({"name": "Date Labels", "markers": [raw]})
@@ -590,45 +587,45 @@ def test_lone_older_marker_is_then_not_now_and_renders_its_real_date():
 
     assert raw["now"] is None
     assert raw["then"] == 300
-    assert raw["then_date_display"] == "01/07/2026"
-    assert "January 7, 2026" in html
+    assert raw["then_date_display"] == "01/13/2026"
+    assert "January 13, 2026" in html
 
 
 def test_lone_marker_on_report_current_date_is_now_not_then():
     reconciled = pipeline.reconcile_marker_occurrences([
-        _dated_occurrence("Progesterone", "04/24/2026", 1.2),
-        _dated_occurrence("hs-CRP", "04/24/2026", 0.3),
+        _dated_occurrence("Progesterone", "04/14/2026", 1.2),
+        _dated_occurrence("hs-CRP", "04/14/2026", 0.3),
     ])
     raw = next(marker for marker in reconciled if marker["name"] == "Progesterone")
     assert raw["now"] == 1.2
     assert raw["then"] is None
-    assert raw["now_date_display"] == "04/24/2026"
+    assert raw["now_date_display"] == "04/14/2026"
 
 
 def test_two_older_marker_occurrences_keep_newer_as_now_and_older_as_then():
     reconciled = pipeline.reconcile_marker_occurrences([
-        _dated_occurrence("CoQ10", "01/07/2026", 0.8),
+        _dated_occurrence("CoQ10", "01/13/2026", 0.8),
         _dated_occurrence("CoQ10", "02/15/2026", 1.1),
-        _dated_occurrence("hs-CRP", "04/24/2026", 0.3),
+        _dated_occurrence("hs-CRP", "04/14/2026", 0.3),
     ])
     raw = next(marker for marker in reconciled if marker["name"] == "CoQ10")
     assert raw["now"] == 1.1
     assert raw["then"] == 0.8
     assert raw["now_date_display"] == "02/15/2026"
-    assert raw["then_date_display"] == "01/07/2026"
+    assert raw["then_date_display"] == "01/13/2026"
 
 
 def test_then_and_now_cells_show_each_value_date_not_static_header_dates():
     reconciled = pipeline.reconcile_marker_occurrences([
-        _dated_occurrence("CoQ10", "01/07/2026", 0.8),
+        _dated_occurrence("CoQ10", "01/13/2026", 0.8),
         _dated_occurrence("CoQ10", "02/15/2026", 1.1),
-        _dated_occurrence("hs-CRP", "04/24/2026", 0.3),
+        _dated_occurrence("hs-CRP", "04/14/2026", 0.3),
     ])
     raw = next(marker for marker in reconciled if marker["name"] == "CoQ10")
     record, _ = pipeline.score_and_build_record({"name": "Per Value Dates", "markers": [raw]})
     html = template.bio_row_tr(record.markers[0], {})
 
-    assert "January 7, 2026" in html
+    assert "January 13, 2026" in html
     assert "February 15, 2026" in html
 
 
@@ -637,8 +634,8 @@ def test_narrative_copy_excludes_undated_superseded_marker_value():
 
     marker = Marker(
         name="Testosterone, Total", category="Hormones", unit="ng/dL", kind="range",
-        disp_range="300 - 1000", then=506, disp_then="506", then_date_display="01/07/2026",
-        now=720, disp_now="720", now_date_display="04/24/2026", now_tier="moderate", then_tier="optimal",
+        disp_range="300 - 1000", then=506, disp_then="506", then_date_display="01/13/2026",
+        now=720, disp_now="720", now_date_display="04/14/2026", now_tier="moderate", then_tier="optimal",
     )
 
     copy_text = json.dumps(build_copy(PatientRecord(name="Scoped Copy", markers=[marker])))
@@ -738,7 +735,7 @@ def test_flagged_lh_fsh_copy_never_asserts_trt_suppression_without_confirmed_sta
         markers=[
             Marker(name=name, category="Hormones", unit="mIU/mL", kind="range",
                    disp_range="lab-specific reference range", lo=1.0, hi=10.0,
-                   now=0.1, disp_now="0.1", now_date_display="04/24/2026", now_tier="flag", now_pct=20,
+                   now=0.1, disp_now="0.1", now_date_display="04/14/2026", now_tier="flag", now_pct=20,
                    suppress_low_on_trt=True)
             for name in ("LH", "FSH")
         ],

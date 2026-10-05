@@ -1,4 +1,7 @@
-"""Repeatable local Star fixture harness for report rendering and pagination checks."""
+"""Repeatable local reference-patient harness for report rendering and pagination checks.
+
+Source files live only in the git-ignored real_fixtures/ directory; identity is passed on the
+command line and never stored in the repository."""
 
 import argparse
 import os
@@ -24,7 +27,11 @@ def _blank_space_summary(pdf_path: Path) -> list[tuple[int, float]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fixtures", default="fixtures/star", help="directory containing Star's local source files")
+    parser.add_argument("--fixtures", default="real_fixtures/reference",
+                        help="git-ignored directory containing the reference patient's local source files")
+    parser.add_argument("--patient-name", required=True)
+    parser.add_argument("--age", type=int)
+    parser.add_argument("--sex", choices=["male", "female"])
     parser.add_argument("--out", default="local-output", help="directory for generated PDF and HTML")
     args = parser.parse_args()
 
@@ -39,19 +46,19 @@ def main() -> int:
     if missing:
         print("Local harness cannot run: missing fixture files:", file=sys.stderr)
         print("  " + "\n  ".join(missing), file=sys.stderr)
-        print("Place Star Hawkins' real files in the fixture directory and rerun.", file=sys.stderr)
+        print("Place the reference patient's files in the fixture directory and rerun.", file=sys.stderr)
         return 2
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_pdf = output_dir / "star_report.pdf"
+    output_pdf = output_dir / "reference_report.pdf"
     note_text = note.read_text(encoding="utf-8")
     pipeline.run(
         labs_pdf=str(labs),
         dexa_pdfs=[str(path) for path in dexa],
         note_text=note_text,
-        patient_name="Star Hawkins",
-        age=37,
-        sex="female",
+        patient_name=args.patient_name,
+        age=args.age,
+        sex=args.sex,
         out_path=str(output_pdf),
     )
 

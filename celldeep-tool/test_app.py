@@ -52,7 +52,7 @@ def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
             data={
                 "patient_name": "Test Patient",
                 "note_text": "Original note.",
-                "collected_date": "2026-04-24",
+                "collected_date": "2026-04-14",
                 "labs_pdf": (io.BytesIO(b"synthetic input PDF"), "synthetic-labs.pdf"),
             },
         )
@@ -70,7 +70,7 @@ def test_generate_runs_as_disk_backed_background_job(tmp_path, monkeypatch):
     assert status["review_notes_url"] == f"/download/{job_id}/review-notes"
     assert app.app.test_client().get(status["report_url"]).data == b"synthetic report PDF"
     assert captured["note_text"] == "Original note."
-    assert captured["collected_date"] == "04/24/2026"
+    assert captured["collected_date"] == "04/14/2026"
     assert captured["vitality_index"] == {
         label: "Not Assessed" for _, label in app.VITALITY_FIELDS
     }
@@ -82,7 +82,7 @@ def test_unrecognized_lab_layout_fails_the_upload_job_visibly(tmp_path, monkeypa
 
     monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
     document = fitz.open()
-    document.new_page().insert_text((40, 60), "Collected: 04/24/2026  hs-CRP 0.3 mg/L  TSH 1.9", fontsize=10)
+    document.new_page().insert_text((40, 60), "Collected: 04/14/2026  hs-CRP 0.3 mg/L  TSH 1.9", fontsize=10)
     pdf_bytes = document.tobytes()
     document.close()
 
@@ -128,7 +128,7 @@ def _lab_pdf_bytes(scanned):
     import fitz
 
     document = fitz.open()
-    document.new_page().insert_text((40, 60), "Collected: 01/27/2026  TSH 1.9", fontsize=10)
+    document.new_page().insert_text((40, 60), "Collected: 02/03/2026  TSH 1.9", fontsize=10)
     if scanned:
         source = fitz.open()
         source.new_page().insert_text((40, 60), "TSH 1.19", fontsize=10)
@@ -159,7 +159,7 @@ def test_lab_pdf_with_date_or_without_scans_starts_job(tmp_path, monkeypatch, sc
     pdf = _lab_pdf_bytes(scanned)
     data = {"patient_name": "Test Patient", "labs_pdf": (io.BytesIO(pdf), "labs.pdf")}
     if scanned:
-        data["collected_date"] = "2026-04-24"
+        data["collected_date"] = "2026-04-14"
     with patch.object(app.pipeline, "run", return_value=str(tmp_path / "review.txt")):
         (tmp_path / "review.txt").write_text("synthetic review", encoding="utf-8")
         response = app.app.test_client().post("/generate", data=data)

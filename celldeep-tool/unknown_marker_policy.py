@@ -23,7 +23,7 @@ library update, not a recurring judgment call.
 
 This mirrors exactly how the human-built version of this pipeline worked
 tonight: when a genuinely new marker (Fibrinogen) needed to be added for
-Star, it was added to the reference library once, deliberately, with a real
+the reference patient, it was added to the reference library once, deliberately, with a real
 clinical cutoff — not invented per-report.
 """
 

@@ -85,7 +85,7 @@ audit. Conflicting duplicates raise a `BloodworkParseError` naming the pages.
 | File | Purpose |
 |---|---|
 | `schema.py` | The data contract between extraction and generation. Every field is `Optional` on purpose — a missing field means "not provided," never a guess. |
-| `markers_reference.py` | Known biomarker library — scoring config per marker, corrected against Star's real CHL data during calibration. |
+| `markers_reference.py` | Known biomarker library — scoring config per marker, corrected against the calibration reference patient's CHL panel. |
 | `protocol_reference.py` | Known compound library (BPC-157, Retatrutide, Klow, etc.) with typical target systems. |
 | `unknown_marker_policy.py` | What happens when extraction finds a marker not in the library — flagged for human review, never guessed. |
 | `scoring.py` | Pure math. No AI. The exact corrected tier/percentage logic from data.py. |
@@ -99,8 +99,8 @@ audit. Conflicting duplicates raise a `BloodworkParseError` naming the pages.
 **Verified, directly, in this environment:**
 - Every file imports cleanly with no syntax errors
 - The entire deterministic path — schema → scoring → template rendering —
-  was run end-to-end with hand-entered test data (based on Star's real
-  numbers) and produced a correct PDF matching V23's visual design,
+  was run end-to-end with hand-entered test data (based on the calibration
+  reference patient) and produced a correct PDF matching V23's visual design,
   including the real DEXA scan image and the VAT column
 
 **Not yet verified:**
@@ -116,14 +116,13 @@ non-table pages 9–14, and visible warnings on image-only pages 15–21 without
 changing readable-page results. It also checks golden values, section
 isolation, result-band accounting, duplicate provenance, and conflicts.
 
-## First real test to run (do this first, before any new patient)
+## Running against the calibration reference patient (local only)
 
-Run the full pipeline against **Star Hawkins' actual real source
-material** — the same lab PDF, DEXA PDFs, and provider note used
-throughout calibration — and confirm the output matches V23. This is the
-one case where the correct answer is already known, so it's the right
-first proof before testing on any patient whose correct output isn't
-already established.
+Run the full pipeline against the calibration reference patient's source
+material (lab PDF, DEXA PDFs, provider note), kept only in the git-ignored
+`real_fixtures/` directory, and confirm the output matches V23. This is the
+one case where the correct answer is already known. Never commit these files
+or put the patient's name in commands that are saved to the repository.
 
 ```bash
 pip install -r requirements.txt
@@ -132,11 +131,11 @@ playwright install chromium
 export ANTHROPIC_API_KEY="your-key-here"
 
 python pipeline.py \
-  --labs star_labs.pdf \
-  --dexa star_dexa_1.pdf star_dexa_2.pdf \
-  --note star_provider_note.txt \
-  --patient-name "Star Hawkins" --age 37 --sex female \
-  --out star_report.pdf
+  --labs real_fixtures/reference/labs.pdf \
+  --dexa real_fixtures/reference/dexa_1.pdf real_fixtures/reference/dexa_2.pdf \
+  --note real_fixtures/reference/provider_note.txt \
+  --patient-name "<patient name>" --age <age> --sex <male|female> \
+  --out real_fixtures/reference/report.pdf
 ```
 
 ## A known open item, found during testing
