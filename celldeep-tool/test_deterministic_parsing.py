@@ -221,14 +221,17 @@ def test_narrative_section_after_a_data_table_is_never_scanned_as_its_rows(tmp_p
         ("TMAO", "01/27/2026", "4.1"), ("TMAO", "01/07/2026", ">20.0")]
 
 
-def test_repeated_identical_section_title_keeps_the_table_on_a_continuation_page(tmp_path):
+@pytest.mark.parametrize("repeat_header", [False, True], ids=["no-header", "repeated-header"])
+def test_continuation_page_requires_its_own_header(tmp_path, repeat_header):
     continuation = ([(40, 30, "Cardiometabolic Report")] + fx.section_preamble("SYN950", "01/27/2026")
+                    + (fx.header_line(100, ("01/07/2026",)) if repeat_header else [])
                     + fx.row(130, "Fibrinogen", "310", "290", units="mg/dL"))
     occurrences, _ = _parse(tmp_path, [_data_page("Cardiometabolic Report"), continuation])
 
-    assert [(o["name"], o["date_display"], o["disp_value"]) for o in occurrences] == [
-        ("TMAO", "01/27/2026", "4.1"), ("TMAO", "01/07/2026", ">20.0"),
-        ("Fibrinogen", "01/27/2026", "310"), ("Fibrinogen", "01/07/2026", "290")]
+    expected = [("TMAO", "01/27/2026", "4.1"), ("TMAO", "01/07/2026", ">20.0")]
+    if repeat_header:
+        expected += [("Fibrinogen", "01/27/2026", "310"), ("Fibrinogen", "01/07/2026", "290")]
+    assert [(o["name"], o["date_display"], o["disp_value"]) for o in occurrences] == expected
 
 
 # Only tokens inside a dated column's own header span are results; legends/units/codes never are -------
@@ -383,6 +386,105 @@ def test_parsed_occurrences_keep_the_extraction_schema_shape(tmp_path):
             assert isinstance(occurrence[key], tuple(python_types[t] for t in allowed)), (key, occurrence[key])
     record, _ = pipeline.score_and_build_record({"name": "Shape", "marker_occurrences": occurrences})
     assert {m.name for m in record.markers} == {"hs-CRP", "Urinalysis \u2014 Occult Blood"}
+
+
+def test_row_name_normalization_only_removes_printed_annotations():
+    cleaned = pipeline._clean_row_name("  Novel Assay(3)  (XYZ) (ABC)  ", {"XYZ", "ABC"})
+    assert cleaned == "Novel Assay"
+    assert pipeline._clean_row_name("Thyroid Stimulating Hormone (TSH)", {"XYZ"}) == \
+        "Thyroid Stimulating Hormone (TSH)"
+    assert pipeline._clean_row_name("Novel\u00ae, Assay/MS", set()) == "Novel\u00ae, Assay/MS"
+    assert pipeline._match_row_name("tsh", None)[0] == "TSH"
+    for name in ("LDL Size", "HDL Size", "ApoB/ApoA1 Ratio", "TSH extra wording"):
+        assert pipeline._match_row_name(name, None) is None
+
+
+def test_section_namespace_blocks_serum_matches():
+    assert pipeline._match_row_name("Glucose", "URINALYSIS") is None
+    assert pipeline._match_row_name("Uric Acid Crystals", "URINALYSIS") is None
+    assert pipeline._match_row_name("Uric Acid", "URINALYSIS") is None
+    assert pipeline._match_row_name("Occult Blood", "URINALYSIS")[0] == "Urinalysis \u2014 Occult Blood"
+    assert pipeline._match_row_name("Glucose", "ROUTINE PANELS")[0] == "Glucose (fasting)"
+
+
+def test_adjacent_words_form_a_cell_before_column_assignment():
+    words = _words([(220, 130, "First"), (252, 130, "Second"), (290, 130, "Third"),
+                    (390, 130, "Separate")])
+    cells = pipeline._printed_cells(words)
+    assert [pipeline._line_text(cell) for cell in cells] == ["First Second Third", "Separate"]
+
+
+@pytest.mark.parametrize("second_value", ["1.9", "2.1"], ids=["identical", "conflicting"])
+def test_duplicate_canonical_dates_keep_page_provenance_or_raise(tmp_path, second_value):
+    first = fx.section_preamble("SYN991", "04/24/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.9")
+    second = fx.section_preamble("SYN991", "04/24/2026") + fx.header_line(100) \
+        + fx.row(130, "Thyroid Stimulating Hormone (TSH)", second_value)
+    if second_value != "1.9":
+        with pytest.raises(pipeline.BloodworkParseError, match=r"TSH .*pages 1 and 2"):
+            _parse(tmp_path, [first, second])
+        return
+    results, unknown = _parse(tmp_path, [first, second])
+    assert unknown == []
+    assert len(results) == 1
+    assert results[0]["value"] == 1.9
+    assert results[0]["source_label"].endswith("pages 1, 2")
+
+
+def test_unreadable_page_warning_reaches_generation_review(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    review = tmp_path / "review_notes.txt"
+    monkeypatch.setattr(pipeline, "_review_notes_path", lambda name: str(review))
+    labs = fx.write_lab_pdf(tmp_path / "labs.pdf", [
+        fx.section_preamble("SYN992", "04/24/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.9"),
+        [],
+    ])
+    monkeypatch.setattr(pipeline.template, "render", lambda *args, **kwargs: None)
+    pipeline.run(str(labs), [], None, fx.PATIENT, 44, "male", str(tmp_path / "report.pdf"))
+    warning = "Lab PDF pages 2: no readable text, OCR not supported, manual review required"
+    output = capsys.readouterr().out
+    assert f"WARNING: {warning}" in output
+    assert f"  - {warning}" in output
+    assert "This report generated successfully" in output
+    assert warning in review.read_text()
+
+
+@pytest.mark.parametrize("has_name", [True, False], ids=["text-status", "orphan-cell"])
+def test_ruled_text_cells_are_accounted_for_or_raise(tmp_path, has_name):
+    from unknown_marker_policy import UnrecognizedMarker
+
+    items = (fx.section_preamble("SYN990", "04/24/2026")
+             + fx.header_line(100, ("01/27/2026",))
+             + ([(40, 130, "Novel Assay")] if has_name else [])
+             + [(220, 135, "Not"), (220, 145, "Applicable"),
+                (300, 135, "Not"), (300, 145, "Applicable")])
+    path = fx.write_lab_pdf(tmp_path / "text-status.pdf", [items])
+    with fitz.open(path) as document:
+        for y in (120, 160):
+            document[0].draw_line((40, y), (180, y))
+        if not has_name:
+            with pytest.raises(pipeline.BloodworkParseError, match="has no row name"):
+                pipeline._parse_bloodwork_tables(list(document))
+            return
+        lines = pipeline._group_lines(pipeline._page_words(document[0]), pipeline._LINE_TOLERANCE_PT)
+        header = None
+        for line in lines:
+            candidate = pipeline._bloodwork_header(line)
+            if candidate:
+                header = candidate
+                break
+        assert header is not None
+        for line in lines:
+            pipeline._attach_header_dates(line, header)
+        section = {"order_id": "SYN990", "dates": ["04/24/2026"]}
+        rows = [line for line in lines if line[0][1] > 120]
+        occurrences, unknown, audit = [], [], []
+        pipeline._parse_table_region(document[0], rows, header, section, occurrences, unknown, audit)
+    assert occurrences == []
+    assert len(unknown) == len(audit) == 1
+    assert unknown[0]["raw_value"] == "Not Applicable | Not Applicable"
+    assert all(cell["value"] is None and cell["status"] == "Not Applicable"
+               for cell in unknown[0]["cells"])
+    assert UnrecognizedMarker(**unknown[0]).cells == unknown[0]["cells"]
 
 
 # DEXA stays on the original Claude extraction path ------------------------------------------------

@@ -38,6 +38,7 @@ class UnrecognizedMarker:
     raw_unit: Optional[str] = None
     raw_range: Optional[str] = None   # reference range as printed on the source lab report, if present
     source_context: Optional[str] = None  # a short excerpt for the operator to quickly verify
+    cells: list[dict] = field(default_factory=list)
 
 
 @dataclass

@@ -871,6 +871,12 @@ def _within_date_column(x: float, column: dict) -> bool:
     return column["x0"] - _DATE_COLUMN_PAD_PT <= x <= column["x1"] + _DATE_COLUMN_PAD_PT
 
 
+def _within_cell_column(word: tuple, column: dict) -> bool:
+    center = (word[0] + word[2]) / 2
+    return _within_date_column(center, column) or (
+        " " in word[4] and _within_date_column(word[0], column))
+
+
 def _merge_cell_phrases(words: list[tuple]) -> list[tuple]:
     """Join multi-word cell phrases ("Test Not Performed") into one word; append each word's anchor x."""
     merged = []
@@ -893,6 +899,16 @@ def _merge_cell_phrases(words: list[tuple]) -> list[tuple]:
 
 def _bloodwork_header(words: list[tuple], group_lines: list[list[tuple]] = ()) -> dict | None:
     if not words or _header_token(words[0][4]) not in _BLOODWORK_NAME_LABELS:
+        return None
+    tokens = [_header_token(w[4]) for w in words]
+    group_tokens = [_header_token(w[4]) for line in group_lines for w in line]
+    has_dated_labels = any(token in ("current", "historical") for token in tokens + group_tokens)
+    has_range_labels = any(
+        tokens[index:index + len(phrase)] == list(phrase)
+        for phrase in (("in", "range"), ("out", "of", "range"))
+        for index in range(len(tokens))
+    )
+    if not (has_dated_labels or has_range_labels):
         return None
     columns = _match_header_columns(words, _BLOODWORK_HEADER_LABELS)
     if not columns or columns[0]["kind"] != "name" or not any(
@@ -949,6 +965,8 @@ def _cell_result(token: str) -> tuple[str, float | None, str]:
     if low in _QUALITATIVE_CELLS:
         return "final", None, token
     match = _CELL_VALUE_RE.fullmatch(token)
+    if match is None:
+        return token, None, token
     if match.group("ineq"):
         return "final", None, match.group("ineq") + match.group("num")
     return "final", float(match.group("num")), match.group("num")
@@ -968,25 +986,53 @@ def _section_date(section: dict) -> str | None:
 
 def _section_label(section: dict) -> str:
     date = _section_date(section) or "undated"
-    return f"Order {section['order_id']} (collected {date})" if section["order_id"] else f"Collected {date}"
+    label = f"Order {section['order_id']} (collected {date})" if section["order_id"] else f"Collected {date}"
+    return f"{label}; {section['heading']}" if section.get("heading") else label
+
+
+def _clean_row_name(text: str, lab_codes: set[str]) -> str:
+    text = re.sub(r"\(\d+\)", "", text)
+    text = re.sub(r"\(([^()]*)\)", lambda m: "" if m[1].strip().casefold() in
+                  {code.casefold() for code in lab_codes} else m[0], text)
+    return " ".join(text.split())
+
+
+def _match_row_name(name: str, heading: str | None):
+    query = name.casefold()
+    namespaces = {canonical.split(" \u2014 ")[0] for canonical in MARKER_LIBRARY if " \u2014 " in canonical}
+    namespace = next((item for item in namespaces if item.casefold() == (heading or "").casefold()), None)
+    candidates = {}
+    for canonical, config in MARKER_LIBRARY.items():
+        if namespace and canonical.split(" \u2014 ", 1)[0] != namespace:
+            continue
+        aliases = [canonical, *config.get("aliases", [])]
+        for alias in aliases:
+            if query == " ".join(alias.split()).casefold():
+                candidates[canonical] = config
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise BloodworkParseError(f"Ambiguous marker name {name!r} in section {heading!r}")
+    return next(iter(candidates.items()))
 
 
 def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
-                         occurrences: list[dict], unrecognized: list[dict]) -> bool:
+                         occurrences: list[dict], unrecognized: list[dict],
+                         row_name: str | None = None, allow_text: bool = False) -> bool:
     """Apply the single extraction rule to one table line. Returns True for a recognized marker row."""
     words = _merge_cell_phrases(words)
     value_centers = [(c["x0"] + c["x1"]) / 2 for c, li in zip(header["columns"], header["logical"])
                      if li is not None]
     first_value_center = min(value_centers)
     name_words = []
-    for word in words:
+    for word in words if row_name is None else ():
         if _is_cell_token(word[4]) or _is_threshold_token(word[4]) or word[5] >= first_value_center:
             break
         name_words.append(word)
-    raw_name = _line_text(name_words).strip()
+    raw_name = row_name if row_name is not None else _line_text(name_words).strip()
     if not raw_name:
         return False
-    match = markers_reference_lookup(raw_name)
+    match = _match_row_name(raw_name, section.get("heading"))
 
     # Only a token printed inside a dated column's own header span can be a result; anything else
     # (reference legends, units, lab codes, stray thresholds) is never eligible, whatever its shape.
@@ -1006,8 +1052,6 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         try:
             pieces = _split_cell_word(word[4])
         except _AmbiguousCell:
-            if match is None:
-                return False
             raise BloodworkParseError(
                 f"{raw_name} ({_section_label(section)}): {word[4]!r} runs result digits together with no "
                 "flag or inequality between them, so its column boundary cannot be read")
@@ -1018,11 +1062,13 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         anchor = word[0] + (word[2] - word[0]) * len(pieces[0]) / len(word[4]) / 2 if len(pieces) > 1 else word[5]
         anchor_column = _column_at(anchor, header["bounds"])
         start = header["logical"][anchor_column] if anchor_column is not None else None
-        if start is None or not _within_date_column(anchor, header["columns"][anchor_column]):
+        eligible = _within_date_column(anchor, header["columns"][anchor_column]) if len(pieces) > 1 \
+            else _within_cell_column(word, header["columns"][anchor_column])
+        if start is None or not eligible:
             if result_shaped and header["logical"][column] is not None:
                 stray.setdefault(header["logical"][column], []).append(word[4])
             continue
-        if not result_shaped or start + len(pieces) > len(value_columns):
+        if (not result_shaped and not allow_text) or start + len(pieces) > len(value_columns):
             problems.append(word[4])
             continue
         for offset, piece in enumerate(pieces):
@@ -1031,13 +1077,6 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
             else:
                 cells[start + offset] = piece
 
-    if match is None:
-        if cells and not problems and len(raw_name) <= 60:
-            unrecognized.append({
-                "raw_name": raw_name, "raw_value": " | ".join(cells[i] for i in sorted(cells)),
-                "raw_unit": "", "raw_range": " ".join(range_words), "source_context": _section_label(section),
-            })
-        return False
     if problems:
         raise BloodworkParseError(
             f"{raw_name} ({_section_label(section)}): {problems} sits in a dated result column but is not a "
@@ -1048,6 +1087,24 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
             f"{raw_name} ({_section_label(section)}): no single result in the dated "
             f"{[value_columns[i]['kind'] for i in unresolved]} column(s); tokens printed outside those columns "
             f"{[t for i in unresolved for t in stray[i]]} are never read as a result")
+
+    if match is None:
+        parsed_cells = []
+        for index, column in enumerate(value_columns):
+            date = _section_date(section) if column["kind"] == "current" else column["date"]
+            token = cells.get(index)
+            if token is not None and not date:
+                raise BloodworkParseError(f"{raw_name}: {column['kind']} result has no governing date")
+            if date:
+                status, value, display = _cell_result(token) if token is not None else ("not_performed", None, "")
+                parsed_cells.append({"kind": column["kind"], "date_display": date, "status": status,
+                                     "value": value, "disp_value": display, "present": token is not None})
+        unrecognized.append({
+            "raw_name": raw_name, "raw_value": " | ".join(cells[i] for i in sorted(cells)),
+            "raw_unit": "", "raw_range": " ".join(range_words), "source_context": _section_label(section),
+            "cells": parsed_cells,
+        })
+        return True
 
     canonical, config = match
     lab_lo, lab_hi, lab_display = _printed_lab_range(range_words)
@@ -1082,6 +1139,146 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
     return True
 
 
+def _table_row_groups(page, lines: list[list[tuple]], header: dict):
+    """Use printed name-cell rules to delimit rows; unruled tables use separated text lines."""
+    first_value = min(c["x0"] for c in header["columns"] if c["kind"] in ("current", "historical"))
+    left = header["columns"][0]["x0"]
+    rules = []
+    if hasattr(page, "get_drawings"):
+        for drawing in page.get_drawings():
+            for item in drawing["items"]:
+                if item[0] != "l":
+                    continue
+                start, end = sorted(item[1:3], key=lambda point: point.x)
+                if abs(start.y - end.y) < 0.5 and abs(start.x - left) < 8 \
+                        and header["columns"][0]["x1"] < end.x:
+                    rules.append((start.y, end.x))
+    name_rules = [x for _, x in rules if x < first_value]
+    if name_rules:
+        right = min(name_rules)
+        boundaries = sorted({round(y, 2) for y, x in rules if x >= right - 1})
+        groups = {}
+        for line in lines:
+            for word in line:
+                center = (word[1] + word[3]) / 2
+                band = next((i for i in range(len(boundaries) - 1)
+                             if boundaries[i] <= center < boundaries[i + 1]), None)
+                if band is not None:
+                    groups.setdefault(band, []).append(word)
+        return list(groups.values()), right, True
+    return lines, first_value, False
+
+
+def _is_table_prose(words, name_right, header):
+    crossing = any(w[0] < name_right < w[2] for w in words)
+    continuous = any(0 <= right[0] - left[2] < _PHRASE_GAP_PT
+                     for line in _group_lines(words, _LINE_TOLERANCE_PT)
+                     for left, right in zip(line, line[1:])
+                     if left[2] <= name_right < right[2])
+    label_crossing = any(
+        w[0] < column["x1"] < w[2] and not _is_cell_token(w[4])
+        for w in words for column in header["columns"]
+        if column["kind"] in ("current", "historical")
+    )
+    explanatory = label_crossing and any(w[4] == "=" for w in words)
+    return crossing or continuous or explanatory
+
+
+def _printed_cells(words):
+    cells = []
+    for line in _group_lines(words, _LINE_TOLERANCE_PT):
+        current = []
+        for word in line:
+            gap = word[0] - current[-1][2] if current else 0
+            normal_gap = min(word[3] - word[1], current[-1][3] - current[-1][1]) * 0.6 if current else 0
+            if current and gap > normal_gap:
+                cells.append(current)
+                current = []
+            current.append(word)
+        if current:
+            cells.append(current)
+    return cells
+
+
+def _parse_table_region(page, lines, header, section, occurrences, unrecognized, row_audit=None,
+                        printed_lab_codes=()):
+    groups, name_right, ruled = _table_row_groups(page, lines, header)
+    for words in groups:
+        name_words = [w for w in words if w[2] <= name_right
+                      and not _is_cell_token(w[4]) and not _is_threshold_token(w[4])]
+        other_words = [w for w in words if w not in name_words]
+        name_lines = _group_lines(name_words, 4.0)
+        text = " ".join(_line_text(line) for line in name_lines).strip()
+        band_text = " ".join(_line_text(line) for line in _group_lines(words, 4.0)).strip()
+        if name_words and band_text.isupper() and all(
+                not _is_cell_token(w[4]) and not _is_threshold_token(w[4]) for w in words):
+            section["heading"] = band_text
+            continue
+        if _is_table_prose(words, name_right, header):
+            continue
+        if text and not other_words:
+            section["heading"] = text
+            continue
+        cells = []
+        lab_codes = set(printed_lab_codes)
+        assigned = {index: [] for index in range(len(header["columns"]))}
+        for span in _printed_cells(other_words):
+            center = (span[0][0] + span[-1][2]) / 2
+            index = _column_at(center, header["bounds"])
+            column = header["columns"][index]
+            if column["kind"] in ("current", "historical"):
+                tokens = [w[4] for w in span]
+                while len(tokens) > 1 and tokens[-1] in _STANDALONE_FLAGS:
+                    tokens.pop()
+                token = " ".join(tokens)
+                assigned[index].append((span[0][0], min(w[1] for w in span),
+                                        span[-1][2], max(w[3] for w in span), token))
+            else:
+                assigned[index].extend(span)
+        for index, column in enumerate(header["columns"]):
+            column_words = assigned[index]
+            if column["kind"] == "ignore":
+                lab_codes.update(w[4] for w in column_words)
+            if column["kind"] in ("current", "historical"):
+                column_words = sorted(column_words, key=lambda w: ((w[1] + w[3]) / 2, w[0]))
+                dated_words = [w for w in column_words
+                               if _within_cell_column(w, column)
+                               and w[4] not in _STANDALONE_FLAGS]
+                phrase = _line_text(dated_words).lower()
+                text_cell = ruled and dated_words and all(
+                    not _is_cell_token(w[4]) and not _is_threshold_token(w[4]) for w in dated_words)
+                if phrase in _NOT_PERFORMED_CELLS or text_cell:
+                    first = dated_words[0]
+                    column_words = [w for w in column_words if w not in dated_words]
+                    token = "TNP" if phrase in _NOT_PERFORMED_CELLS and len(dated_words) > 1 \
+                        else _line_text(dated_words)
+                    column_words.insert(0, (first[0], first[1], first[2], first[3], token))
+            cells.extend(column_words)
+        printed = any((ruled or _is_cell_token(w[4]) or _is_threshold_token(w[4])) for w in cells
+                     if (i := _column_at((w[0] + w[2]) / 2, header["bounds"])) is not None
+                     and header["logical"][i] is not None
+                     and _within_cell_column(w, header["columns"][i]))
+        if not printed:
+            continue
+        if not text:
+            raise BloodworkParseError(
+                f"{_section_label(section)}: result-shaped token has no row name: {_line_text(words)!r}")
+        name = _clean_row_name(text, lab_codes)
+        occurrence_start = len(occurrences)
+        unknown_start = len(unrecognized)
+        before = len(occurrences) + len(unrecognized)
+        # Name words are supplied separately; the row reader sees only non-name cells.
+        _parse_bloodwork_row(cells, header, section, occurrences, unrecognized, row_name=name, allow_text=ruled)
+        if len(occurrences) + len(unrecognized) == before:
+            raise BloodworkParseError(f"{_section_label(section)}: unaccounted result row {name!r}")
+        if row_audit is not None:
+            row_audit.append({"page": page.number + 1 if hasattr(page, "number") else section.get("_page"),
+                              "name": name, "section": section.get("heading"),
+                              "y": min(w[1] for w in words),
+                              "occurrences": [dict(item) for item in occurrences[occurrence_start:]],
+                              "unrecognized": unrecognized[unknown_start:]})
+
+
 def _section_title(words: list[tuple]) -> str | None:
     """The section title printed on this line, if one of its separately spaced phrases is a title."""
     phrases, current = [], []
@@ -1098,18 +1295,52 @@ def _section_title(words: list[tuple]) -> str | None:
     return None
 
 
-def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
+def _dedupe_bloodwork_rows(occurrences, audit):
+    pages = [row["page"] for row in audit for _ in row["occurrences"]]
+    unique = {}
+    sources = {}
+    for occurrence, page in zip(occurrences, pages, strict=True):
+        key = (occurrence["name"], _normalize_date_for_matching(occurrence["date_display"]))
+        if key in unique:
+            previous = unique[key]
+            same_value = previous["value"] == occurrence["value"] and (
+                previous["value"] is not None or previous["disp_value"] == occurrence["disp_value"])
+            if previous["status"] != occurrence["status"] or not same_value:
+                raise BloodworkParseError(
+                    f"{occurrence['name']} on {occurrence['date_display']}: conflicting results on "
+                    f"pages {sources[key][0]} and {page}: "
+                    f"{previous['disp_value'] or previous['status']!r} versus "
+                    f"{occurrence['disp_value'] or occurrence['status']!r}")
+        else:
+            unique[key] = dict(occurrence)
+            sources[key] = []
+        if page not in sources[key]:
+            sources[key].append(page)
+    for key, occurrence in unique.items():
+        if len(sources[key]) > 1:
+            occurrence["source_label"] += "; pages " + ", ".join(map(str, sources[key]))
+    return list(unique.values())
+
+
+def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None) -> tuple[list[dict], list[dict]]:
     """One rule for every Quest/Cleveland HeartLab section: each result printed in a test-name row is
     paired with the date governing its column - a Current-style column takes its section's own
     Collected: date, a Historical column takes the date printed in its own header. Sections are split
-    at Collected:/Order ID lines; pages repeating an Order ID rejoin that section. Returns
+    at Collected:/Order ID lines; pages repeating an Order ID rejoin that section, but must print
+    their own column header. Unreadable pages are skipped with visible manual-review warnings. Returns
     (marker_occurrences, unrecognized_rows)."""
     sections: list[dict] = []
     by_order: dict[str, dict] = {}
     occurrences: list[dict] = []
     unrecognized: list[dict] = []
+    audit = row_audit if row_audit is not None else []
+    unreadable = []
+    printed_lab_codes = {
+        match[1] for page in pdf_pages
+        for match in re.finditer(r"\(\d+\)\s*\(([A-Z][A-Z0-9]{1,5})\)", _line_text(_page_words(page)))
+    }
     state = {"section": None, "header": None, "excluded": False, "await_dates": False, "pending_dates": [],
-             "recent_lines": [], "title": None}
+             "recent_lines": [], "title": None, "rows": []}
 
     def new_section(order_id):
         section = {"order_id": order_id, "dates": [], "has_table": False}
@@ -1133,19 +1364,32 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
             if key not in known:
                 section["dates"].append(date)
 
-    for page in pdf_pages:
-        state["excluded"] = False
-        for words in _group_lines(_page_words(page), _LINE_TOLERANCE_PT):
+    def flush(page):
+        if state["header"] is not None and state["rows"]:
+            state["section"]["_page"] = page_number
+            _parse_table_region(page, state["rows"], state["header"], state["section"],
+                                occurrences, unrecognized, audit, printed_lab_codes)
+        state["rows"] = []
+
+    for page_number, page in enumerate(pdf_pages, 1):
+        state.update(header=None, excluded=False, await_dates=False, pending_dates=[], recent_lines=[])
+        page_words = _page_words(page)
+        if not page_words:
+            unreadable.append(page_number)
+            continue
+        for words in _group_lines(page_words, _LINE_TOLERANCE_PT):
             text = _line_text(words)
             order = _ORDER_ID_RE.search(text)
             collected = _COLLECTED_RE.search(text)
             title = _section_title(words)
             if title is not None:
                 if title != state["title"]:
+                    flush(page)
                     state.update(title=title, header=None, excluded=False, await_dates=False, recent_lines=[])
                 if not (order or collected):
                     continue
             if order:
+                flush(page)
                 order_id = order.group(1)
                 current = state["section"]
                 existing = by_order.get(order_id)
@@ -1163,6 +1407,7 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
                 add_dates(target, state["pending_dates"])
                 switch(target)
             if collected:
+                flush(page)
                 date = collected.group(1)
                 current = state["section"]
                 known = [_normalize_date_for_matching(d) for d in current["dates"]] if current else []
@@ -1182,12 +1427,14 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
                 switch(new_section(None))
             section = state["section"]
             if any(title in text.lower() for title in _TREND_TABLE_TITLES):
+                flush(page)
                 state.update(excluded=True, header=None)
                 continue
             if state["excluded"]:
                 continue
             header = _bloodwork_header(words, state["recent_lines"][-3:])
             if header:
+                flush(page)
                 state.update(header=header, await_dates=True, pending_dates=[], recent_lines=[])
                 section["has_table"] = True
                 continue
@@ -1197,8 +1444,15 @@ def _parse_bloodwork_tables(pdf_pages) -> tuple[list[dict], list[dict]]:
             # Historical dates may sit a few header lines below the labels; read them until the first row.
             if state["await_dates"] and _attach_header_dates(words, state["header"]):
                 continue
-            if _parse_bloodwork_row(words, state["header"], section, occurrences, unrecognized):
-                state.update(pending_dates=[], await_dates=False, recent_lines=[])
+            state["rows"].append(words)
+        flush(page)
+    if unreadable:
+        warning = (f"Lab PDF pages {', '.join(map(str, unreadable))}: no readable text, "
+                   "OCR not supported, manual review required")
+        print(f"WARNING: {warning}")
+        if review_notes is not None:
+            review_notes.append(warning)
+    occurrences = _dedupe_bloodwork_rows(occurrences, audit)
     # An unrecognized layout must stop the job for manual review, never render an empty bloodwork section.
     if not any(section["dates"] for section in sections):
         raise BloodworkParseError(
@@ -1348,10 +1602,12 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             patient_name: str | None = None, audit_root: str | None = None,
             client: Anthropic | None = None) -> dict:
     """Step 1: bloodwork and provider note parsed deterministically; DEXA PDFs (if any) via Claude."""
-    occurrences, unrecognized = [], []
+    occurrences, unrecognized, lab_review_notes = [], [], []
+    row_audit = []
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
-            occurrences, unrecognized = _parse_bloodwork_tables(list(document))
+            occurrences, unrecognized = _parse_bloodwork_tables(
+                list(document), row_audit=row_audit, review_notes=lab_review_notes)
     dexa_history = _extract_dexa_with_claude(client, dexa_pdfs, patient_name) if dexa_pdfs else []
     note = parse_provider_note(note_text)
 
@@ -1374,7 +1630,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "vitality_index": note["vitality_index"],
         "provider_note_raw": note_text if note["accepted"] else None,
         "unrecognized_markers": unrecognized,
-        "other_notes": note["other_notes"],
+        "other_notes": [*lab_review_notes, *note["other_notes"]],
     }
 
     safe_patient = re.sub(r"[^A-Za-z0-9._-]+", "_", (patient_name or "patient")).strip("._") or "patient"
@@ -1383,6 +1639,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     audit_dir = Path(tempfile.mkdtemp(prefix=f"{safe_patient}_", dir=audit_base))
     occurrences_path = audit_dir / "marker-occurrences.json"
     occurrences_path.write_text(json.dumps(occurrences, indent=2, ensure_ascii=False), encoding="utf-8")
+    (audit_dir / "source-rows.json").write_text(
+        json.dumps(row_audit, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Extraction audit saved: {occurrences_path}")
     return extracted
 
