@@ -51,6 +51,7 @@ class ExtractionReviewNotice:
     scan_summary: list = field(default_factory=list)           # scanned-page outcomes, printed first
     dexa_summary: list = field(default_factory=list)           # DEXA two-read outcomes, printed first
     name_header: list = field(default_factory=list)            # "This report is for ..." and printed names
+    incomplete: list = field(default_factory=list)             # pages/sections excluded by parse failures
 
 
 # Text that only staff QA output produces. template.render refuses to build a patient PDF whose
@@ -58,7 +59,7 @@ class ExtractionReviewNotice:
 STAFF_NOTE_MARKERS = (
     "source=scan", "gate:", "STAFF REVIEW", "COVERAGE GAP", "NEEDS HUMAN REVIEW", "manual review required",
     "LAB-REPORTED CONFLICT", "PATIENT NAME MISMATCH", "SCANNED BLOODWORK", "ERROR: missing threshold",
-    "Unrecognized marker", "POSSIBLE HALLUCINATION", "DEXA PATIENT NAME MISMATCH", "DEXA NOT READ", "CENSORED RESULTS", "LAB FLAG DIFFERS", "DOB CONFLICT", "This report is for", "NAME MISMATCH", "TREATMENT STATUS:", "AGE CHECK", "AGE NOT COMPUTED", "PROVIDER NOTE REJECTED", "PROVIDER NOTE:", "LINE(S) NOT READ",
+    "Unrecognized marker", "POSSIBLE HALLUCINATION", "DEXA PATIENT NAME MISMATCH", "DEXA NOT READ", "CENSORED RESULTS", "LAB FLAG DIFFERS", "DOB CONFLICT", "INCOMPLETE - ", "This report is for", "NAME MISMATCH", "TREATMENT STATUS:", "AGE CHECK", "AGE NOT COMPUTED", "PROVIDER NOTE REJECTED", "PROVIDER NOTE:", "LINE(S) NOT READ",
 )
 
 
@@ -66,9 +67,11 @@ def format_review_notice(notice: ExtractionReviewNotice) -> str:
     """Plain-text summary an operator sees after generation, if anything needs their attention.
     Returns an empty string if nothing needs review — the common case."""
     if not (notice.unrecognized_markers or notice.other_notes or notice.scan_summary or notice.dexa_summary
-            or notice.name_header):
+            or notice.name_header or notice.incomplete):
         return ""
-    lines = [*notice.name_header, ""] if notice.name_header else []
+    lines = [*notice.incomplete, ""] if notice.incomplete else []
+    if notice.name_header:
+        lines += [*notice.name_header, ""]
     lines.append("This report generated successfully. A few items need a quick human check:")
     for block in (notice.dexa_summary, notice.scan_summary):
         if block:

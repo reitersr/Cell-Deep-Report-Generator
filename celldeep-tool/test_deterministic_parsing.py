@@ -24,6 +24,17 @@ def _parse(tmp_path, pages, name="labs.pdf"):
         return pipeline._parse_bloodwork_tables(list(document))
 
 
+def _excluded_reasons(tmp_path, pages):
+    """Parse a PDF whose only table cannot be read: that table is excluded with its reason, and with
+    nothing else parsed the job still stops."""
+    path = fx.write_lab_pdf(tmp_path / "excluded.pdf", pages)
+    exclusions = []
+    with fitz.open(path) as document:
+        with pytest.raises(pipeline.BloodworkParseError, match="zero recognized marker rows"):
+            pipeline._parse_bloodwork_tables(list(document), exclusions=exclusions)
+    return [item["reason"] for item in exclusions]
+
+
 def _by_key(occurrences):
     return {(occ["name"], occ["date_display"]): occ for occ in occurrences}
 
@@ -54,8 +65,7 @@ def test_digits_running_into_digits_raise_instead_of_guessing_a_boundary(tmp_pat
     page = (fx.section_preamble("SYN101", "04/14/2026")
             + fx.header_line(100, ("02/03/2026",))
             + fx.row(130, "TMAO", "29.012.4", units="uM"))
-    with pytest.raises(pipeline.BloodworkParseError, match="runs result digits together"):
-        _parse(tmp_path, [page])
+    assert "runs result digits together" in _excluded_reasons(tmp_path, [page])[0]
 
 
 def test_ordinary_unflagged_rows_with_range_between_columns_parse_cleanly(tmp_path):
@@ -341,8 +351,7 @@ def test_multi_line_header_assigns_columns_by_the_current_historical_labels_abov
 ], ids=["legend-only", "legend-and-units-separated-token-only"])
 def test_threshold_legend_without_a_single_result_is_rejected_not_guessed(tmp_path, cells):
     page = _legend_table([("TMAO", cells)])
-    with pytest.raises(pipeline.BloodworkParseError, match="no single result in the dated"):
-        _parse(tmp_path, [page])
+    assert "no single result in the dated" in _excluded_reasons(tmp_path, [page])[0]
 
 
 # Unrecognized lab layouts are a hard, named failure ------------------------------------------------
@@ -463,8 +472,10 @@ def test_ruled_text_cells_are_accounted_for_or_raise(tmp_path, has_name):
         for y in (120, 160):
             document[0].draw_line((40, y), (180, y))
         if not has_name:
-            with pytest.raises(pipeline.BloodworkParseError, match="has no row name"):
-                pipeline._parse_bloodwork_tables(list(document))
+            exclusions = []
+            with pytest.raises(pipeline.BloodworkParseError, match="zero recognized marker rows"):
+                pipeline._parse_bloodwork_tables(list(document), exclusions=exclusions)
+            assert "has no row name" in exclusions[0]["reason"]
             return
         lines = pipeline._group_lines(pipeline._page_words(document[0]), pipeline._LINE_TOLERANCE_PT)
         header = None
