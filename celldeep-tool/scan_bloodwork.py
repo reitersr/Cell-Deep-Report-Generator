@@ -10,11 +10,12 @@ import fitz
 SCAN_RENDER_DPI = 200  # changing this changes what the vision model sees; keep it fixed
 
 
-# Every vision read is sampled at temperature 0 so the same page gives the same reads from run to run as
-# far as the model allows. Retries are transport-level only (the client's max_retries, see pipeline):
-# a read that fails the schema or page gate is never re-requested, and there is no tie-break read. When
-# the two reads disagree on a row, the row is excluded and listed for staff; nothing picks a winner.
-READ_TEMPERATURE = 0.0
+# Run-to-run consistency comes from the two-read agreement rule, not from sampling settings (the SDK in use,
+# anthropic 1.x, does not accept temperature/top_p/top_k at all): a row is kept only when both independent
+# reads agree, and a row they disagree on is excluded and listed for staff, so the report never depends on
+# which read "won". Retries are transport-level only (the client's max_retries, see pipeline): a read that
+# fails the schema or page gate is never re-requested, there is no tie-break read, and every remaining
+# tie-break in the gates (e.g. strip_lab_code) is ordered explicitly.
 
 
 def _read_values(rows):
@@ -132,7 +133,7 @@ def read_page(page, client, create_message, model):
 def _read_transcription(page, image, reading, client, create_message, model):
     response = create_message(
         client, f"bloodwork scan page {page.number + 1} read {reading}",
-        model=model, max_tokens=16000, system=SCAN_PROMPT, temperature=READ_TEMPERATURE,
+        model=model, max_tokens=16000, system=SCAN_PROMPT,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
             {"type": "text", "text": f"Transcribe PDF page {page.number + 1} independently."},

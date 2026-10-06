@@ -1,4 +1,4 @@
-"""Same inputs, same report. Every vision read is requested at temperature 0; when the two reads of a scanned
+"""Same inputs, same report, without relying on sampling settings: when the two reads of a scanned
 row disagree, the row is excluded and listed - never kept in one run and dropped in another by chance.
 Synthetic data; the vision model is a stub."""
 
@@ -15,6 +15,7 @@ import scan_bloodwork
 from synthetic_fixtures import deterministic_fixtures as fx
 from test_scan_bloodwork import payloads
 from unknown_marker_policy import without_staff_check
+from synthetic_fixtures.sdk_contract import check_create_kwargs
 
 UNSTABLE = "INSULIN"  # the row the stub's second read gets wrong, differently every run
 
@@ -28,6 +29,7 @@ class DisagreeingVision:
         self.pages = {page["page"]: page for page in payloads()}
 
     def create(self, **kwargs):
+        check_create_kwargs(kwargs)  # the installed SDK must accept this call
         self.calls.append(kwargs)
         number = int(re.search(r"page (\d+)", kwargs["messages"][0]["content"][1]["text"])[1])
         reading = sum(f"page {number} independently" in call["messages"][0]["content"][1]["text"]
@@ -69,7 +71,8 @@ def test_five_runs_with_a_disagreeing_read_give_the_same_report(tmp_path, monkey
         assert re.fullmatch(r"INCOMPLETE - row excluded: INSULIN \(reads disagree: 3\.1 / \S+\) - scanned lab page "
                             r"\d; not in this report", excluded[0])
         assert "rows excluded (reads disagree): 1" in review  # and counted in the STAFF CHECK
-        assert all(call["temperature"] == scan_bloodwork.READ_TEMPERATURE == 0.0 for call in calls)
+        # Determinism comes from the agreement rule, not sampling settings (the SDK rejects them anyway).
+        assert not any({"temperature", "top_p", "top_k"} & set(call) for call in calls)
 
 
 def test_disagreeing_values_never_reach_the_logs(tmp_path, monkeypatch, capsys):

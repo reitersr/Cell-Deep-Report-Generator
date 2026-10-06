@@ -13,6 +13,7 @@ import re
 from types import SimpleNamespace
 
 import fitz
+from synthetic_fixtures.sdk_contract import check_create_kwargs
 
 PATIENT = "Synthetic, Pat"
 
@@ -62,6 +63,7 @@ class DexaReader:
         self.timeout = 240.0
 
     def create(self, **kwargs):
+        check_create_kwargs(kwargs)  # the installed SDK must accept this call
         self.calls.append(kwargs)
         content = kwargs["messages"][0]["content"]
         label = self.by_image[content[0]["source"]["data"]]

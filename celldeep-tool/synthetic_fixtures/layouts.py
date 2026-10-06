@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import fitz
 
 from synthetic_fixtures import deterministic_fixtures as fx
+from synthetic_fixtures.sdk_contract import check_create_kwargs
 
 PATIENT = "Synthetic, Pat"
 SCAN_DATE = "04/14/2026"
@@ -179,6 +180,7 @@ class ScanReader:
         self.timeout = 240.0
 
     def create(self, **kwargs):
+        check_create_kwargs(kwargs)  # the installed SDK must accept this call
         return SimpleNamespace(content=[SimpleNamespace(text=json.dumps(next(self.responses)))],
                                stop_reason="end_turn")
 

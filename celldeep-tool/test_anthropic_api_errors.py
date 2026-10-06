@@ -5,6 +5,7 @@ import httpx2
 from anthropic import APIConnectionError, APITimeoutError, RateLimitError
 
 import pipeline
+from synthetic_fixtures.sdk_contract import check_create_kwargs
 
 
 class _FailingMessages:
@@ -12,6 +13,7 @@ class _FailingMessages:
         self.error = error
 
     def create(self, **_kwargs):
+        check_create_kwargs(_kwargs)  # the installed SDK must accept this call
         raise self.error
 
 

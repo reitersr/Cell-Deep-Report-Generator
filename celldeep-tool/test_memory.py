@@ -14,6 +14,7 @@ import pytest
 
 import scan_bloodwork
 import scan_dexa
+from synthetic_fixtures.sdk_contract import check_create_kwargs
 
 HERE = Path(__file__).parent
 
@@ -32,12 +33,14 @@ _PROBE = """
 import json, resource, sys, tempfile
 from types import SimpleNamespace
 import pipeline
+from synthetic_fixtures.sdk_contract import check_create_kwargs
 
 class Client:
     timeout = 1
     def __init__(self):
         self.messages = self
     def create(self, **kwargs):
+        check_create_kwargs(kwargs)  # the installed SDK must accept this call
         return SimpleNamespace(content=[], stop_reason="max_tokens")  # every page renders, then is excluded
 
 path, route = sys.argv[1], sys.argv[2]
@@ -82,6 +85,7 @@ class _Recorder:
         self.messages, self.payload, self.images = self, payload, []
 
     def create(self, **kwargs):
+        check_create_kwargs(kwargs)  # the installed SDK must accept this call
         self.images.append(kwargs["messages"][0]["content"][0]["source"]["data"])
         return SimpleNamespace(content=[SimpleNamespace(text=json.dumps(self.payload))], stop_reason="end_turn")
 
