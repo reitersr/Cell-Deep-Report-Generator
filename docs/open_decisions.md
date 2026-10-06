@@ -18,6 +18,8 @@ decision first. Evidence cites the repository as of this branch (`celldeep-tool/
 | 11 | Systems with zero markers default to 50% | Clinic + owner | Grid scores |
 | 12 | Plain "Occult Blood" outside a urinalysis section | Clinic | Section mapping |
 | 13 | Unrecognized lipid-ratio, particle-size, apolipoprotein and omega-3 names | Clinic | Lab-reported coverage |
+| 14 | New clinic defaults: "computed" body-fat label, DEXA age tolerance, stale-scan warning | Clinic | DEXA display and staff notes |
+| 15 | Remaining places that can silently accept, drop or substitute a value | Owner + clinic | Pipeline hardening |
 
 ---
 
@@ -280,3 +282,36 @@ Already decided in this change (exact aliases to existing lab-reported, not-scor
 "BUN (Blood Urea Nitrogen)", "CO2 (Carbon Dioxide, Bicarbonate)", "ALP (Alkaline Phosphatase)",
 "ALT (Alanine Amino Transferase)", "AST (Aspartate Amino Transferase)", and a new lab-reported
 "Prolactin" entry (Hormones), since no Prolactin marker existed.
+
+## 14. New clinic defaults: "computed" body-fat label, DEXA age tolerance, stale-scan warning
+
+**Evidence.** `celldeep-tool/clinic_config.py` now holds three defaults chosen without a clinic decision:
+- `DEXA_COMPUTED_LABEL = "computed"`: shown after a DEXA body fat % that the scan did not print and that is
+  computed from the printed fat and total mass. A printed % is always used when printed; a printed but
+  contested % (reads or pages disagree) stays empty and is never computed.
+- `DEXA_AGE_TOLERANCE_YEARS = 2`: an unnamed DEXA page is attributed to the patient only when its printed age
+  is within 2 years of the median age across the pages (and of the staff-entered age). A DEXA file that
+  bundles scans more than 2 years apart, with no name printed, would lose its oldest unnamed pages (listed
+  under INCOMPLETE, never silently).
+- `DEXA_STALE_DAYS = 60`: staff notes warn when "Where you are now" is more than 60 days older than the
+  latest bloodwork.
+
+**Decision needed.** Confirm or change the patient-facing word "computed" (or hide computed values), and
+the two staff thresholds.
+
+## 15. Remaining places that can silently accept, drop or substitute a value
+
+Found while reviewing the whole pipeline for this change. Not fixed here (each needs a decision or its own
+change); each has a suggested test.
+
+| File / function | Failure case | Suggested test |
+|---|---|---|
+| `scan_bloodwork.gate_staff_identified_reads` | A scanned page that prints history columns: if both reads agree on an *earlier* column's value (e.g. a prior "<3"), it is accepted and dated with the staff-entered Collected date. The schema has no "which date column" field to check. | Mocked page whose row prints Current 3.1 and a historical "<3": both reads return "<3" → row must be excluded, not dated as the current draw. Fix: add the column's printed header/date to the scan schema and gate on it. |
+| `scan_bloodwork.names_match` | First name + last initial ("Pat S") also matches a different person with the same first name and initial ("Pat Smith" vs "Pat Stone"). | Two DEXA pages printing "SMITH, PAT" and "STONE, PAT" with staff "Pat S": at most one may be accepted, the other flagged. Option: require the full last name when any page prints one. |
+| `scan_dexa.attribute_pages` (rule 4) | An unnamed, no-age page from another person whose scan dates happen to equal the patient's (same clinic day) is accepted by date corroboration. | Foreign no-age page with the patient's dates but different values → today the field conflict excludes the values; add a test that such a page is flagged when every one of its values conflicts. |
+| `scoring._clear_zero_sentinel_partial_scan` | Legacy sentinel handling: a mass printed as 0, or -1, becomes "not measured" without a notice (from the old AI-extraction schema; the two-read path never emits sentinels). | Two-read DEXA mock printing total 0 → value must be excluded *with* a staff note, or the sentinel code removed. |
+| `template._first_complete_dexa_reading` / `_latest_complete_dexa_reading` | With no complete scan (only VAT-only rows), they fall back to `dexa_history[0]`/`[-1]`, so a partial scan is shown in "Where you are now" with dashes. | VAT-only history → the comparison block shows no body-composition values and staff notes say why. |
+| `pipeline._normalize_date_for_matching` (`schema.normalize_date_for_matching`) | Two-digit years are read as 20YY: a printed DOB "03/15/82" becomes 2082 (then caught as an impossible age), and a draw "1/2/98" would sort as 2098. | Lab row and DOB with two-digit years → excluded with a notice, never a 20YY date. |
+| `pipeline._attach_report_collection_dates` | Fills a missing `date_display` from the report's single collection date for a source label: a date the row itself did not print. Not called by the report path today (only `test_report_regressions.py` uses it), so it is a latent risk if re-wired. | Remove it, or add a test that the report path never calls it (any row without a date stays undated and is listed for staff). |
+| `app.generate` | Age typed with decimals ("45.5") raises in `int(age)` and shows the generic "Generation failed" instead of a field error. | Post age "45.5" → form re-rendered with "Age must be a whole number". |
+| `pipeline.reconcile_marker_occurrences` | A marker whose only result is older than the newest draw is shown as "Not retested" in the earlier column; correct, but staff are not told which markers were not retested in the latest draw. | Two draws, one marker only in the earlier one → STAFF CHECK lists it under "not in the latest draw". |

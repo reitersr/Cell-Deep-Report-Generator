@@ -99,10 +99,17 @@ def _clear_zero_sentinel_partial_scan(dexa_data: dict) -> None:
 
 
 def normalize_dexa_body_fat(dexa_data: dict) -> dict:
-    """Derive a body-fat percentage only from already-reported mass values when needed."""
+    """The printed body-fat percentage when one was printed; computed from the reported fat and total
+    mass only when none was printed, and then listed in "computed" so it is labelled as such. A value
+    that was printed but excluded (reads or pages disagree) is "withheld": it stays empty, never
+    replaced by a computed one."""
     _clear_zero_sentinel_partial_scan(dexa_data)
+    withheld = dexa_data.pop("withheld", None) or []
     body_fat = dexa_data.get("body_fat_pct")
     if body_fat not in (None, "", "None"):
+        return dexa_data
+    if "body_fat_pct" in withheld:
+        dexa_data["body_fat_pct"] = None
         return dexa_data
 
     total_mass = dexa_data.get("total_mass_lb")
@@ -124,6 +131,7 @@ def normalize_dexa_body_fat(dexa_data: dict) -> dict:
 
     value = (fat_mass / total_mass) * 100
     dexa_data["body_fat_pct"] = f"{value:.1f}%"
+    dexa_data["computed"] = [*(dexa_data.get("computed") or []), "body_fat_pct"]
     return dexa_data
 
 

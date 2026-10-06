@@ -52,6 +52,16 @@ class ExtractionReviewNotice:
     dexa_summary: list = field(default_factory=list)           # DEXA two-read outcomes, printed first
     name_header: list = field(default_factory=list)            # "This report is for ..." and printed names
     incomplete: list = field(default_factory=list)             # pages/sections excluded by parse failures
+    staff_check: list = field(default_factory=list)            # one-screen STAFF CHECK, printed first
+
+
+STAFF_CHECK_END = "(end of STAFF CHECK)"
+
+
+def without_staff_check(text: str) -> str:
+    """The staff notes after the STAFF CHECK block (tests and tools that read the detailed notices)."""
+    head, separator, rest = text.partition(STAFF_CHECK_END + "\n\n")
+    return rest if separator else text
 
 
 # Text that only staff QA output produces. template.render refuses to build a patient PDF whose
@@ -59,7 +69,7 @@ class ExtractionReviewNotice:
 STAFF_NOTE_MARKERS = (
     "source=scan", "gate:", "STAFF REVIEW", "COVERAGE GAP", "NEEDS HUMAN REVIEW", "manual review required",
     "LAB-REPORTED CONFLICT", "PATIENT NAME MISMATCH", "SCANNED BLOODWORK", "ERROR: missing threshold",
-    "Unrecognized marker", "POSSIBLE HALLUCINATION", "DEXA PATIENT NAME MISMATCH", "DEXA name not printed", "DEXA AGE MISMATCH", "DEXA AGE NOT PRINTED", "DEXA NOT READ", "CENSORED RESULTS", "LAB FLAG DIFFERS", "DOB CONFLICT", "INCOMPLETE - ", "This report is for", "NAME MISMATCH", "TREATMENT STATUS:", "AGE CHECK", "AGE NOT COMPUTED", "PROVIDER NOTE REJECTED", "PROVIDER NOTE:", "LINE(S) NOT READ",
+    "Unrecognized marker", "POSSIBLE HALLUCINATION", "STAFF CHECK", "DEXA EXCLUDED", "LAB EXCLUDED", "DEXA PATIENT NAME MISMATCH", "DEXA name not printed", "DEXA AGE MISMATCH", "DEXA AGE NOT PRINTED", "DEXA SCAN OLDER THAN BLOODWORK", "DEXA NOT READ", "CENSORED RESULTS", "LAB FLAG DIFFERS", "DOB CONFLICT", "INCOMPLETE - ", "This report is for", "NAME MISMATCH", "TREATMENT STATUS:", "AGE CHECK", "AGE NOT COMPUTED", "PROVIDER NOTE REJECTED", "PROVIDER NOTE:", "LINE(S) NOT READ",
 )
 
 
@@ -69,7 +79,8 @@ def format_review_notice(notice: ExtractionReviewNotice) -> str:
     if not (notice.unrecognized_markers or notice.other_notes or notice.scan_summary or notice.dexa_summary
             or notice.name_header or notice.incomplete):
         return ""
-    lines = [*notice.incomplete, ""] if notice.incomplete else []
+    lines = [*notice.staff_check, ""] if notice.staff_check else []
+    lines += [*notice.incomplete, ""] if notice.incomplete else []
     if notice.name_header:
         lines += [*notice.name_header, ""]
     lines.append("This report generated successfully. A few items need a quick human check:")

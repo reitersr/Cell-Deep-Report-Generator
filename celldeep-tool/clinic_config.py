@@ -68,3 +68,11 @@ NO_RANGE_CHIP_LABEL = "Not scored, no range printed"
 # years of the median age printed across the DEXA pages (and of the staff-entered age, when entered).
 # Pages further away are excluded and listed for staff; pages that print no age are never accepted.
 DEXA_AGE_TOLERANCE_YEARS = 2
+
+# Label shown after a DEXA body fat % that the scan did not print and that is computed from the printed
+# fat and total mass instead. A printed body fat % is always used when one was printed.
+DEXA_COMPUTED_LABEL = "computed"
+
+# Staff notes warn when the latest accepted DEXA scan ("Where you are now") is more than this many days
+# older than the latest bloodwork draw. The report still shows that scan; nothing is changed.
+DEXA_STALE_DAYS = 60

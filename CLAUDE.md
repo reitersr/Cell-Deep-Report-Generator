@@ -76,29 +76,39 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    (missing folder or heartbeat older than `STALE_JOB_SECONDS`) shows "This report job was interrupted.
    Please try again". Scanned pages are rendered once per page via `scan_bloodwork.render_page_png_b64`
    (200 DPI, MuPDF cache emptied) so peak memory does not grow with page count (`test_memory.py`).
+   After the documents are read and before anything is built, `pipeline.run(confirm=...)` pauses the job
+   when any lab page/section, scanned row or DEXA page was left out (`extracted["preflight"]`); the
+   generating page lists them and staff continue or stop (`/generate/decision/<id>`, `GenerationAborted`).
 2. **Bloodwork** (`pipeline.extract`):
    - Pages with a text layer: `_parse_bloodwork_tables` reads rows by printed column position
      under each page's own Current/Historical or In Range/Out of Range header. Names match
      the marker library by exact alias only; anything else becomes an unrecognized-marker
      review item.
    - Image-only pages: `_extract_scan_bloodwork` renders each page, reads it twice with the
-     vision model, and `scan_bloodwork.gate_staff_identified_reads` keeps a row only when both
-     reads agree and it passes the value-format and flag-vs-range checks. Staff-entered name
+     vision model (temperature 0, `READ_TEMPERATURE`; transport retries only, no content re-read, no
+     tie-break), and `scan_bloodwork.gate_staff_identified_reads` keeps a row only when both
+     reads agree and it passes the value-format and flag-vs-range checks. A row the reads disagree on
+     is listed as "INCOMPLETE - row excluded: <marker> (reads disagree: X / Y)". Staff-entered name
      and Collected date identify the pages.
    - `_merge_scan_occurrences` combines both sources.
    - A section or page that cannot be parsed is excluded whole and listed under "INCOMPLETE" at the
-     top of the staff notes; the rest of the report is built. `BloodworkHardStop` (conflicting
+     top of the staff notes; the rest of the report is built. A text page with result rows under no
+     recognized table header is excluded and the tests it holds are named; an unrecognized document is
+     excluded page by page instead of stopping the report. `BloodworkHardStop` (conflicting
      duplicate results, one Order ID with two Collected dates) still stops the job.
 3. **DEXA**: `_extract_dexa_with_claude` renders every DEXA page and `scan_dexa` reads it twice; a
    measurement is kept only when both reads agree, a scan date the reads disagree on drops the
    whole scan, and `scan_dexa.attribute_pages` decides which pages are the patient's: a page printing a
-   different name is dropped and listed under "INCOMPLETE - pages excluded"; a page with no name
-   confirmed by both reads is accepted with a "STAFF REVIEW - DEXA name not printed" notice only when the
-   age it prints (header or scan rows, decimals allowed, both reads agreeing) is within
-   `clinic_config.DEXA_AGE_TOLERANCE_YEARS` of the median age across the pages, which must form a clear
-   cluster, and of the staff-entered age when entered; an unnamed page with no readable age is never
-   accepted. Excluded pages reach no history row, current/first-visit value, summary, scan image or
-   score. Kept scans are merged by date and
+   different name is always dropped; a page printing the patient's name is validated; an unnamed page
+   printing an age (header or scan rows, decimals allowed, both reads agreeing) is validated when the age
+   is within `clinic_config.DEXA_AGE_TOLERANCE_YEARS` of the median age across the pages (a clear cluster)
+   and of the staff-entered age; an unnamed page with no age is accepted only when every scan date it
+   shows is on a validated page. Every other page is listed under "INCOMPLETE - pages excluded" with its
+   dates and reason, and reaches no history row, current/first-visit value, summary, scan image or score.
+   The printed body fat % is used whenever printed; it is computed from fat/total only when never printed
+   (labelled `clinic_config.DEXA_COMPUTED_LABEL`) and never when printed but contested ("withheld").
+   Staff notes warn when "Where you are now" is older than the latest bloodwork by more than
+   `DEXA_STALE_DAYS`. Kept scans are merged by date and
    sorted oldest first. Outcomes open the staff notes (DEXA block). Names everywhere compare with
    `scan_bloodwork.names_match` (any order and case, or first name plus last initial).
 4. **Provider note**: `parse_provider_note` reads only the documented template sections
@@ -115,7 +125,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    `template.render` writes the patient PDF. Full-panel column headers name a date only when every
    value in the column is from it (`template.panel_column_headers`).
 7. **Staff notes**: `_write_review_notes` / `format_review_notice` write the staff-only review
-   file, downloadable separately from the report.
+   file, downloadable separately from the report. It opens with the one-screen STAFF CHECK
+   (`pipeline.staff_check_block`: entered name and date, DEXA dates accepted/excluded with ages, lab pages
+   accepted/excluded, counts, name mismatches), then INCOMPLETE; tests read past it with
+   `unknown_marker_policy.without_staff_check`.
 
 ## Pull request workflow
 

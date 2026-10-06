@@ -134,7 +134,7 @@
         if (!result.read && !result.rejected.length) {
           summary.textContent = "No note entered.";
         } else if (!result.read) {
-          summary.textContent = "No '## ' sections found, so nothing in this note will be read.";
+          summary.textContent = "No '## ' sections found, so nothing in this note will be read. " + result.fix;
         } else {
           summary.textContent = "Sections read: " + result.sections.join(", ") + ". " +
             (result.rejected.length ? result.rejected.length + " line(s) will NOT be read:" : "Every line will be read.");

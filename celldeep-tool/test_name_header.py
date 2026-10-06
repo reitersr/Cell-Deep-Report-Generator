@@ -6,6 +6,7 @@ import pipeline
 from synthetic_fixtures import deterministic_fixtures as fx
 from synthetic_fixtures import dexa as dexa_fx
 from test_scan_bloodwork import MockClient, payloads
+from unknown_marker_policy import without_staff_check
 
 NOTE = """## Consultation Note
 Patient: Synthetic, Pat
@@ -43,7 +44,8 @@ def _review(tmp_path, monkeypatch, capsys, other_scan_name=None):
     monkeypatch.setattr(pipeline, "_diagnostic_path_prefix", lambda name: str(tmp_path / "diag"))
     pipeline.run(str(labs), [str(dexa)], NOTE, "Synthetic, Pat", None, "male", str(tmp_path / "r.pdf"),
                  collected_date="04/14/2026")
-    return (tmp_path / "review.txt").read_text(encoding="utf-8").splitlines(), capsys.readouterr().out
+    review = without_staff_check((tmp_path / "review.txt").read_text(encoding="utf-8"))
+    return review.splitlines(), capsys.readouterr().out
 
 
 def test_header_lists_every_source_name_and_matches(tmp_path, monkeypatch, capsys):

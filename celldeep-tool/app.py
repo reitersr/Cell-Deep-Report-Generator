@@ -200,6 +200,11 @@ JOB_INTERRUPTED_MESSAGE = "This report job was interrupted. Please try again"
 # One report at a time per process: each job renders scanned pages and starts Chromium, and two at once
 # do not fit a 512MB instance. Later jobs wait their turn (status stays "processing").
 _REPORT_SLOT = threading.Lock()
+# A job whose documents left pages or rows out pauses for staff before the report is built. A decision
+# not made within this time stops the job (nothing is written).
+CONFIRM_TIMEOUT_SECONDS = 30 * 60
+STOPPED_MESSAGE = "Report not generated: stopped at the confirmation step. Nothing was written."
+_DECISIONS: dict[str, dict] = {}  # job id -> {"event": threading.Event, "go": bool}, while a job waits
 # Job folder contents kept after a job ends; uploads and the intermediate HTML are deleted.
 _JOB_OUTPUTS = {"report.pdf", "review_notes.txt", "status.json", "status.tmp", "heartbeat"}
 
@@ -260,6 +265,24 @@ def _run_report_job(job_directory: Path, job_data: dict, run=None) -> None:
         stop_heartbeat.set()
 
 
+def _confirm_with_staff(job_directory: Path, items: list[str]) -> bool:
+    """Pause the job and show staff what was left out; True only when staff choose to continue. The
+    one-report slot is released while waiting so other uploads are not held up."""
+    decision = {"event": threading.Event(), "go": False}
+    _DECISIONS[job_directory.name] = decision
+    _write_job_status(job_directory, "confirm", items=items)
+    _REPORT_SLOT.release()
+    try:
+        decided = decision["event"].wait(CONFIRM_TIMEOUT_SECONDS)
+    finally:
+        _REPORT_SLOT.acquire()
+        _DECISIONS.pop(job_directory.name, None)
+    if decided and decision["go"]:
+        _write_job_status(job_directory, "processing")
+        return True
+    return False
+
+
 def _run_report(job_directory: Path, job_data: dict, run) -> None:
     try:
         review_path = run(
@@ -272,9 +295,13 @@ def _run_report(job_directory: Path, job_data: dict, run) -> None:
             out_path=str(job_directory / "report.pdf"),
             vitality_index=job_data["vitality_index"],
             collected_date=job_data.get("collected_date"),
+            confirm=lambda items: _confirm_with_staff(job_directory, items),
         )
         shutil.move(review_path, job_directory / "review_notes.txt")
         _write_job_status(job_directory, "done")
+    except pipeline.GenerationAborted:
+        _write_job_status(job_directory, "stopped", error=STOPPED_MESSAGE)
+        print(f"generation stopped at confirmation job_id={job_directory.name}")
     except Exception:
         job_id = job_directory.name
         _write_job_status(job_directory, "error", error=f"Generation failed. Job ID: {job_id}", job_id=job_id)
@@ -368,12 +395,23 @@ def generate_status(job_id):
         # The job's files are gone: the instance was replaced or restarted while it ran.
         return jsonify(interrupted), 404
     status = _read_job_status(job_directory)
-    if status["status"] == "processing" and _job_is_stale(job_directory):
+    if status["status"] in ("processing", "confirm") and _job_is_stale(job_directory):
         return jsonify(interrupted)
     if status["status"] == "done":
         status["report_url"] = url_for("download_report", job_id=job_id)
         status["review_notes_url"] = url_for("download_review_notes", job_id=job_id)
     return jsonify(status)
+
+
+@app.route("/generate/decision/<job_id>", methods=["POST"])
+def generate_decision(job_id):
+    """Staff answer the confirmation step: continue to build the report, or stop."""
+    decision = _DECISIONS.get(job_id) if _job_directory(job_id) else None
+    if decision is None:
+        return jsonify({"status": "error", "error": "This job is not waiting for a decision."}), 409
+    decision["go"] = request.form.get("action") == "continue"
+    decision["event"].set()
+    return jsonify({"status": "processing" if decision["go"] else "stopping"})
 
 
 @app.route("/download/<job_id>/report", methods=["GET"])

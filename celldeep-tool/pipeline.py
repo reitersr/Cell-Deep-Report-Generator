@@ -23,7 +23,7 @@ import re
 import tempfile
 import uuid
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from anthropic import APIConnectionError, APITimeoutError, Anthropic, RateLimitError
@@ -34,7 +34,7 @@ from schema import PatientRecord, Marker, DexaReading, ProtocolItem, PainPoint, 
 from schema import normalize_date_for_matching as _normalize_date_for_matching
 from markers_reference import MARKER_LIBRARY, resolve_marker_config, has_missing_thresholds
 from protocol_reference import PROTOCOL_LIBRARY, lookup_protocol_item
-from unknown_marker_policy import UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
+from unknown_marker_policy import STAFF_CHECK_END, UnrecognizedMarker, ExtractionReviewNotice, format_review_notice
 from generation_prompt import build_copy
 import clinic_config
 import lab_reported
@@ -1387,6 +1387,24 @@ def _dedupe_bloodwork_rows(occurrences, audit):
     return list(unique.values())
 
 
+def _headerless_marker_rows(page_words) -> list[str]:
+    """Names of known tests (scored or lab-reported) that start a line followed by a result, on a page
+    with no recognized table header. Used only to name what was not read; nothing here is kept."""
+    import lab_reported
+    names = []
+    for words in _group_lines(page_words, _LINE_TOLERANCE_PT):
+        tokens = [word[4] for word in words]
+        for cut in range(len(tokens) - 1, 0, -1):
+            name = " ".join(tokens[:cut])
+            if not re.fullmatch(r"[<>]?\d[\d.,]*", tokens[cut]):
+                continue
+            match = markers_reference_lookup(name) or lab_reported.lookup(name, "")
+            if match and match[0] not in names:
+                names.append(match[0])
+            break
+    return names[:8]
+
+
 def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
                             exclusions=None) -> tuple[list[dict], list[dict]]:
     """One rule for every Quest/Cleveland HeartLab section: each result printed in a test-name row is
@@ -1503,12 +1521,13 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
             section = state["section"]
             if any(title in text.lower() for title in _TREND_TABLE_TITLES):
                 flush(page)
-                state.update(excluded=True, header=None)
+                state.update(excluded=True, header=None, page_had_table=True)  # trend tables are skipped on purpose
                 continue
             if state["excluded"]:
                 continue
             header = _bloodwork_header(words, state["recent_lines"][-3:])
             if header:
+                state["page_had_table"] = True
                 flush(page)
                 state.update(header=header, await_dates=True, pending_dates=[], recent_lines=[])
                 section["has_table"] = True
@@ -1523,7 +1542,8 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
         flush(page)
 
     for page_number, page in enumerate(pdf_pages, 1):
-        state.update(header=None, excluded=False, await_dates=False, pending_dates=[], recent_lines=[])
+        state.update(header=None, excluded=False, await_dates=False, pending_dates=[], recent_lines=[],
+                     page_had_table=False)
         page_words = _page_words(page)
         if not page_words:
             unreadable.append(page_number)
@@ -1538,6 +1558,11 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
             rollback(page_marks)
             state.update(header=None, rows=[], excluded=False, await_dates=False, recent_lines=[])
             excluded.append({"page": page_number, "section": "whole page", "reason": str(error)})
+            continue
+        if not state["page_had_table"] and (names := _headerless_marker_rows(page_words)):
+            excluded.append({"page": page_number, "section": "whole page", "reason": (
+                "result rows printed under no recognized table header (expected 'Current'/'Historical' or "
+                "'In Range'/'Out of Range'), so they were not read: " + ", ".join(names))})
     if unreadable:
         warning = (f"Lab PDF pages {', '.join(map(str, unreadable))}: no readable text, "
                    "OCR not supported, manual review required")
@@ -1545,13 +1570,21 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
         if review_notes is not None:
             review_notes.append(warning)
     occurrences = _dedupe_bloodwork_rows(occurrences, audit)
-    # An unrecognized layout must stop the job for manual review, never render an empty bloodwork section.
+    # An unrecognized layout is never rendered as an empty bloodwork section without notice. Direct callers
+    # (exclusions=None) get the error; the report pipeline excludes the pages, lists them under
+    # INCOMPLETE and still builds the rest of the report.
+    problem = None
     if not any(section["dates"] for section in sections):
-        raise BloodworkParseError(
-            "Lab PDF has no recognizable 'Collected:' section - layout not recognized; route for manual review")
-    if not occurrences:
-        raise BloodworkParseError(
-            "Lab PDF produced zero recognized marker rows - layout not recognized; route for manual review")
+        problem = "Lab PDF has no recognizable 'Collected:' section - layout not recognized"
+    elif not occurrences:
+        problem = "Lab PDF produced zero recognized marker rows - layout not recognized"
+    if problem:
+        if exclusions is None:
+            raise BloodworkParseError(problem + "; route for manual review")
+        listed = {item["page"] for item in excluded}
+        excluded.extend({"page": number, "section": "whole document", "reason": problem}
+                        for number in range(1, len(pdf_pages) + 1) if number not in listed)
+        return [], unrecognized
     return occurrences, unrecognized
 
 
@@ -1562,9 +1595,10 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
 def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], patient_name: str | None,
                               dob_sink: list | None = None, name_sink: list | None = None,
                               excluded_sink: list | None = None, confirmed_sink: list | None = None,
-                              staff_age: int | None = None):
+                              staff_age: int | None = None, info: dict | None = None):
     """Read every DEXA page twice and keep only measurements both reads agree on (scan_dexa.gate).
-    Returns (dexa_history, staff_notes, summary_lines)."""
+    Returns (dexa_history, staff_notes, summary_lines). info, when given, receives the pages that could
+    not be read and the age printed on each accepted page, for the staff check and confirmation step."""
     import scan_bloodwork
     import scan_dexa
 
@@ -1593,8 +1627,14 @@ def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], pa
                 name_sink.append(("DEXA", f"file {key[0]} page {key[1]}", printed.pop()))
     excluded = [] if excluded_sink is None else excluded_sink
     result = scan_dexa.gate(pages, patient_name, failures, dob_sink, excluded, staff_age)
-    if confirmed_sink is not None:  # pages read twice whose printed name matched the staff-entered patient
-        confirmed_sink.extend(sorted({key for key, _ in pages} - {key for key, _ in excluded}))
+    accepted = sorted({key for key, _ in pages} - {key for key, _ in excluded})
+    if confirmed_sink is not None:  # pages read twice and attributed to the staff-entered patient
+        confirmed_sink.extend(accepted)
+    if info is not None:
+        ages = {key: scan_dexa.page_age(reads) for key, reads in pages}
+        info.update(failed=[(key, reason) for key, _, reason in sorted(failures, key=lambda item: item[0])],
+                    accepted=[(key, ages[key][1] if ages.get(key) else None) for key in accepted],
+                    page_count=len(pages) + len(failures))
     return result
 
 def has_scanned_pages(pdf: bytes | str | os.PathLike) -> bool:
@@ -1688,7 +1728,7 @@ def scan_collected_date(text: str) -> str:
 
 
 def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_name=None, collected_date=None,
-                            dob_sink=None, name_sink=None):
+                            dob_sink=None, name_sink=None, row_exclusions=None):
     import scan_bloodwork as scan
 
     numbers = [page.number + 1 for page in pages]
@@ -1729,7 +1769,7 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
     }
     if staff:
         accepted, notes = scan.gate_staff_identified_reads(
-            reads, collected_date, _CELL_VALUE_RE, patient_name, failures, lab_codes)
+            reads, collected_date, _CELL_VALUE_RE, patient_name, failures, lab_codes, row_exclusions)
         # Name-mismatch notices stay first so staff see them before the identity summary.
         notes.insert(sum(note.startswith("STAFF REVIEW") for note in notes),
                      f"source=scan pages {numbers}: identified by staff-entered patient name and "
@@ -1738,7 +1778,8 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         digital_names = scan.digital_patient_names(digital_pages, _group_lines, _page_words)
         try:
             accepted, notes = scan.gate_reads(
-                reads, digital_names, _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching, failures)
+                reads, digital_names, _CELL_VALUE_RE, _PRINTED_DATE_RE, _normalize_date_for_matching, failures,
+                row_exclusions)
         except scan.ScanGateError as error:
             return [], [], error.notes + [
                 f"source=scan pages {numbers}: {error}; ALL SCAN ROWS REJECTED; manual review required"]
@@ -1799,6 +1840,10 @@ def _merge_scan_occurrences(digital, scanned, row_audit):
 
 _NOTE_SECTIONS = ("consultation note", "patient concerns", "protocol", "marker targets", "vitality index",
                   "treatment status")
+NOTE_FIX = ("To fix: put each part of the note under its own heading line, using these headings exactly: "
+            "'## Consultation Note', '## Treatment Status', '## Patient Concerns', '## Protocol', "
+            "'## Marker Targets', '## Vitality Index' (download the blank template from the upload page). "
+            "A pasted medication list belongs under '## Protocol' as '- <name> | Cadence: <cadence>' lines.")
 _STATUS_LINES = {"on trt": "on_trt", "postmenopausal and on bhrt": "postmenopausal_bhrt"}
 _STATUS_VALUES = {"yes": True, "no": False, "not stated": None}
 _PATIENT_SYSTEMS = ("Drive", "Pace", "Fuel", "Flow", "Repair", "Reserves", "Structure")
@@ -1919,7 +1964,8 @@ def check_provider_note(note_text: str | None) -> dict:
     if not note_text or not note_text.strip():
         return {"read": False, "sections": [], "rejected": []}
     _, rejected, seen, _ = _parse_structured_note(note_text)
-    return {"read": bool(seen), "sections": [title.title() for title in seen], "rejected": rejected}
+    return {"read": bool(seen), "sections": [title.title() for title in seen], "rejected": rejected,
+            "fix": "" if seen else NOTE_FIX}
 
 
 def parse_provider_note(note_text: str | None) -> dict:
@@ -1933,8 +1979,8 @@ def parse_provider_note(note_text: str | None) -> dict:
     listing = [f"    line {item['line']}: {item['text']!r} - {item['reason']}" for item in rejected]
     if not seen:
         result["other_notes"].append(
-            "PROVIDER NOTE REJECTED - no structured '## ' sections found - NOTE WAS NOT READ; ENTER PROTOCOL, "
-            "CONCERNS, TARGETS, AND STATUS MANUALLY USING THE PROVIDER NOTES TEMPLATE")
+            "PROVIDER NOTE REJECTED - no structured '## ' sections found - NOTE WAS NOT READ (the rest of the "
+            "report was built without it). " + NOTE_FIX)
         result["other_notes"].extend(listing)
         return result
     result.update(parsed, accepted=True, accepted_text=accepted_text)
@@ -1955,12 +2001,15 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     row_audit = []
     scan_numbers = []
     parse_exclusions = []  # pages/sections that could not be parsed deterministically
+    scan_row_exclusions = []  # scanned rows whose two reads disagree: listed under INCOMPLETE
+    lab_text_pages, scan_notes = [], []
     dob_sources = []  # (source label, (y, m, d)); used only to compute age, never stored
     printed_names = []  # (source, page or None, name as printed) for the staff-notes header
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
             pages = list(document)
             digital_pages = [page for page in pages if _page_words(page)]
+            lab_text_pages = [page.number + 1 for page in digital_pages]
             scans = [page for page in pages if not _page_words(page)]
             scan_numbers = [page.number + 1 for page in scans]
             if digital_pages:
@@ -1978,7 +2027,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             if scans:
                 scanned, scan_unknown, scan_notes = _extract_scan_bloodwork(
                     scans, digital_pages, client, row_audit, patient_name, collected_date, dob_sources,
-                    printed_names)
+                    printed_names, scan_row_exclusions)
                 occurrences = _merge_scan_occurrences(occurrences, scanned, row_audit)
                 unrecognized.extend(scan_unknown)
                 lab_review_notes.extend(scan_notes)
@@ -1987,9 +2036,10 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     lab_review_notes.extend(lab_notes)
     dexa_exclusions = []  # DEXA pages not attributed to this patient: listed under INCOMPLETE
     dexa_confirmed = []  # (file, page) keys confirmed as this patient's
+    dexa_info = {}  # pages that could not be read, ages of accepted pages
     dexa_history, dexa_notes, dexa_summary = (_extract_dexa_with_claude(client, dexa_pdfs, patient_name, dob_sources,
                                                                         printed_names, dexa_exclusions, dexa_confirmed,
-                                                                        age)
+                                                                        age, dexa_info)
                                               if dexa_pdfs else ([], [], []))
     note = parse_provider_note(note_text)
     for match in re.finditer(r"^\s*Patient(?: Name)?\s*:\s*(.+?)\s*$", note["accepted_text"] or "", re.I | re.M):
@@ -2019,9 +2069,16 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "source_rows": row_audit,
         "scan_summary": scan_summary,
         "parse_exclusions": parse_exclusions,
+        "scan_row_exclusions": scan_row_exclusions,
         "dexa_summary": dexa_summary,
         "dexa_incomplete": scan_dexa_incomplete_notice(dexa_exclusions),
         "dexa_confirmed_pages": dexa_confirmed,
+        "dexa_info": dexa_info,
+        "dexa_exclusions": dexa_exclusions,
+        "collected_date": collected_date,
+        "lab_pages": {"text": lab_text_pages, "scanned": scan_numbers},
+        "preflight": preflight_items(parse_exclusions, scan_notes if scan_numbers else [], scan_row_exclusions,
+                                     dexa_exclusions, dexa_info),
         "printed_names": printed_names,
         **_age_from_dob(dob_sources, latest["date_display"] if latest else None),
         "other_notes": [*lab_review_notes, *note["other_notes"]],
@@ -2291,6 +2348,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     notice.other_notes.extend(extracted.get("other_notes", []))
     notice.scan_summary = list(extracted.get("scan_summary", []))
     notice.dexa_summary = list(extracted.get("dexa_summary", []))
+    notice.other_notes.extend(dexa_staleness_notes(record.dexa_history, extracted.get("latest_draw_date")))
     exclusions = extracted.get("parse_exclusions", [])
     if exclusions:
         pages = sorted({item["page"] for item in exclusions})
@@ -2298,12 +2356,97 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             f"INCOMPLETE - pages/sections excluded: lab PDF page(s) {', '.join(map(str, pages))} could not be "
             "parsed deterministically; their results are NOT in this report - review them by hand",
             *[f"  - page {item['page']} ({item['section']}): {item['reason']}" for item in exclusions]]
+    notice.incomplete.extend(f"INCOMPLETE - row excluded: {item['name']} (reads disagree: {item['reads']}) - "
+                             f"scanned lab page {item['page']}; not in this report"
+                             for item in extracted.get("scan_row_exclusions", []))
     notice.incomplete.extend(extracted.get("dexa_incomplete", []))
     notice.name_header = name_header(extracted.get("name"), extracted.get("printed_names", []))
     unrecognized_names = {" ".join(item["raw_name"].split()).casefold()
                           for item in extracted.get("unrecognized_markers", [])}
     notice.other_notes[:0] = coverage_gaps(extracted.get("source_rows", []), record, unrecognized_names)
+    notice.staff_check = staff_check_block(extracted, record, notice)
     return record, notice
+
+
+class GenerationAborted(RuntimeError):
+    """Staff stopped the report at the confirmation step; nothing was written."""
+
+
+_SCAN_PAGE_EXCLUDED_RE = re.compile(r"source=scan page (\d+): (.+); page excluded$")
+
+
+def preflight_items(parse_exclusions, scan_notes, scan_row_exclusions, dexa_exclusions, dexa_info) -> list[str]:
+    """Every lab page/section, scanned row and DEXA page left out of the report, one line each, for the
+    confirmation step before the report is built (staff can stop there). Empty when nothing was left out."""
+    items = [f"Lab PDF page {item['page']} ({item['section']}): {item['reason']}" for item in parse_exclusions]
+    for note in scan_notes:
+        if match := _SCAN_PAGE_EXCLUDED_RE.match(note):
+            items.append(f"Lab PDF page {match[1]} (scanned): {match[2]}")
+    items += [f"Lab PDF page {item['page']} (scanned): row {item['name']} excluded - the two reads disagree"
+              for item in scan_row_exclusions]
+    items += [f"DEXA file {key[0]} page {key[1]}: {reason}" for key, reason in dexa_exclusions]
+    items += [f"DEXA file {key[0]} page {key[1]}: could not be read ({reason})"
+              for key, reason in dexa_info.get("failed", [])]
+    return items
+
+
+def staff_check_block(extracted: dict, record: PatientRecord, notice: ExtractionReviewNotice) -> list[str]:
+    """The one-screen STAFF CHECK that opens the staff notes. Only what the report and staff notes already
+    hold: entered name and date, scan dates and printed ages, page numbers, counts and mismatch notices."""
+    info = extracted.get("dexa_info", {})
+    excluded_dexa = extracted.get("dexa_exclusions", [])
+    lab = extracted.get("lab_pages", {"text": [], "scanned": []})
+    lab_excluded = sorted({item["page"] for item in extracted.get("parse_exclusions", [])})
+    scan_excluded = sorted({int(m[1]) for note in extracted.get("other_notes", [])
+                            if (m := _SCAN_PAGE_EXCLUDED_RE.match(note))})
+    ages = sorted({age for _, age in info.get("accepted", []) if age}, key=float)
+    lines = ["STAFF CHECK - confirm before sending this report",
+             f"  Patient name (entered): {extracted.get('name') or '(none entered)'}",
+             f"  Bloodwork Collected date (entered): {extracted.get('collected_date') or '(none entered)'}"]
+    if record.dexa_history:
+        dates = ", ".join(reading.date_display + (" (body fat % computed)" if "body_fat_pct" in reading.computed
+                                                  else "") for reading in record.dexa_history)
+        lines.append(f"  DEXA scan dates accepted: {dates}" + (f"; ages printed on accepted pages: {', '.join(ages)}"
+                                                               if ages else ""))
+    elif info or excluded_dexa:
+        lines.append("  DEXA scan dates accepted: none")
+    for key, reason in excluded_dexa:
+        lines.append(f"  DEXA EXCLUDED file {key[0]} page {key[1]}: "
+                     + ("prints a different patient name" if reason.startswith("prints patient name") else reason))
+    for key, reason in info.get("failed", []):
+        lines.append(f"  DEXA EXCLUDED file {key[0]} page {key[1]}: could not be read ({reason})")
+    if lab["text"] or lab["scanned"]:
+        kept_text = [page for page in lab["text"] if page not in lab_excluded]
+        kept_scan = [page for page in lab["scanned"] if page not in scan_excluded]
+        lines.append(f"  Lab pages accepted: {', '.join(map(str, sorted(kept_text + kept_scan))) or 'none'}"
+                     + (f" (scanned: {', '.join(map(str, kept_scan))})" if kept_scan else ""))
+        for item in extracted.get("parse_exclusions", []):
+            lines.append(f"  LAB EXCLUDED page {item['page']} ({item['section']}): {item['reason']}")
+        for note in extracted.get("other_notes", []):
+            if match := _SCAN_PAGE_EXCLUDED_RE.match(note):
+                lines.append(f"  LAB EXCLUDED page {match[1]} (scanned): {match[2]}")
+    excluded_rows = len(extracted.get("scan_row_exclusions", []))
+    lines.append(f"  Scored markers: {len(record.markers)}; rows excluded (reads disagree): {excluded_rows}; "
+                 f"unrecognized rows (staff list only): {len(extracted.get('unrecognized_markers', []))}")
+    mismatches = [line.strip() for line in notice.name_header if "NAME MISMATCH" in line]
+    mismatches += [note for note in [*notice.other_notes, *notice.dexa_summary] if "NAME MISMATCH" in note]
+    lines += [f"  {line.strip()}" for line in mismatches] or ["  Name mismatches: none"]
+    return [*lines, STAFF_CHECK_END]
+
+
+def dexa_staleness_notes(dexa_history: list, latest_draw: str | None) -> list[str]:
+    """Warn staff when the scan shown as "Where you are now" (the latest complete accepted scan) is more
+    than clinic_config.DEXA_STALE_DAYS older than the latest bloodwork draw. Nothing in the report changes."""
+    complete = [d for d in dexa_history if None not in (d.total_mass_lb, d.fat_mass_lb, d.lean_mass_lb)]
+    scan_day = _normalize_date_for_matching(complete[-1].date_display) if complete else None
+    draw_day = _normalize_date_for_matching(latest_draw or "")
+    if not (isinstance(scan_day, tuple) and isinstance(draw_day, tuple)):
+        return []
+    gap = (date(*draw_day) - date(*scan_day)).days
+    if gap <= clinic_config.DEXA_STALE_DAYS:
+        return []
+    return [f"DEXA SCAN OLDER THAN BLOODWORK: \"Where you are now\" shows the DEXA scan of {complete[-1].date_display}, "
+            f"{gap} days before the latest bloodwork draw ({latest_draw}); confirm no newer DEXA scan was left out"]
 
 
 def name_header(staff_name: str | None, printed: list) -> list[str]:
@@ -2368,7 +2511,10 @@ def resolve_age(extracted: dict, staff_age: int | None) -> int | None:
 
 
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitality_index=None,
-        collected_date=None):
+        collected_date=None, confirm=None):
+    """Build the patient report and staff notes. confirm(items) is called after the documents are read and
+    before anything is built, only when pages or rows were left out; returning False stops the run
+    (GenerationAborted) so staff can fix the inputs instead of sending a report with gaps."""
     raw_lab_text = _pdf_text(labs_pdf)
     raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
     client = Anthropic(
@@ -2380,6 +2526,8 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     print("Step 1/3: parsing source documents...")
     extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client,
                         collected_date=collected_date, age=age)
+    if confirm is not None and extracted["preflight"] and not confirm(list(extracted["preflight"])):
+        raise GenerationAborted("stopped by staff at the confirmation step")
     extracted["name"] = patient_name
     extracted["age"] = resolve_age(extracted, age)
     extracted["sex"] = sex

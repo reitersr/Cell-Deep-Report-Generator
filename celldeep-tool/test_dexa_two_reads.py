@@ -10,6 +10,7 @@ import scan_dexa
 import template
 from synthetic_fixtures import dexa as fx
 from unknown_marker_policy import format_review_notice
+from unknown_marker_policy import without_staff_check
 
 
 def _run(tmp_path, labels, pages, name="dexa.pdf", patient=fx.PATIENT):
@@ -175,7 +176,7 @@ def test_end_to_end_report_uses_gated_dexa_and_keeps_staff_text_out(tmp_path, mo
                                                          + labs_fx.header_line(100) + labs_fx.row(130, "TSH", "1.0")])
     out = tmp_path / "r.pdf"
     pipeline.run(str(labs), [str(path)], None, fx.PATIENT, 44, "male", str(out))
-    review = (tmp_path / "review.txt").read_text(encoding="utf-8")
+    review = without_staff_check((tmp_path / "review.txt").read_text(encoding="utf-8"))
     lines = review.splitlines()
     assert lines[0] == f"This report is for {fx.PATIENT} (staff-entered)"
     assert lines[lines.index("This report generated successfully. A few items need a quick human check:") + 2] \

@@ -375,7 +375,7 @@ def build_rollups(record: PatientRecord, structure_now: int | None, structure_th
         )
         structure_then = dexa_percent_optimized(
             first_dexa.body_fat_pct, first_dexa.visceral_fat_area_cm2, record.sex
-        ) if len(record.dexa_history) > 1 else None
+        ) if first_dexa is not latest_dexa else None
         structure_zone = ("optimal" if structure_now is not None and structure_now >= 88
                           else "moderate" if structure_now is not None and structure_now >= 50
                           else "flag")
@@ -509,11 +509,14 @@ def _latest_complete_dexa_reading(dexa_history: list[DexaReading]) -> DexaReadin
 
 
 def _dexa_value(reading: DexaReading, field: str, suffix: str = "") -> str:
-    """A DEXA value as printed, with a short label when the scanner marked it "(e)" estimated."""
+    """A DEXA value as printed, with a short label when the scanner marked it "(e)" estimated or when it
+    was not printed and is computed from printed values (body fat % from fat and total mass)."""
     value = getattr(reading, field)
     if value is None:
         return f"{fmt(value)}{suffix}"
     label = ' <span class="dexa-est">estimated</span>' if field in (reading.estimated or []) else ""
+    if field in (reading.computed or []):
+        label += f' <span class="dexa-est">{_html(clinic_config.DEXA_COMPUTED_LABEL)}</span>'
     return f"{fmt(value)}{suffix}{label}"
 
 
@@ -560,7 +563,7 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     structure_headline = copy.get("headlines", {}).get("Structure") or _default_structure_headline(record)
     # only a genuine 2+ scan comparison earns the before/after layout and improvement badge -
     # a single scan on file has nothing to compare against, so it gets one "current scan" box
-    has_comparison = len(record.dexa_history) > 1
+    has_comparison = first is not latest  # two different complete scans, as in the summary line
     badge_html = f'<div class="dexa-badge">{CHECK}</div>' if has_comparison else ""
     if has_comparison:
         stat_block_html = f'''<div class="dexa-stat-block">

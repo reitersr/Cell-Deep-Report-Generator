@@ -16,7 +16,7 @@ import statistics
 from datetime import date as calendar_date
 
 import clinic_config
-from scan_bloodwork import ScanGateError, _nullable, _object, _validate, name_key, names_match, render_page_png_b64
+from scan_bloodwork import READ_TEMPERATURE, ScanGateError, _nullable, _object, _validate, name_key, names_match, render_page_png_b64
 from schema import normalize_date_for_matching
 
 _TEXT = _nullable({"type": "string"})
@@ -71,7 +71,7 @@ def read_page(page, label, client, create_message, model):
 def _read(page, image, label, reading, client, create_message, model):
     response = create_message(
         client, f"DEXA extraction {label} read {reading}",
-        model=model, max_tokens=8000, system=DEXA_PROMPT,
+        model=model, max_tokens=8000, system=DEXA_PROMPT, temperature=READ_TEMPERATURE,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
             {"type": "text", "text": f"Transcribe DEXA PDF page {page.number + 1} independently."},
@@ -174,53 +174,79 @@ def incomplete_notice(exclusions):
             *[f"  - DEXA file {key[0]} page {key[1]}: {reason}" for key, reason in exclusions]]
 
 
+def page_dates(reads):
+    """Every readable scan date either read prints on the page."""
+    return {day for read in reads for scan in read["scans"] if (day := scan_date(scan["date"])) is not None}
+
+
+def _dates_text(days):
+    return ", ".join(_display(day) for day in sorted(days)) or "none"
+
+
 def attribute_pages(pages, patient_name, staff_age=None):
     """Which DEXA pages belong to the staff-entered patient. Returns (accepted keys, unnamed accepted keys,
-    [(key, reason)] excluded).
-    - A page printing a different name is excluded.
-    - A page that prints the patient's name is accepted.
-    - A page with no confirmed name is accepted only when it prints an age within
-      clinic_config.DEXA_AGE_TOLERANCE_YEARS of the median age printed across the pages, and of the
-      staff-entered age when one was entered. The median needs a clear cluster: more than half of the
-      pages that print an age must lie within the tolerance of it, otherwise no unnamed page is accepted.
-      An unnamed page that prints no readable age is never accepted."""
+    [(key, reason)] excluded). Deterministic; nothing is guessed:
+    1. A page printing a different name is always excluded.
+    2. A page printing the patient's name (both reads) is validated.
+    3. A page with no confirmed name that prints an age is validated when the age is within
+       clinic_config.DEXA_AGE_TOLERANCE_YEARS of the median age printed across the pages (more than half of
+       the aged pages must lie in that band: a clear cluster) and of the staff-entered age when entered.
+       Otherwise it is age-inconsistent and excluded.
+    4. A page with no confirmed name and no readable age is accepted only when every scan date it shows
+       also appears on a page validated by rules 2-3; dates found only on age-inconsistent or
+       unvalidated pages are never used.
+    A page with no scan data contributes nothing and needs no validation."""
     if not patient_name:
         return [key for key, _ in pages], [], []
     tolerance = clinic_config.DEXA_AGE_TOLERANCE_YEARS
-    excluded, named, unnamed = [], [], []
+    excluded, named, aged, ageless, blank = [], [], [], [], []
     for key, reads in sorted(pages, key=lambda item: item[0]):
+        dates = page_dates(reads)
         identity = page_identity(reads, patient_name)
         if identity == "other":
             names = [name for name in _printed(reads, "patient_name") if name_key(name)]
             printed = repr(names[0]) if len(set(names)) == 1 else " / ".join(map(repr, names))
-            excluded.append((key, f"prints patient name {printed}, not the staff-entered patient"))
+            excluded.append((key, f"prints patient name {printed}, not the staff-entered patient; "
+                                  f"scan dates {_dates_text(dates)}"))
         elif identity == "named":
-            named.append((key, page_age(reads)))
-        elif (age := page_age(reads)) is None:
-            excluded.append((key, "no patient name and no readable age printed (or the two reads differ); "
-                                  "cannot confirm it is this patient's"))
+            named.append((key, page_age(reads), dates))
+        elif (age := page_age(reads)) is not None:
+            aged.append((key, age, dates))
+        elif not any(read["scans"] for read in reads):
+            blank.append(key)  # no scan rows: nothing on this page reaches the report
         else:
-            unnamed.append((key, age))
-    ages = [age[0] for _, age in named + unnamed if age is not None]
-    kept = []
-    if unnamed:
+            ageless.append((key, None, dates))
+    ages = [age[0] for _, age, _ in named + aged if age is not None]
+    validated, unnamed_ok = [key for key, _, _ in named], []
+    validated_dates = set().union(*(dates for _, _, dates in named))
+    if aged:
         center = statistics.median(ages)
         clustered = sum(abs(age - center) <= tolerance for age in ages) * 2 > len(ages)
-        for key, (value, text) in unnamed:
+        for key, (value, text), dates in aged:
             if not clustered:
                 listed = ", ".join(f"{age:g}" for age in sorted(ages))
-                excluded.append((key, f"no patient name printed and it prints age {text}; the DEXA pages' ages "
-                                      f"({listed}) form no clear cluster, so no unnamed page is attributed"))
+                reason = (f"no patient name printed and it prints age {text}; the DEXA pages' ages ({listed}) form "
+                          "no clear cluster, so no unnamed page is attributed")
             elif abs(value - center) > tolerance:
-                excluded.append((key, f"no patient name printed and it prints age {text}; the DEXA pages center "
-                                      f"on age {center:g}"))
+                reason = f"no patient name printed and it prints age {text}; the DEXA pages center on age {center:g}"
             elif staff_age is not None and abs(value - staff_age) > tolerance:
-                excluded.append((key, f"no patient name printed and it prints age {text}; the staff-entered age "
-                                      f"is {staff_age}"))
+                reason = f"no patient name printed and it prints age {text}; the staff-entered age is {staff_age}"
             else:
-                kept.append(key)
-    accepted = sorted([key for key, _ in named] + kept)
-    return accepted, kept, sorted(excluded)
+                validated.append(key)
+                unnamed_ok.append(key)
+                validated_dates |= dates
+                continue
+            excluded.append((key, f"{reason}; scan dates {_dates_text(dates)}"))
+    for key, _, dates in ageless:
+        uncorroborated = dates - validated_dates
+        if dates and not uncorroborated:
+            unnamed_ok.append(key)
+            continue
+        excluded.append((key, "no patient name and no readable age printed (or the two reads differ), and scan "
+                              f"date(s) {_dates_text(uncorroborated or dates)} appear on no page validated by name "
+                              "or age; cannot confirm it is this patient's"))
+    accepted = sorted({*validated, *unnamed_ok, *blank})
+    return accepted, sorted(unnamed_ok), sorted(excluded)
 
 
 def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, staff_age=None):
@@ -232,6 +258,7 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
     never to logs)."""
     notes, mismatches, page_lines, kept_by_page = [], [], [], {}
     candidates = {}  # date -> field -> {(value, text, estimated): [page labels]}
+    contested = set()  # (date, field) printed on an accepted page but excluded there
 
     def label_of(key):
         return f"DEXA file {key[0]} page {key[1]}"
@@ -247,8 +274,8 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
     excluded_why = dict(excluded)
     if unnamed:
         mismatches.append(f"STAFF REVIEW - DEXA name not printed: DEXA {_pages_text(unnamed)} print no patient "
-                          "name confirmed by both reads; accepted for the staff-entered patient - confirm they "
-                          "are this patient's")
+                          "name confirmed by both reads; accepted for the staff-entered patient by printed age or "
+                          "by scan dates shown on validated pages - confirm they are this patient's")
     for key, reads in sorted(pages, key=lambda item: item[0]):
         label = label_of(key)
         counts = [len(read["scans"]) for read in reads]
@@ -256,7 +283,8 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
             if excluded_why[key].startswith("prints patient name"):
                 heading, problem = "PATIENT NAME MISMATCH", "prints a patient name that differs from the staff-entered name"
             elif excluded_why[key].startswith("no patient name and no readable age"):
-                heading, problem = "AGE NOT PRINTED", "prints no patient name and no readable age"
+                heading, problem = ("AGE NOT PRINTED", "prints no patient name and no readable age, and its scan "
+                                    "dates appear on no validated page")
             else:
                 heading, problem = "AGE MISMATCH", "prints no patient name and an age that does not fit this patient"
             mismatches.append(f"STAFF REVIEW - DEXA {heading}: {label} {problem}; page excluded - "
@@ -294,6 +322,7 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                     a, b = measure(first[0][field]), measure(second[0][field])
                 except ValueError:
                     notes.append(f"{label}: scan {_display(day)} {field_label} excluded - unreadable printed value")
+                    contested.add((day, field))
                     page_excluded += 1
                     continue
                 if a is None and b is None:
@@ -309,6 +338,7 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                     kept_fields += 1
                     continue
                 notes.append(f"{label}: scan {_display(day)} {field_label} excluded - {reason}")
+                contested.add((day, field))
                 page_excluded += 1
             if kept_fields:
                 kept_dates.append(day)
@@ -330,7 +360,7 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
 
     history = []
     for day in sorted(candidates):
-        reading = {"date_display": _display(day), "estimated": []}
+        reading = {"date_display": _display(day), "estimated": [], "withheld": []}
         for field, (target, field_label) in FIELDS.items():
             options = candidates[day].get(field, {})
             values = {value for value, _, _ in options}
@@ -339,14 +369,19 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                 notes.append(f"DEXA scan {_display(day)} {field_label} excluded - pages {', '.join(pages_listed)} "
                              "print different values")
                 reading[target] = None
+                reading["withheld"].append(target)
                 continue
             if not options:
                 reading[target] = None
+                if (day, field) in contested:
+                    reading["withheld"].append(target)
                 continue
             value, text, estimated = min(options, key=lambda option: (len(option[1]), option[1]))
             reading[target] = f"{text}%" if field == "body_fat_pct" else value
             if estimated:
                 reading["estimated"].append(target)
+        if not reading["withheld"]:
+            del reading["withheld"]
         if any(reading[target] is not None for target, _ in FIELDS.values()):
             history.append(reading)
     summary = []
