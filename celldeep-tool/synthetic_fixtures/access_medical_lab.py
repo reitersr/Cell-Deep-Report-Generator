@@ -53,11 +53,11 @@ def text(y, words, x=None):
 
 
 class Page:
-    """Lines laid out top to bottom from just under the column header."""
+    """Lines laid out top to bottom from just under the column header (columns_y)."""
 
-    def __init__(self, number, **header_kwargs):
-        self.items = header(number, **header_kwargs) + columns()
-        self.y = 155
+    def __init__(self, number, columns_y=135, **header_kwargs):
+        self.items = header(number, **header_kwargs) + columns(columns_y)
+        self.y = columns_y + 20
 
     def add(self, *parts):
         for part in parts:
@@ -211,4 +211,64 @@ EXPECTED = [
     ("ENDOCRINE EVALUATION", "DHEA-Sulfate", "350", None, "138 - 475", ""),
     ("ENDOCRINE EVALUATION", "Estradiol", "52", "H", "8 - 35", "pg/mL"),
     ("ENDOCRINE EVALUATION", "Cortisol", "14.1", None, "", ""),
+]
+
+
+# --- a limited male panel (two pages), as on the clinic's first run ---------------------------------------------
+# The OUT OF RANGE SUMMARY sits ABOVE the column header with its heading printed across the columns; test names use
+# this lab's spellings ("White Blood Cell", "Creatinine, Serum", "Estradiol (E2)", "PSA, Free", "% Free PSA", "Bili"
+# under urinalysis and under chemistry); GFR notes and the % Free PSA interpretation text follow their results.
+
+LIMITED_SUMMARY = [("Glucose", "101 H", "65 - 99", "mg/dL"), ("Estradiol (E2)", "41 H", "8 - 35", "pg/mL")]
+
+
+def limited_pages(summary=LIMITED_SUMMARY, bili_section="GENERAL CHEMISTRY"):
+    one = Page(1, columns_y=185)
+    one.items += [(200, 128, "OUT OF RANGE SUMMARY")]  # a centred heading spanning the name and result columns
+    for index, entry in enumerate(summary):
+        one.items += row(140 + 12 * index, *entry)
+    one.title("COMPLETE BLOOD COUNT")
+    one.row("White Blood Cell", "5.4", "3.8 - 10.8", "x10E3/uL").row("Red Blood Cell", "5.10", "4.20 - 5.80", "x10E6/uL")
+    one.row("Hemoglobin", "15.0", "13.2 - 17.1", "g/dL")
+    one.title("URINALYSIS GROSS EXAMINATION").row("Bili", "Negative", "Negative").row("Occult blood", "Negative",
+                                                                                     "Negative")
+    one.title("GENERAL CHEMISTRY").row("Glucose", "101 H", "65 - 99", "mg/dL")
+    one.row("Creatinine, Serum", "0.98", "0.60 - 1.24", "mg/dL").row("GFR estimated", "104", "> 60", "mL/min/1.73m2")
+    one.note("eGFR is calculated with the CKD-EPI 2021 equation; values above 60 are reported as > 60.")
+    one.cells(name="Stage 2", results="60 to 89", units="ml/min")
+    if bili_section != "GENERAL CHEMISTRY":
+        one.title(bili_section)
+    one.row("Bili", "0.7", "0.2 - 1.2", "mg/dL")
+
+    two = Page(2).title("TUMOR MARKERS").row("PSA, Total", "0.8", "0 - 4", "ng/mL").row("PSA, Free", "0.25", "", "ng/mL")
+    two.row("% Free PSA", "31", "> 25", "%")
+    two.note("Interpretation of % Free PSA:", indented=False)
+    two.cells(name="% Free PSA", results="Probability of", range="Cancer")
+    two.cells(name="% Free PSA", results="0 - 10%", range="56%").cells(name="% Free PSA", results="10 - 15%", range="28%")
+    two.title("ENDOCRINE EVALUATION")
+    for entry in [("Testosterone, Total", "540", "264 - 916"), ("Testosterone, Free", "9.8", "5.7 - 17.9"),
+                  ("Bioavailable Testosterone", "240", "126 - 412"), ("Estradiol (E2)", "41 H", "8 - 35", "pg/mL"),
+                  ("Cortisol", "12.0")]:
+        two.row(*entry)
+    return [one.items, two.items]
+
+
+LIMITED_EXPECTED = [
+    ("COMPLETE BLOOD COUNT", "White Blood Cell", "5.4", None, "3.8 - 10.8", "x10E3/uL"),
+    ("COMPLETE BLOOD COUNT", "Red Blood Cell", "5.10", None, "4.20 - 5.80", "x10E6/uL"),
+    ("COMPLETE BLOOD COUNT", "Hemoglobin", "15.0", None, "13.2 - 17.1", "g/dL"),
+    ("URINALYSIS GROSS EXAMINATION", "Bili", "Negative", None, "Negative", ""),
+    ("URINALYSIS GROSS EXAMINATION", "Occult blood", "Negative", None, "Negative", ""),
+    ("GENERAL CHEMISTRY", "Glucose", "101", "H", "65 - 99", "mg/dL"),
+    ("GENERAL CHEMISTRY", "Creatinine, Serum", "0.98", None, "0.60 - 1.24", "mg/dL"),
+    ("GENERAL CHEMISTRY", "GFR estimated", "104", None, "> 60", "mL/min/1.73m2"),
+    ("GENERAL CHEMISTRY", "Bili", "0.7", None, "0.2 - 1.2", "mg/dL"),
+    ("TUMOR MARKERS", "PSA, Total", "0.8", None, "0 - 4", "ng/mL"),
+    ("TUMOR MARKERS", "PSA, Free", "0.25", None, "", "ng/mL"),
+    ("TUMOR MARKERS", "% Free PSA", "31", None, "> 25", "%"),
+    ("ENDOCRINE EVALUATION", "Testosterone, Total", "540", None, "264 - 916", ""),
+    ("ENDOCRINE EVALUATION", "Testosterone, Free", "9.8", None, "5.7 - 17.9", ""),
+    ("ENDOCRINE EVALUATION", "Bioavailable Testosterone", "240", None, "126 - 412", ""),
+    ("ENDOCRINE EVALUATION", "Estradiol (E2)", "41", "H", "8 - 35", "pg/mL"),
+    ("ENDOCRINE EVALUATION", "Cortisol", "12.0", None, "", ""),
 ]
