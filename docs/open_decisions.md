@@ -17,6 +17,7 @@ decision first. Evidence cites the repository as of this branch (`celldeep-tool/
 | 10 | Real patient data in git history and the DEXA prompt | Owner | De-identification |
 | 11 | Systems with zero markers default to 50% | Clinic + owner | Grid scores |
 | 12 | Plain "Occult Blood" outside a urinalysis section | Clinic | Section mapping |
+| 13 | Unrecognized lipid-ratio, particle-size, apolipoprotein and omega-3 names | Clinic | Lab-reported coverage |
 
 ---
 
@@ -250,3 +251,32 @@ urine result.
 **Proposal.** Map plain "Occult Blood" to the urinalysis marker only under a urinalysis heading,
 or when the report is a known CHL urinalysis panel. Otherwise list it for staff. Confirm against
 the CHL layouts the clinic receives before changing it.
+
+## 13. Unrecognized lipid-ratio, particle-size, apolipoprotein and omega-3 names
+
+**Evidence.** A real January panel printed these names, which match no exact alias in
+`markers_reference.py` (scored) or `lab_reported.py` (shown, not scored). They reach the staff notes as
+unrecognized markers, and the patient report only when the lab flagged them H/L ("Other Lab-Flagged
+Results"):
+
+| Printed name | Closest existing entry | Note |
+|---|---|---|
+| Chol/HDL-C | Lab-reported `Cholesterol/HDL Ratio` (aliases include "chol/hdlc ratio") | Same test? Confirm before aliasing |
+| TG/HDL-C | none | Triglyceride/HDL ratio |
+| LDL Size | Lab-reported `LDL Peak Size` ("ldl particle size") | Confirm it is the same measurement and unit |
+| HDL Size | none | |
+| VLDL | Lab-reported `VLDL Cholesterol` ("vldl cholesterol", "vldl-c") | Confirm it is cholesterol, not particle count |
+| Apo A1 | none | Apolipoprotein A1 |
+| ApoB/ApoA1 | none | Ratio; scored ApoB exists, the ratio does not |
+| OmegaCheck | Lab-reported `OmegaCheck` (alias "omegacheck") | Plain "OmegaCheck" already matches, so the January row printed a different form (e.g. a trademark sign); record the exact printed text |
+| Omega-3 total | none | Lab-reported has Omega-6 Total but no Omega-3 total |
+
+**Decision needed.** For each name: (a) an exact alias to an existing lab-reported entry (shown with
+the lab's range and flag, never scored), (b) a new lab-reported entry, or (c) a scored marker with
+clinic thresholds. Nothing is aliased or scored until the clinic decides; the names stay staff-only
+until then.
+
+Already decided in this change (exact aliases to existing lab-reported, not-scored entries):
+"BUN (Blood Urea Nitrogen)", "CO2 (Carbon Dioxide, Bicarbonate)", "ALP (Alkaline Phosphatase)",
+"ALT (Alanine Amino Transferase)", "AST (Aspartate Amino Transferase)", and a new lab-reported
+"Prolactin" entry (Hormones), since no Prolactin marker existed.

@@ -14,7 +14,7 @@ import json
 import re
 from datetime import date as calendar_date
 
-from scan_bloodwork import ScanGateError, _nullable, _object, _validate, name_key, render_page_png_b64
+from scan_bloodwork import ScanGateError, _nullable, _object, _validate, name_key, names_match, render_page_png_b64
 from schema import normalize_date_for_matching
 
 _TEXT = _nullable({"type": "string"})
@@ -28,7 +28,8 @@ FIELDS = {  # schema field -> (DexaReading field, staff label)
 }
 _SCAN = _object({"date": _TEXT, **{name: _TEXT for name in FIELDS}})
 DEXA_SCHEMA = _object({
-    "page": {"type": "integer"}, "patient_name": _TEXT, "date_of_birth": _TEXT, "illegible": {"type": "boolean"},
+    "page": {"type": "integer"}, "patient_name": _TEXT, "date_of_birth": _TEXT, "age": _TEXT,
+    "illegible": {"type": "boolean"},
     "scans": {"type": "array", "items": _SCAN},
 })
 DEXA_PROMPT = """Transcribe this DEXA body composition report page literally. Never infer, calculate,
@@ -39,8 +40,8 @@ measurements exactly as printed for that date, including any "(e)" estimate mark
 total_mass, fat_mass and lean_mass in pounds (lb); body_fat_pct (percent body fat, total body);
 vat_mass (visceral adipose tissue mass in lb); vat_area (visceral adipose tissue area in cm2).
 A measurement that is not printed for that date, or is printed only in other units, is null.
-Never copy a value from one date to another. Copy the patient name and date of birth exactly as
-printed, or null.
+Never copy a value from one date to another. Copy the patient name, date of birth and the patient's
+age exactly as printed on the page, or null when not printed.
 Use the PDF page number provided. Illegible fields are null with illegible=true, never guessed.
 A page with no scan measurements returns scans: []."""
 
@@ -115,19 +116,37 @@ def _display(day):
     return f"{day[1]:02d}/{day[2]:02d}/{day[0]:04d}"
 
 
-def _name_exclusion(reads, patient_name):
-    """Why a page cannot be attributed to the staff-entered patient, or None when both reads print a
-    name that matches it. A page with no readable name is never assumed to be the patient's."""
-    names = [" ".join((read["patient_name"] or "").split()) for read in reads]
-    keys = {name_key(name) for name in names}
-    if not all(names) or () in keys:
-        printed = " / ".join(f"read {index}: {name!r}" if name else f"read {index}: none"
-                             for index, name in enumerate(names, start=1))
-        return f"no readable patient name ({printed}); not assumed to be this patient"
-    if keys != {name_key(patient_name)}:
-        printed = repr(names[0]) if len(set(names)) == 1 else " / ".join(map(repr, names))
-        return f"prints patient name {printed}, not the staff-entered patient"
-    return None
+# An unnamed page whose printed age is further than this from the patient's is another patient's page.
+AGE_TOLERANCE_YEARS = 1
+_AGE_RE = re.compile(r"\s*(\d{1,3})\s*(?:y|yr|yrs|years?|years old)?\.?\s*", re.IGNORECASE)
+
+
+def _printed(reads, field):
+    return [" ".join((read.get(field) or "").split()) for read in reads]
+
+
+def page_age(reads):
+    """The age both reads print on the page, or None (not printed, unreadable, or the reads differ)."""
+    ages = set()
+    for text in _printed(reads, "age"):
+        match = _AGE_RE.fullmatch(text) if text else None
+        if match is None:
+            return None
+        ages.add(int(match[1]))
+    return ages.pop() if len(ages) == 1 else None
+
+
+def page_identity(reads, patient_name):
+    """'named' (both reads print the staff-entered patient), 'unnamed' (no name confirmed by both reads,
+    and none that differs) or 'other' (a read prints a different name)."""
+    names = [name for name in _printed(reads, "patient_name") if name_key(name)]
+    if any(not names_match(patient_name, name) for name in names):
+        return "other"
+    return "named" if len(names) == len(reads) else "unnamed"
+
+
+def _pages_text(keys):
+    return ", ".join(f"file {key[0]} page {key[1]}" for key in keys)
 
 
 def incomplete_notice(exclusions):
@@ -140,13 +159,53 @@ def incomplete_notice(exclusions):
             *[f"  - DEXA file {key[0]} page {key[1]}: {reason}" for key, reason in exclusions]]
 
 
-def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None):
+def attribute_pages(pages, patient_name, staff_age=None):
+    """Which DEXA pages belong to the staff-entered patient. Returns (accepted keys, unnamed accepted keys,
+    [(key, reason)] excluded). A page printing a different name is excluded. A page with no confirmed
+    name is accepted for the staff-entered patient unless the age printed on it is more than
+    AGE_TOLERANCE_YEARS from the patient's: the ages printed on name-matched pages, else the
+    staff-entered age, else the other unnamed pages (which must then agree with each other)."""
+    if not patient_name:
+        return [key for key, _ in pages], [], []
+    excluded, named, unnamed = [], [], []
+    for key, reads in sorted(pages, key=lambda item: item[0]):
+        identity = page_identity(reads, patient_name)
+        if identity == "other":
+            names = [name for name in _printed(reads, "patient_name") if name_key(name)]
+            printed = repr(names[0]) if len(set(names)) == 1 else " / ".join(map(repr, names))
+            excluded.append((key, f"prints patient name {printed}, not the staff-entered patient"))
+        else:
+            (named if identity == "named" else unnamed).append((key, page_age(reads)))
+    reference = {age for _, age in named if age is not None} or ({staff_age} if staff_age is not None else set())
+    source = "name-matched pages print" if any(age is not None for _, age in named) else "staff-entered age is"
+    aged = sorted({age for _, age in unnamed if age is not None})
+    if not reference and aged and aged[-1] - aged[0] > AGE_TOLERANCE_YEARS:
+        # Nothing says which age is the patient's: every aged unnamed page is excluded, none is guessed.
+        for key, age in unnamed:
+            if age is not None:
+                excluded.append((key, f"no patient name printed and its age ({age}) disagrees with other "
+                                      f"unnamed pages (ages {', '.join(map(str, aged))}); not attributed"))
+        unnamed = [(key, age) for key, age in unnamed if age is None]
+    elif reference:
+        kept = []
+        for key, age in unnamed:
+            if age is not None and min(abs(age - other) for other in reference) > AGE_TOLERANCE_YEARS:
+                excluded.append((key, f"no patient name printed and it prints age {age}; the "
+                                      f"{source} {', '.join(map(str, sorted(reference)))}"))
+            else:
+                kept.append((key, age))
+        unnamed = kept
+    accepted = sorted([key for key, _ in named] + [key for key, _ in unnamed])
+    return accepted, [key for key, _ in unnamed], sorted(excluded)
+
+
+def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, staff_age=None):
     """pages: [((file, page), [read1, read2])]; failures: [((file, page), partial_reads, reason)].
     Returns (history, staff_notes, summary_lines). history is sorted oldest first and is a list of
     DexaReading-shaped dicts with an extra 'estimated' list of DexaReading field names.
-    A page is used only when both reads print a name matching the staff-entered patient; every other
-    page is excluded whole and (key, reason) is appended to excluded_sink (reasons may hold the
-    printed name, so they go to the staff notes only, never to logs)."""
+    Pages are attributed by attribute_pages; an excluded page is dropped whole and (key, reason) is
+    appended to excluded_sink (reasons may hold the printed name, so they go to the staff notes only,
+    never to logs)."""
     notes, mismatches, page_lines, kept_by_page = [], [], [], {}
     candidates = {}  # date -> field -> {(value, text, estimated): [page labels]}
 
@@ -158,20 +217,25 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None):
               f"{json.dumps(counts[1])} scans_kept={kept} fields_excluded={excluded} verdict={verdict} "
               f"reason={json.dumps(reason)}")
 
+    accepted, unnamed, excluded = attribute_pages(pages, patient_name, staff_age)
+    if excluded_sink is not None:
+        excluded_sink.extend(excluded)
+    excluded_why = dict(excluded)
+    if unnamed:
+        mismatches.append(f"STAFF REVIEW - DEXA name not printed: DEXA {_pages_text(unnamed)} print no patient "
+                          "name confirmed by both reads; accepted for the staff-entered patient - confirm they "
+                          "are this patient's")
     for key, reads in sorted(pages, key=lambda item: item[0]):
         label = label_of(key)
         counts = [len(read["scans"]) for read in reads]
-        reason = _name_exclusion(reads, patient_name) if patient_name else None
-        if reason:
-            if reason.startswith("no readable"):
-                heading, problem = "UNREADABLE", "has no readable patient name"
+        if key not in accepted:
+            if excluded_why[key].startswith("prints patient name"):
+                heading, problem = "PATIENT NAME MISMATCH", "prints a patient name that differs from the staff-entered name"
             else:
-                heading, problem = "MISMATCH", "prints a patient name that differs from the staff-entered name"
-            mismatches.append(f"STAFF REVIEW - DEXA PATIENT NAME {heading}: {label} {problem}; page excluded - "
+                heading, problem = "AGE MISMATCH", "prints no patient name and an age that does not fit this patient"
+            mismatches.append(f"STAFF REVIEW - DEXA {heading}: {label} {problem}; page excluded - "
                               "confirm which patient it belongs to")
-            if excluded_sink is not None:
-                excluded_sink.append((key, reason))
-            log(key, counts, 0, 0, "excluded", f"patient gate: {problem}")  # never the printed name itself
+            log(key, counts, 0, 0, "excluded", f"patient gate: {problem}")  # never the printed name or age
             continue
         if dob_sink is not None:
             dobs = {scan_date(read.get("date_of_birth")) for read in reads}

@@ -92,7 +92,8 @@ def _create(client, _operation, **kwargs):
 
 _EMPTY_LAB_PAGE = {"page": 1, "specimen_id": None, "collected": None, "footer": None, "patient_name": None,
                    "date_of_birth": None, "illegible": False, "rows": [], "out_of_range_summary": None}
-_EMPTY_DEXA_PAGE = {"page": 1, "patient_name": None, "date_of_birth": None, "illegible": False, "scans": []}
+_EMPTY_DEXA_PAGE = {"page": 1, "patient_name": None, "date_of_birth": None, "age": None, "illegible": False,
+                   "scans": []}
 
 
 @pytest.mark.parametrize("route", ["labs", "dexa"])

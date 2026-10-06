@@ -140,6 +140,7 @@ supplies thresholds.
 | Homocysteine | Cardiovascular | Not scored - clinic input needed |
 | C-Reactive Protein | Inflammation | Not scored - clinic input needed |
 | Estrogens, Total | Hormones | Not scored - clinic input needed |
+| Prolactin | Hormones | Not scored - clinic input needed |
 | SARS-CoV-2 | Infectious Disease | Not scored - clinic input needed |
 | SARS-CoV-2 RNA | Infectious Disease | Not scored - clinic input needed |
 | SARS-CoV-2 Antibody | Infectious Disease | Not scored - clinic input needed |
