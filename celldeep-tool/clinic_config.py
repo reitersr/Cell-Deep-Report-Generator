@@ -98,3 +98,16 @@ VITALITY_NOT_PROVIDED_LABEL = "Not provided"
 # than the report's headline (latest) draw date, e.g. "Pace: TSH (03/02/2026)".
 EARLIER_DRAW_SUMMARY_LABEL = "Results from earlier draws"
 
+
+# ---- Lab assays that differ from the CellDeep range basis ------------------------------------------
+
+# Tests a given lab measures with a different assay from the one the CellDeep range is based on. At that lab
+# the result is shown as lab-reported (the lab's own range and flag) and never scored against the CellDeep
+# range; the staff notes say "ASSAY DIFFERS FROM CELLDEEP RANGE BASIS". Access Medical Laboratories: free and
+# bioavailable testosterone (the CellDeep ranges are based on Quest's dialysis assays).
+LAB_ASSAY_DIFFERS = {"access_medical": ("Free Testosterone", "Bioavailable Testosterone")}
+
+# The same safeguard for any other scored test: when the lab's printed range is more than this many times above
+# or below the CellDeep range basis, the result is shown as lab-reported and not scored.
+LAB_RANGE_BASIS_RATIO = 5
+

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import fitz
 
 import pipeline
-from synthetic_fixtures import clinic_dexa
+from synthetic_fixtures import access_medical_lab, clinic_dexa
 from synthetic_fixtures import deterministic_fixtures as fx
 from synthetic_fixtures import dexa as dexa_fx
 from synthetic_fixtures import layouts
@@ -116,11 +116,25 @@ def build(name, folder):
         reads = {(str(dexa), number): script[label] for number, label in enumerate(clinic_dexa.LABELS, start=1)}
         age = clinic_dexa.AGE if name == "clinic_dexa" else None
         return str(_dexa_labs(folder)), [str(dexa)], reads, {"age": age}
+    if name.startswith("access_medical"):
+        # One draw (Access Medical Laboratories layout) and one DEXA scan: names redacted, the age printed on one
+        # page only, no VAT/SAT page.
+        labs = access_medical_lab.write(folder / "labs.pdf")
+        dexa = dexa_fx.write_pdf(folder / "dexa.pdf", ["access-image", "access-segmental"])
+        scan = dexa_fx.scan(ACCESS_SCAN_DATE, "172.0", "30.1", "136.4", "18.1 %")
+        reads = {(str(dexa), 1): [dexa_fx.read([scan], patient_name=None, age="21.5")] * 2,
+                 (str(dexa), 2): [dexa_fx.read([scan], patient_name=None)] * 2}
+        options = {"age": access_medical_lab.AGE, "patient": access_medical_lab.STAFF_NAME,
+                   "collected_date": access_medical_lab.COLLECTED_FULL}
+        if name == "access_medical_other_date":
+            options["collected_date"] = "08/14/2026"  # staff entered a different date than the lab header
+        return str(labs), [str(dexa)], reads, options
     raise KeyError(name)
 
 
+ACCESS_SCAN_DATE = "07/20/2026"
 SCENARIOS = ["quest_digital", "chl_digital", "labcorp_digital", "scanned", "mixed", "variant", "scanned_noisy",
-             "clinic_dexa", "clinic_dexa_no_age"]
+             "clinic_dexa", "clinic_dexa_no_age", "access_medical"]
 
 
 def run_scenario(name, folder, monkeypatch=None):
@@ -146,8 +160,9 @@ def run_scenario(name, folder, monkeypatch=None):
 
     try:
         out = folder / "report.pdf"
-        pipeline.run(labs, dexa, options.get("note"), clinic_dexa.PATIENT if dexa else layouts.PATIENT, options.get("age"),
-                     "male", str(out), collected_date=options.get("collected_date"), confirm=confirm)
+        patient = options.get("patient") or (clinic_dexa.PATIENT if dexa else layouts.PATIENT)
+        pipeline.run(labs, dexa, options.get("note"), patient, options.get("age"), "male", str(out),
+                     collected_date=options.get("collected_date"), confirm=confirm)
     finally:
         if monkeypatch is None:
             for key, value in saved.items():

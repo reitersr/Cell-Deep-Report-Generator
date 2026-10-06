@@ -7,8 +7,9 @@ packages in celldeep-tool/requirements.txt and Playwright's Chromium (python -m 
 It runs in well under a minute. Exit code 0 means every check passed.
 
 Scenarios: a digital Cleveland HeartLab-style report; a scanned report whose reads disagree (a heading read
-once, one row misread by one read, one row read three different ways); and the clinic's 7-page DEXA layout
-(names redacted, one foreign profile page, an "(e)" body fat, two scans with no printed body fat).
+once, one row misread by one read, one row read three different ways); the clinic's 7-page DEXA layout
+(names redacted, one foreign profile page, an "(e)" body fat, two scans with no printed body fat); and an
+Access Medical Laboratories report with one draw and one DEXA scan.
 """
 
 import contextlib
@@ -44,6 +45,12 @@ def checks(name, result):
         yield "foreign profile nowhere in the report", not any(value in text for value in clinic_dexa.FOREIGN_TEXT)
         yield "foreign page on the confirmation step", len(asked) == 1 and "page 6" in asked[0]
         yield "staff warning for an old DEXA scan", "DEXA SCAN OLDER THAN BLOODWORK" in review
+    if name == "access_medical":
+        yield "Access Medical layout read", "Lab layout: Access Medical Laboratories" in review and "Ferritin" in text
+        yield "two-digit year read as 2026", "August 7, 2026" in text
+        yield "explanatory text not read", not any(word in text for word in ("Stage 1", "49.2%", "Roche"))
+        yield "differing assay lab-reported", "Free Testosterone 5.7 - 17.9" in text and "ASSAY DIFFERS" in review
+        yield "single draw: no improvement claims", "improved since" not in text and "moved from" not in text
     yield "STAFF CHECK opens the staff notes", review.startswith("STAFF CHECK - confirm before sending this report")
     yield "no staff text in the patient report", not any(marker in text for marker in
                                                          ("INCOMPLETE", "STAFF CHECK", "source=scan", "excluded"))
@@ -52,7 +59,7 @@ def checks(name, result):
 def main():
     start, failed = time.time(), 0
     with tempfile.TemporaryDirectory() as folder:
-        for name in ("chl_digital", "scanned_noisy", "clinic_dexa"):
+        for name in ("chl_digital", "scanned_noisy", "clinic_dexa", "access_medical"):
             try:
                 with contextlib.redirect_stdout(io.StringIO()):  # pipeline progress lines
                     result = run_scenario(name, Path(folder) / name)

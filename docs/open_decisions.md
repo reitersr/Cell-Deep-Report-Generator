@@ -25,6 +25,10 @@ decision first. Evidence cites the repository as of this branch (`celldeep-tool/
 | 18 | "Where you are now" when the latest scan has no body composition | Clinic | DEXA display |
 | 19 | Scoring estimated and computed DEXA body fat | Clinic | Structure score |
 | 20 | Lab H/L flag on Moderate or unscored results (off by default) | Clinic | Scored-marker display |
+| 21 | Access Medical free and bioavailable testosterone: assay differs from the CellDeep range basis | Clinic | Hormone scoring |
+| 22 | Non-fasting draws ("Fasting: N") still labelled and scored as fasting glucose | Clinic | Glucose label and tier |
+| 23 | Single-draw and single-scan wording | Clinic | Hero and DEXA copy |
+| 24 | Tests this lab prints that the tool does not know (e.g. "PSA, Free") | Clinic | Lab-reported coverage |
 
 ---
 
@@ -410,4 +414,45 @@ where the lab's range is not the clinic's target). The staff notes list every Op
 
 **Open.** Nothing unless the clinic wants the line on Moderate or unscored results; then change the setting in a
 reviewed PR.
+
+## 21. Access Medical free and bioavailable testosterone: assay differs from the CellDeep range basis
+
+**Evidence.** Access Medical Laboratories prints Testosterone, Free with a lab range of 5.7 - 17.9 and Bioavailable
+Testosterone with 126 - 412. The CellDeep male ranges (Free Testosterone 100-180 pg/mL, Bioavailable 250-500 ng/dL)
+are based on Quest's dialysis assays. `access_medical.py` therefore shows both as lab-reported (the lab's own range
+and flag, not scored) and writes "ASSAY DIFFERS FROM CELLDEEP RANGE BASIS" in the staff notes. The list lives in
+`clinic_config.LAB_ASSAY_DIFFERS`; any other scored test whose printed range is more than
+`clinic_config.LAB_RANGE_BASIS_RATIO` (5x) above or below the CellDeep basis, or whose printed unit differs from the
+CellDeep unit, gets the same treatment at this lab.
+
+**Decision needed.** (a) Keep them lab-reported; (b) give CellDeep ranges for this lab's assays; or (c) score them
+against the lab's printed range. Also: should the 5x / unit safeguard apply to the Quest and Cleveland HeartLab
+layouts too (today it applies only to the Access Medical layout)?
+
+## 22. Non-fasting draws still labelled and scored as fasting glucose
+
+**Evidence.** The Access Medical header prints "Fasting: N" or "Fasting: Y". On "N" the staff notes say "NON-FASTING
+DRAW" and name Glucose (fasting) / Fasting Insulin when present; the patient report still labels and scores them as
+fasting (no wording was changed).
+
+**Decision needed.** For a non-fasting draw: keep the fasting label and score, relabel ("Glucose (non-fasting)"),
+or show it lab-reported and unscored.
+
+## 23. Single-draw and single-scan wording
+
+**Evidence.** With one draw the hero shows "You were —" (no earlier score), the panel's earlier column shows "—",
+and the summary says "Starting point: Your earliest bloodwork on file is from <date>". With one DEXA scan the panel
+shows "Current scan" (no comparison, no badge) and, with no VAT/SAT page, the headline is "Body fat X% on <date>."
+or "Body composition tracked across your DEXA scan history." No improvement or change claims are made with one
+point, and the "✓ = improved since your first visit" legend key is left out when there is no earlier draw.
+
+**Decision needed.** Whether "You were —" and "scan history" (with one scan) need first-visit wording.
+
+## 24. Tests this lab prints that the tool does not know
+
+**Evidence.** The synthetic Access Medical report prints "PSA, Free", which is in neither the marker library nor
+the lab-reported list, so it is listed for staff and on the confirmation screen and is not in the patient report.
+
+**Decision needed.** Add it (and any other test the real reports print) to `lab_reported.py` (shown, not scored) or
+to the marker library with thresholds.
 

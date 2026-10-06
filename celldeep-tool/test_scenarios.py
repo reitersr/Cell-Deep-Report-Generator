@@ -18,6 +18,7 @@ EXPECTED_CONFIRMATIONS = {
     "scanned_noisy": 1,       # FERRITIN: three reads, three values (the heading and the 2-of-3 row never count)
     "clinic_dexa": 1,         # the foreign DEXA profile page
     "clinic_dexa_no_age": 1,  # the same page without a staff-entered age
+    "access_medical": 1,      # "PSA, Free": a printed result whose test name the tool does not know
 }
 
 
