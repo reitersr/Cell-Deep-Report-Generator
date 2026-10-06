@@ -25,13 +25,13 @@ def _parse(tmp_path, pages, name="labs.pdf"):
 
 
 def _excluded_reasons(tmp_path, pages):
-    """Parse a PDF whose only table cannot be read: that table is excluded with its reason, and with
-    nothing else parsed the job still stops."""
+    """Parse a PDF whose only table cannot be read: that table is excluded with its reason; with nothing
+    else parsed no bloodwork is kept and the report goes on without it (listed under INCOMPLETE)."""
     path = fx.write_lab_pdf(tmp_path / "excluded.pdf", pages)
     exclusions = []
     with fitz.open(path) as document:
-        with pytest.raises(pipeline.BloodworkParseError, match="zero recognized marker rows"):
-            pipeline._parse_bloodwork_tables(list(document), exclusions=exclusions)
+        occurrences, _ = pipeline._parse_bloodwork_tables(list(document), exclusions=exclusions)
+    assert occurrences == []
     return [item["reason"] for item in exclusions]
 
 
@@ -373,12 +373,21 @@ def test_unrecognized_layout_without_collected_line_raises(tmp_path):
         pipeline._parse_bloodwork_tables(list(document))
 
 
-def test_collected_line_but_no_matching_table_raises_instead_of_empty_report(tmp_path):
+def test_collected_line_but_no_matching_table_is_listed_instead_of_an_unannounced_empty_report(
+        tmp_path, monkeypatch):
+    """An unrecognized lab layout no longer stops the report: its pages are excluded, listed first in
+    the staff notes (and on the confirmation step before generation), and the rest is built."""
     path = _free_text_lab_pdf(tmp_path / "labs.pdf", "Collected: 04/14/2026")
     out = tmp_path / "report.pdf"
-    with pytest.raises(pipeline.BloodworkParseError, match="zero recognized marker rows"):
-        pipeline.run(str(path), [], None, fx.PATIENT, 44, "male", str(out))
-    assert not out.exists()
+    monkeypatch.setattr(pipeline, "_review_notes_path", lambda name: str(tmp_path / "review.txt"))
+    pipeline.run(str(path), [], None, fx.PATIENT, 44, "male", str(out))
+    assert out.exists()
+    review = (tmp_path / "review.txt").read_text(encoding="utf-8")
+    assert "INCOMPLETE - pages/sections excluded: lab PDF page(s) 1" in review
+    assert ("result rows printed under no recognized table header (expected 'Current'/'Historical' or "
+            "'In Range'/'Out of Range'), so they were not read: hs-CRP, TSH") in review
+    with fitz.open(path) as document, pytest.raises(pipeline.BloodworkParseError, match="zero recognized marker rows"):
+        pipeline._parse_bloodwork_tables(list(document))  # a direct caller without an exclusion list still sees it
 
 
 def test_parsed_occurrences_keep_the_extraction_schema_shape(tmp_path):
@@ -473,8 +482,7 @@ def test_ruled_text_cells_are_accounted_for_or_raise(tmp_path, has_name):
             document[0].draw_line((40, y), (180, y))
         if not has_name:
             exclusions = []
-            with pytest.raises(pipeline.BloodworkParseError, match="zero recognized marker rows"):
-                pipeline._parse_bloodwork_tables(list(document), exclusions=exclusions)
+            assert pipeline._parse_bloodwork_tables(list(document), exclusions=exclusions)[0] == []
             assert "has no row name" in exclusions[0]["reason"]
             return
         lines = pipeline._group_lines(pipeline._page_words(document[0]), pipeline._LINE_TOLERANCE_PT)

@@ -107,7 +107,7 @@ def test_upload_page_offers_template_download_and_note_check(staff_client):
     template = (Path(app.__file__).parent / "templates" / "provider_notes_template.md").read_text(encoding="utf-8")
     assert download.get_data(as_text=True) == template
     assert pipeline.check_provider_note(template) == {
-        "read": True, "rejected": [],
+        "read": True, "rejected": [], "fix": "",
         "sections": ["Consultation Note", "Treatment Status", "Patient Concerns", "Protocol", "Marker Targets",
                      "Vitality Index"]}
     result = client.post("/note/check", data={"note_text": NOTE}).get_json()

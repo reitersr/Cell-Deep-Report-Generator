@@ -6,6 +6,7 @@ import pytest
 
 import pipeline
 from synthetic_fixtures import deterministic_fixtures as fx
+from unknown_marker_policy import without_staff_check
 
 GOOD = (fx.section_preamble("SYN-OK", "04/14/2026") + fx.header_line(100)
         + fx.row(130, "hs-CRP", "0.4", units="mg/L", lab_range="0.0-3.0")
@@ -27,7 +28,7 @@ def _run(tmp_path, monkeypatch, pages):
     pipeline.run(str(labs), [], None, fx.PATIENT, 44, "male", str(out))
     with fitz.open(out) as document:
         text = " ".join(" ".join(page.get_text().split()) for page in document)
-    return text, (tmp_path / "review.txt").read_text(encoding="utf-8").splitlines()
+    return text, without_staff_check((tmp_path / "review.txt").read_text(encoding="utf-8")).splitlines()
 
 
 def test_unparseable_table_on_one_page_is_excluded_and_the_report_still_builds(tmp_path, monkeypatch):

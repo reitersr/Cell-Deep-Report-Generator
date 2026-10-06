@@ -10,6 +10,21 @@ import fitz
 SCAN_RENDER_DPI = 200  # changing this changes what the vision model sees; keep it fixed
 
 
+# Every vision read is sampled at temperature 0 so the same page gives the same reads from run to run as
+# far as the model allows. Retries are transport-level only (the client's max_retries, see pipeline):
+# a read that fails the schema or page gate is never re-requested, and there is no tie-break read. When
+# the two reads disagree on a row, the row is excluded and listed for staff; nothing picks a winner.
+READ_TEMPERATURE = 0.0
+
+
+def _read_values(rows):
+    """What one read printed for a row, for the staff notes: value and flag, 'not read' or 'read twice'."""
+    if not rows:
+        return "not read"
+    texts = [" ".join(filter(None, [row["result_text"] or "illegible", row["flag"]])) for row in rows]
+    return texts[0] if len(texts) == 1 else "read twice: " + ", ".join(texts)
+
+
 def render_page_png_b64(page, dpi=SCAN_RENDER_DPI):
     """One page as a base64 PNG, holding only one page's render at a time. The pixmap and PNG bytes are
     released before returning, and MuPDF's decoded-image cache (up to 256MB by default) is emptied so
@@ -117,7 +132,7 @@ def read_page(page, client, create_message, model):
 def _read_transcription(page, image, reading, client, create_message, model):
     response = create_message(
         client, f"bloodwork scan page {page.number + 1} read {reading}",
-        model=model, max_tokens=16000, system=SCAN_PROMPT,
+        model=model, max_tokens=16000, system=SCAN_PROMPT, temperature=READ_TEMPERATURE,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
             {"type": "text", "text": f"Transcribe PDF page {page.number + 1} independently."},
@@ -219,7 +234,7 @@ def strip_lab_code(name, codes):
     """Remove a printed Lab column code that the transcription attached to the end of a test
     name, e.g. 'TESTOSTERONE, TOTAL, MS AMD' or '... (AMD)'. A code after a comma is part of
     the name ('ESTROGENS, TOTAL, IA') and is kept."""
-    for code in sorted(codes, key=len, reverse=True):
+    for code in sorted(codes, key=lambda code: (-len(code), code)):
         code = re.escape(code)
         stripped = re.sub(rf"\s*\(\s*{code}\s*\)$", "", name)
         stripped = re.sub(rf"(?<=[^,\s])\s+{code}$", "", stripped)
@@ -288,7 +303,8 @@ def _footer_sequence(footer):
     return None
 
 
-def gate_staff_identified_reads(reads, collected, result_re, patient_name, failures=(), lab_codes=()):
+def gate_staff_identified_reads(reads, collected, result_re, patient_name, failures=(), lab_codes=(),
+                                row_exclusions=None):
     """Staff-entered patient name and Collected date identify every scanned page, so printed
     footer/header/name/date are not gated. A row is kept only when both reads agree on its
     value, flag and reference range and the printed value passes the identity-independent
@@ -364,8 +380,11 @@ def gate_staff_identified_reads(reads, collected, result_re, patient_name, failu
                 identity = (name_of(row["name"]) if row["name"] else row["name"], row["section"])
                 identities.setdefault(identity, ([], []))[reading].append(row)
         kept = 0
-        for rows in identities.values():
+        for (name, _section), rows in identities.items():
             reason = row_reason(rows)
+            if reason and reason.startswith("agreement gate") and row_exclusions is not None:
+                row_exclusions.append({"page": number, "name": name or "(unnamed row)",
+                                       "reads": f"{_read_values(rows[0])} / {_read_values(rows[1])}"})
             for row in rows[0] if reason is None else rows[0] or rows[1]:
                 if reason:
                     note(f"source=scan page {number} excluded {row['name']!r}: {reason}")
@@ -393,7 +412,7 @@ def gate_staff_identified_reads(reads, collected, result_re, patient_name, failu
     return accepted, notes
 
 
-def gate_reads(reads, digital_names, result_re, date_re, normalize_date, failures=()):
+def gate_reads(reads, digital_names, result_re, date_re, normalize_date, failures=(), row_exclusions=None):
     """Isolate page/row failures; only contradictory identity evidence is batch-fatal."""
     expected_names = {name_key(name) for name in digital_names}
     states = []
@@ -527,7 +546,12 @@ def gate_reads(reads, digital_names, result_re, date_re, normalize_date, failure
                     if any(row[key] != other[key] for key in
                            ("name", "result_text", "flag", "column", "reference_range", "section")):
                         reason = "agreement gate: independent reads disagree"
-                    elif row["illegible"] or other["illegible"] or not row["name"] or not row["result_text"]:
+                if reason and row_exclusions is not None:
+                    row_exclusions.append({"page": first["page"], "name": row["name"] or "(unnamed row)",
+                                           "reads": f"{_read_values([row])} / {_read_values(candidates)}"})
+                if not reason:
+                    other = candidates[0]
+                    if row["illegible"] or other["illegible"] or not row["name"] or not row["result_text"]:
                         reason = "legibility gate: null or illegible row"
                     elif row["column"] is None:
                         reason = "column gate: no printed result column"
@@ -555,6 +579,9 @@ def gate_reads(reads, digital_names, result_re, date_re, normalize_date, failure
             for row in second["rows"]:
                 if (row["name"], row["section"]) not in seen:
                     exclude_row(row, second["page"], "agreement gate: row present only in second read")
+                    if row_exclusions is not None:
+                        row_exclusions.append({"page": second["page"], "name": row["name"] or "(unnamed row)",
+                                               "reads": f"not read / {_read_values([row])}"})
             if (first["rows"] or second["rows"]) and not any(
                     row["page"] == state["page"] for row in accepted):
                 state["reason"] = "row gates: no rows passed"

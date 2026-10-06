@@ -82,27 +82,50 @@ def test_generate_runs_as_disk_backed_background_job(staff_client, tmp_path, mon
         "report.pdf", "review_notes.txt", "status.json", "heartbeat"}
 
 
-def test_unrecognized_lab_layout_fails_the_upload_job_visibly(staff_client, tmp_path, monkeypatch, capsys):
+def _unrecognized_layout_pdf():
     import fitz
 
-    monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
     document = fitz.open()
     document.new_page().insert_text((40, 60), "Collected: 04/14/2026  hs-CRP 0.3 mg/L  TSH 1.9", fontsize=10)
     pdf_bytes = document.tobytes()
     document.close()
+    return pdf_bytes
 
+
+@pytest.mark.parametrize("action", ["stop", "continue"])
+def test_unrecognized_lab_layout_pauses_for_staff_before_generating(staff_client, tmp_path, monkeypatch, action):
+    """A layout the parser cannot read no longer fails the job: the job pauses and lists the page left out.
+    Staff stop (nothing written) or continue (report built, the page listed under INCOMPLETE)."""
+    monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
     response = staff_client.post("/generate", data={
         "patient_name": "Pat Synthetic",
-        "labs_pdf": (io.BytesIO(pdf_bytes), "unknown-layout.pdf"),
+        "labs_pdf": (io.BytesIO(_unrecognized_layout_pdf()), "unknown-layout.pdf"),
     })
-
     job_id = re.search(r'data-job-id="([a-f0-9]+)"', response.get_data(as_text=True)).group(1)
-    _, status = _wait_for_status(staff_client, job_id, "error")
-    assert status["error"] == f"Generation failed. Job ID: {job_id}"
-    assert "report_url" not in status
-    log = capsys.readouterr().out
-    assert f"generation failed job_id={job_id}" in log and "zero recognized marker rows" in log
-    assert not (tmp_path / "jobs" / job_id / "report.pdf").exists()
+    _, status = _wait_for_status(staff_client, job_id, "confirm")
+    assert status["items"] == ["Lab PDF page 1 (whole document): Lab PDF produced zero recognized marker rows - "
+                               "layout not recognized"]
+    decision = staff_client.post(f"/generate/decision/{job_id}", data={"action": action})
+    assert decision.status_code == 200
+    if action == "stop":
+        _, status = _wait_for_status(staff_client, job_id, "stopped")
+        assert status["error"] == app.STOPPED_MESSAGE
+        assert not (tmp_path / "jobs" / job_id / "report.pdf").exists()
+    else:
+        deadline = time.monotonic() + 60
+        while (status := staff_client.get(f"/generate/status/{job_id}").get_json())["status"] != "done":
+            assert status["status"] in ("processing", "confirm") and time.monotonic() < deadline
+            time.sleep(0.1)
+        notes = staff_client.get(status["review_notes_url"]).get_data(as_text=True)
+        assert notes.startswith("STAFF CHECK - confirm before sending this report")
+        assert "LAB EXCLUDED page 1 (whole document)" in notes and "INCOMPLETE - pages/sections excluded" in notes
+    assert staff_client.post(f"/generate/decision/{job_id}", data={"action": "continue"}).status_code == 409
+
+
+def test_decision_endpoint_requires_login(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
+    response = app.app.test_client().post("/generate/decision/" + "a" * 32, data={"action": "continue"})
+    assert response.status_code == 302 and "/login" in response.headers["Location"]
 
 
 def test_generate_status_shows_a_plain_failure_with_the_job_id(staff_client, tmp_path, monkeypatch, capsys):

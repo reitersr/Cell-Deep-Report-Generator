@@ -69,12 +69,19 @@ with page and reason; a scan date the reads disagree on excludes that whole scan
 another patient's name is excluded whole (history, current values and summary) and listed under
 "INCOMPLETE - pages excluded" at the top of the staff notes with its page number and the printed
 name. A page with no printed name (e.g. redacted) is accepted for the staff-entered patient with a
-"STAFF REVIEW - DEXA name not printed" notice only when the age it prints (in its header or scan rows,
+"STAFF REVIEW - DEXA name not printed" notice when the age it prints (in its header or scan rows,
 e.g. "45.2") is within two years (`clinic_config.DEXA_AGE_TOLERANCE_YEARS`) of the median age printed
-across the DEXA pages, and of the staff-entered age when one was entered. More than half of the pages
-that print an age must sit within that band, otherwise no unnamed page is accepted. An unnamed page
-that prints no readable age is excluded and flagged. Excluded pages are listed under INCOMPLETE with the
-age they print and reach no part of the patient report. A staff-entered name matches a printed one in any order and case, or as
+across the DEXA pages and of the staff-entered age (more than half of the aged pages must sit in that
+band), or, when it prints no age (e.g. "Segmental Analysis" pages), when every scan date it shows also
+appears on a page validated by name or age. Every other page is listed under INCOMPLETE with its dates,
+printed age and reason, and reaches no part of the patient report. The printed body fat % is used for
+every date; it is computed from fat and total mass only when no page printed one, and then labelled
+"computed". Staff notes warn when the current scan is more than 60 days older than the bloodwork.
+
+Before a report is built, the generating page lists any lab page, scanned row or DEXA page that will be
+left out; staff choose "Generate the report without them" or "Stop". The staff notes open with a
+one-screen STAFF CHECK (entered name and date, DEXA dates accepted and excluded with ages, lab pages,
+counts, name mismatches). A staff-entered name matches a printed one in any order and case, or as
 first name plus last-name initial ("Pat S" matches "SYNTHETIC, PAT"). Scans are merged
 by date across pages and sorted oldest first, so page order and model output order never change
 the result. Values the scanner marks "(e)" are kept and shown with an "estimated" label.

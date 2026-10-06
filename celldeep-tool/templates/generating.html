@@ -11,6 +11,9 @@
     .result { border: 1px solid #6FA287; background: #6FA28718; padding: 16px; border-radius: 6px; }
     .error { border: 1px solid #B75B4E; color: #7a3a30; padding: 16px; border-radius: 6px; }
     a { color: #3E7C93; font-weight: 700; }
+    .confirm { border: 1px solid #C9A23B; background: #C9A23B14; padding: 16px; border-radius: 6px; }
+    .confirm li { margin-top: 6px; font-size: 14px; }
+    .confirm button { margin: 12px 8px 0 0; padding: 8px 14px; font-size: 14px; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -20,6 +23,36 @@
     const statusUrl = {{ url_for('generate_status', job_id=job_id)|tojson }};
     const statusElement = document.getElementById('status');
     const interruptedMessage = {{ interrupted_message|tojson }};
+    const decisionUrl = {{ url_for('generate_decision', job_id=job_id)|tojson }};
+
+    async function decide(action) {
+      statusElement.className = '';
+      statusElement.textContent = action === 'continue' ? 'Generating your report...' : 'Stopping...';
+      const body = new FormData();
+      body.append('action', action);
+      await fetch(decisionUrl, {method: 'POST', body});
+      window.setTimeout(checkStatus, 500);
+    }
+
+    function showConfirmation(items) {
+      statusElement.className = 'confirm';
+      statusElement.textContent = '';
+      const title = document.createElement('strong');
+      title.textContent = 'Some pages or rows will be left out of this report. Check them before continuing:';
+      const list = document.createElement('ul');
+      for (const item of items) {
+        const entry = document.createElement('li');
+        entry.textContent = item;
+        list.appendChild(entry);
+      }
+      const go = document.createElement('button');
+      go.textContent = 'Generate the report without them';
+      go.onclick = () => decide('continue');
+      const stop = document.createElement('button');
+      stop.textContent = 'Stop, I will fix the files';
+      stop.onclick = () => decide('stop');
+      statusElement.append(title, list, go, stop);
+    }
 
     async function checkStatus() {
       try {
@@ -34,6 +67,15 @@
         if (job.status === 'interrupted') {
           statusElement.className = 'error';
           statusElement.textContent = interruptedMessage;
+          return;
+        }
+        if (job.status === 'confirm') {
+          showConfirmation(job.items);
+          return;  // polling resumes after staff decide
+        }
+        if (job.status === 'stopped') {
+          statusElement.className = 'error';
+          statusElement.textContent = job.error;
           return;
         }
         if (job.status === 'done') {
