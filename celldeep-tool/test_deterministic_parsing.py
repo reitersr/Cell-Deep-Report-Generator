@@ -16,6 +16,7 @@ import pipeline  # noqa: E402
 from extraction_prompt import EXTRACTION_OUTPUT_SCHEMA  # noqa: E402
 from generation_prompt import build_copy, select_priority_marker  # noqa: E402
 from schema import Marker, PatientRecord  # noqa: E402
+from synthetic_fixtures.sdk_contract import check_create_kwargs
 
 
 def _parse(tmp_path, pages, name="labs.pdf"):
@@ -532,6 +533,7 @@ class _FakeClaude:
         self.messages = self
 
     def create(self, **kwargs):
+        check_create_kwargs(kwargs)  # the installed SDK must accept this call
         _FakeClaude.calls.append(kwargs)
         page = int(re.search(r"page (\d+)", kwargs["messages"][0]["content"][1]["text"])[1])
         payload = json.dumps({"page": page, "patient_name": fx.PATIENT, "date_of_birth": None, "age": None,

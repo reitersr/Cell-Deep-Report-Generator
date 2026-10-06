@@ -16,7 +16,7 @@ import statistics
 from datetime import date as calendar_date
 
 import clinic_config
-from scan_bloodwork import READ_TEMPERATURE, ScanGateError, _nullable, _object, _validate, name_key, names_match, render_page_png_b64
+from scan_bloodwork import ScanGateError, _nullable, _object, _validate, name_key, names_match, render_page_png_b64
 from schema import normalize_date_for_matching
 
 _TEXT = _nullable({"type": "string"})
@@ -71,7 +71,7 @@ def read_page(page, label, client, create_message, model):
 def _read(page, image, label, reading, client, create_message, model):
     response = create_message(
         client, f"DEXA extraction {label} read {reading}",
-        model=model, max_tokens=8000, system=DEXA_PROMPT, temperature=READ_TEMPERATURE,
+        model=model, max_tokens=8000, system=DEXA_PROMPT,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
             {"type": "text", "text": f"Transcribe DEXA PDF page {page.number + 1} independently."},

@@ -59,7 +59,10 @@ python -m playwright install chromium
 ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q
 ```
 
-Tests must pass with no network: every Anthropic call is mocked. CI runs the suite inside a
+Tests must pass with no network: every Anthropic call is mocked, and every mock checks the call against
+the installed SDK (`synthetic_fixtures/sdk_contract.py`: the real `Messages.create` signature and the SDK's
+parameter types), so an argument the SDK rejects fails in CI. `anthropic` is pinned exactly in
+`requirements.txt`, which both CI and production install (`test_sdk_contract.py` checks the pin). CI runs the suite inside a
 network namespace with no interfaces (`unshare --net`) and fails if the network is reachable.
 To reproduce locally on Linux: `sudo unshare --net -- sudo -u "$USER" env "PATH=$PATH"
 ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
@@ -85,8 +88,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      the marker library by exact alias only; anything else becomes an unrecognized-marker
      review item.
    - Image-only pages: `_extract_scan_bloodwork` renders each page, reads it twice with the
-     vision model (temperature 0, `READ_TEMPERATURE`; transport retries only, no content re-read, no
-     tie-break), and `scan_bloodwork.gate_staff_identified_reads` keeps a row only when both
+     vision model (no sampling settings: anthropic 1.x rejects temperature/top_p/top_k; consistency comes
+     from the agreement rule; transport retries only, no content re-read, no tie-break), and
+     `scan_bloodwork.gate_staff_identified_reads` keeps a row only when both
      reads agree and it passes the value-format and flag-vs-range checks. A row the reads disagree on
      is listed as "INCOMPLETE - row excluded: <marker> (reads disagree: X / Y)". Staff-entered name
      and Collected date identify the pages.

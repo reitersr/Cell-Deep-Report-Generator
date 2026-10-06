@@ -13,6 +13,7 @@ from anthropic import APITimeoutError
 import pipeline
 import scan_bloodwork as scan
 from synthetic_fixtures import deterministic_fixtures as fx
+from synthetic_fixtures.sdk_contract import check_create_kwargs
 
 
 def _assert_structured_schema(schema):
@@ -145,6 +146,7 @@ class MockClient:
         self.timeout = 240.0
 
     def create(self, **kwargs):
+        check_create_kwargs(kwargs)  # the installed SDK must accept this call
         self.calls.append(kwargs)
         data = next(self.responses)
         if isinstance(data, dict) and "rows" in data:
