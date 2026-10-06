@@ -17,8 +17,8 @@ import fitz
 PATIENT = "Synthetic, Pat"
 
 
-def scan(date, total=None, fat=None, lean=None, body_fat=None, vat=None, area=None):
-    return {"date": date, "total_mass": total, "fat_mass": fat, "lean_mass": lean,
+def scan(date, total=None, fat=None, lean=None, body_fat=None, vat=None, area=None, age=None):
+    return {"date": date, "age": age, "total_mass": total, "fat_mass": fat, "lean_mass": lean,
             "body_fat_pct": body_fat, "vat_mass": vat, "vat_area": area}
 
 
