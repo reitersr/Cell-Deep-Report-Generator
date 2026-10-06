@@ -103,6 +103,12 @@ class Marker:
     lab_flag_then: Optional[str] = None
     lab_flag_now: Optional[str] = None
 
+    # Shown instead of name when the printed source changes the label (e.g. "Cortisol, Total" when the draw time is
+    # not inside the lab's printed morning window), and a short printed fact shown next to the value
+    # ("collected 07:45"). Neither changes scoring.
+    display_name: Optional[str] = None
+    value_note: Optional[str] = None
+
     # set by scoring.attach_scores() — declared here (not left dynamic) so dataclasses.asdict()
     # actually serializes them when the record is sent to the generation step.
     now_tier: Optional[str] = None
@@ -120,6 +126,7 @@ class LabReportedResult:
     name: str
     group: str
     results: list = field(default_factory=list)
+    note: Optional[str] = None  # one patient-facing line, e.g. why a non-fasting glucose is not scored
 
 
 @dataclass

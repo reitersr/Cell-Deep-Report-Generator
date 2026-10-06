@@ -19,12 +19,14 @@ X = {"name": 40, "results": 230, "range": 330, "units": 450, "indent": 60, "righ
 FONT = 8
 
 
-def header(page_number, collected=COLLECTED, fasting="N", patient=PATIENT_PRINTED, age=AGE, accession="SYN-0001"):
+def header(page_number, collected=COLLECTED, fasting="N", patient=PATIENT_PRINTED, age=AGE, accession="SYN-0001",
+           time="07:45"):
     left = ["Access Medical Laboratories 5151 Synthetic Way, Testville, FL 00000",
             "Client: CELLDEEP SYNTHETIC CLINIC", f"Patient: {patient}", f"DOB. {DOB} Age:{age} Sex: M",
             "Phys: SYNTHETIC, DOCTOR", f"Page:{page_number}", "Final Report"]
     right = [None, f"Acc# {accession}", f"Coll. Date: {collected}", "Recv. Date: 08/08/26",
-             "Print Date: 08/10/26", "Coll. Time: 07:45", "Report Status: FINAL", f"Fasting: {fasting}"]
+             "Print Date: 08/10/26", f"Coll. Time: {time}", "Report Status: FINAL",
+             f"Fasting: {fasting}" if fasting else None]  # fasting=None: the header prints no Fasting line
     items = []
     for index, text in enumerate(left):
         items.append((X["name"], 30 + 12 * index, text))
@@ -89,8 +91,8 @@ SUMMARY = [("MCV", "101 H", "80 - 100", "fL"), ("BUN/Creat Ratio", "7 L", "10 - 
            ("Estradiol", "52 H", "8 - 35", "pg/mL")]
 
 
-def pages(summary=SUMMARY, fasting="N", collected=COLLECTED, patient=PATIENT_PRINTED, age=AGE):
-    kwargs = {"fasting": fasting, "collected": collected, "patient": patient, "age": age}
+def pages(summary=SUMMARY, fasting="N", collected=COLLECTED, patient=PATIENT_PRINTED, age=AGE, time="07:45"):
+    kwargs = {"fasting": fasting, "collected": collected, "patient": patient, "age": age, "time": time}
     one = Page(1, **kwargs).title("OUT OF RANGE SUMMARY")
     for entry in summary:
         one.row(*entry)
@@ -222,9 +224,10 @@ EXPECTED = [
 LIMITED_SUMMARY = [("Glucose", "101 H", "65 - 99", "mg/dL"), ("Estradiol (E2)", "41 H", "8 - 35", "pg/mL")]
 
 
-def limited_pages(summary=LIMITED_SUMMARY, bili_section="GENERAL CHEMISTRY"):
+def limited_pages(summary=LIMITED_SUMMARY, bili_section="GENERAL CHEMISTRY", summary_heading="OUT OF RANGE SUMMARY"):
     one = Page(1, columns_y=185)
-    one.items += [(200, 128, "OUT OF RANGE SUMMARY")]  # a centred heading spanning the name and result columns
+    if summary_heading:  # a centred heading spanning the name and result columns
+        one.items += [(200, 128, summary_heading)]
     for index, entry in enumerate(summary):
         one.items += row(140 + 12 * index, *entry)
     one.title("COMPLETE BLOOD COUNT")

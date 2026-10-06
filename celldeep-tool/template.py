@@ -697,6 +697,10 @@ def _lab_flag_line(m) -> str:
     return f'<span class="lab-flag-line">{text}</span>'
 
 
+def _value_note(m) -> str:
+    return f'<span class="bio-date">{_html(m.value_note)}</span>' if getattr(m, "value_note", None) else ""
+
+
 def bio_row_tr(m, copy, color_override=None):
     # A capped/inequality result (e.g. "<0.7") is a real current reading even with now=None,
     # so all three of now/now_tier/disp_now must be empty before calling this "not retested".
@@ -736,14 +740,14 @@ def bio_row_tr(m, copy, color_override=None):
     now_text = _html(m.disp_now) if censored_now else fmt(m.disp_now)
     now_flag = _lab_flag_words(m.lab_flag_now) if censored_now else ""
     now_cell = (f'<span class="bio-pill now" style="background:{bg}; color:{color};">{now_text}</span>'
-                f'{now_flag}{unit}{now_date}{_lab_flag_line(m)}')
+                f'{now_flag}{unit}{now_date}{_value_note(m)}{_lab_flag_line(m)}')
     note_html = ""
     if note:
         note_text = _join_sentences(what, note)
         note_html = (f'<div class="bio-note"><b style="font-style:normal; color:{INK};">What this is:</b> '
                      f'{note_text}</div>') if note_text else ""
     row = f'''<div class="bio-table-row bio-tr" style="--c:{color};">
-      <div class="td-name"><span class="bio-name">{m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span>{_also_on_file(m.full_history)}{note_html}</div>
+      <div class="td-name"><span class="bio-name">{m.display_name or m.name}</span> <span class="bio-tierchip" style="color:{color}; background:{color}18;">{tier_word}</span>{_also_on_file(m.full_history)}{note_html}</div>
       <div class="td-range">{m.disp_range}</div>
       <div class="td-then">{then_cell}</div>
       <div class="td-now">{now_cell}</div>
@@ -810,7 +814,12 @@ def _lab_result_cell(result) -> str:
     flag = result.get("lab_flag")
     flag_html = f' <b class="lab-flag">{flag}</b>' if flag else ""
     date = f'<span class="bio-date">{fmt_date(result["date_display"])}</span>' if result.get("date_display") else ""
-    return f'<span class="bio-pill lab-pill">{fmt(result["disp_value"])}{flag_html}</span>{date}'
+    unit = f' <span class="bio-unit">{_html(result["unit"])}</span>' if result.get("unit") else ""
+    return f'<span class="bio-pill lab-pill">{fmt(result["disp_value"])}{flag_html}</span>{unit}{date}'
+
+
+def _item_note(item) -> str:
+    return f'<div class="bio-note">{_html(item.note)}</div>' if getattr(item, "note", None) else ""
 
 
 def lab_reported_section(record: PatientRecord) -> str:
@@ -825,7 +834,7 @@ def lab_reported_section(record: PatientRecord) -> str:
             latest = item.results[-1]
             earlier = item.results[0] if len(item.results) > 1 else None
             rows.append(f'''<div class="bio-table-row bio-tr lab-tr" style="--c:{MIDGRAY};">
-      <div class="td-name"><span class="bio-name">{item.name}</span>{_also_on_file(item.results[1:-1])}</div>
+      <div class="td-name"><span class="bio-name">{item.name}</span>{_also_on_file(item.results[1:-1])}{_item_note(item)}</div>
       <div class="td-range">{_html(latest.get("lab_range") or clinic_config.NO_RANGE_LABEL)}</div>
       <div class="td-then">{_lab_result_cell(earlier)}</div>
       <div class="td-now">{_lab_result_cell(latest)}</div>

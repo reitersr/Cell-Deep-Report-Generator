@@ -44,7 +44,10 @@ _TITLE_RE = re.compile(r"[A-Z][A-Z0-9 /&,.'-]*[A-Z)]")
 _EXPLANATORY_NAME_RE = re.compile(r"^(?:stage|grade|class|risk|probability|morning|afternoon|evening|note|"
                                   r"comment|method|performed|reference)\b", re.IGNORECASE)
 _CONTINUED_RE = re.compile(r"\s*\(continued(?: on next page)?\)\s*$", re.IGNORECASE)
-_SUMMARY_HEADING_RE = re.compile(r"\s*out\s+of\s+range\s+summary\b", re.IGNORECASE)
+# The summary block's heading: any line naming "out of range" with no digits ("OUT OF RANGE SUMMARY", "Out of Range
+# Results", ...), wherever it is printed.
+_SUMMARY_HEADING_RE = re.compile(r"^\D*\bout\s+of\s+range\b\D*$", re.IGNORECASE)
+_MORNING_WINDOW_RE = re.compile(r"\bmorning\b\D*?(\d{1,2})\s*-\s*(\d{1,2})\s*:", re.IGNORECASE)
 _FLAGS = ("H", "L", "HH", "LL")
 # Printed names that mean a different test depending on the section: "Bili" is urine bilirubin under urinalysis
 # and total bilirubin under chemistry/liver. Under any other section it is left out with a notice, never guessed.
@@ -60,6 +63,7 @@ _HEADER_FIELDS = {
     "collected": re.compile(r"Coll\.\s*Date:\s*(?P<v>\d{1,2}/\d{1,2}/\d{2,4})"),
     "printed": re.compile(r"Print\s*Date:\s*(?P<v>\d{1,2}/\d{1,2}/\d{2,4})"),
     "fasting": re.compile(r"Fasting:\s*(?P<v>[YN])\b"),
+    "collection_time": re.compile(r"Coll\.\s*Time:\s*(?P<v>\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"),
 }
 _GROUP_BY_CATEGORY = {"Hormones": "Hormones", "Thyroid": "Hormones", "Lipids": "Lipids",
                       "Inflammation": "Inflammation"}
@@ -205,6 +209,7 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
     excluded = exclusions if exclusions is not None else []
     notes = review_notes if review_notes is not None else []
     headers, summary_lines, table, no_units, staff = [], [], {}, [], []
+    unsectioned, morning_windows = [], set()
     section = None
 
     def exclude(page, where, reason):
@@ -261,6 +266,8 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
             indented = by_column["name"] and by_column["name"][0][0] > columns["name"] + _INDENT_PT
             row, reason = (None, "indented explanatory line") if indented else _row(cells)
             name = " ".join(cells["name"].split())
+            if window := _MORNING_WINDOW_RE.search(text):
+                morning_windows.add((int(window[1]), int(window[2])))
             if row is None:
                 # A known test name on a line that does not fit the row pattern is excluded with a notice, unless
                 # that test was already read in this section: then the line is its interpretation text (e.g. the
@@ -273,7 +280,9 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
             value, flag, printed_range, unit = row
             key = name.casefold()
             if section is None:
-                exclude(number, "no section", f"row {name!r} is printed under no section title; not read")
+                # Decided at the end: a repeat of a table row (a summary whose heading was not recognized) is
+                # ignored silently; any other row under no section title is excluded with a notice.
+                unsectioned.append((number, name, value, flag))
                 continue
             scope = _SECTION_SCOPED_NAMES.get(key)
             if scope and not any(word in section.upper() for word in scope):
@@ -305,6 +314,14 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
                 except pipeline.BloodworkParseError as error:
                     exclude(number, section, str(error))
                     continue
+            patient_note = None
+            if match is not None and match[0] == "Glucose (fasting)" and header.get("fasting") == "N":
+                # Drawn non-fasting: never labelled or scored as fasting glucose.
+                show_as, patient_note, match = ("Glucose (non-fasting)", "Chemistry"), \
+                    clinic_config.NON_FASTING_GLUCOSE_NOTE, None
+                staff.append(f"NON-FASTING GLUCOSE: the lab header prints 'Fasting: N'; Glucose {display!r} on {date} "
+                             f"(page {number}) is shown as 'Glucose (non-fasting)' with the lab's range "
+                             f"({printed_range or 'none printed'}) and flag, not scored against the fasting range")
             if match is not None:
                 canonical, config = match
                 resolved = resolve_marker_config(canonical, config, sex)
@@ -335,15 +352,22 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
                 }
                 if show_as:
                     unknown["show_as"] = show_as
+                if patient_note:
+                    unknown["patient_note"] = patient_note
                 unrecognized.append(unknown)
             audit.append({"page": number, "name": name, "section": section, "y": min(w[1] for w in words),
                           "occurrences": [dict(item) for item in occurrences[start_occ:]],
                           "unrecognized": unrecognized[start_unk:]})
 
     staff.extend(summary_checks(summary_lines, table))
+    for number, name, value, flag in unsectioned:
+        if not any(key == name.casefold() and printed[:2] == (value, flag) for (_, key), printed in table.items()):
+            exclude(number, "no section", f"row {name!r} is printed under no section title; not read")
     info = {"layout": NAME, "headers": headers, "no_units": no_units, "notes": staff}
     if headers:
-        for field in ("patient", "dob", "age", "sex", "collected", "fasting", "accession"):
+        if len(morning_windows) == 1:
+            info["morning_window"] = morning_windows.pop()
+        for field in ("patient", "dob", "age", "sex", "collected", "fasting", "accession", "collection_time"):
             values = {header[field] for header in headers if field in header}
             if len(values) == 1:
                 info[field] = values.pop()

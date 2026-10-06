@@ -111,3 +111,10 @@ LAB_ASSAY_DIFFERS = {"access_medical": ("Free Testosterone", "Bioavailable Testo
 # or below the CellDeep range basis, the result is shown as lab-reported and not scored.
 LAB_RANGE_BASIS_RATIO = 5
 
+
+# ---- Non-fasting glucose ------------------------------------------------------------------------------
+
+# When the lab header prints "Fasting: N", glucose is shown as "Glucose (non-fasting)" in the lab-reported
+# section (the lab's range and flag, never scored against the fasting range), with this one-line note.
+NON_FASTING_GLUCOSE_NOTE = "This sample was drawn without fasting, so it is shown as reported and not scored."
+

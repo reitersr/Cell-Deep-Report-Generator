@@ -109,7 +109,7 @@ def test_assays_that_differ_are_lab_reported_never_scored(tmp_path):
     occurrences, unrecognized, _, _, _, notes = _parse(tmp_path)
     scored = {o["name"] for o in occurrences}
     assert "Free Testosterone" not in scored and "Bioavailable Testosterone" not in scored
-    shown = {u["raw_name"]: u["show_as"] for u in unrecognized if u.get("show_as")}
+    shown = {u["raw_name"]: u["show_as"] for u in unrecognized if u.get("show_as") and u["raw_name"] != "Glucose"}
     assert shown == {"Testosterone, Free": ("Free Testosterone", "Hormones"),
                      "Bioavailable Testosterone": ("Bioavailable Testosterone", "Hormones")}
     assert sum(note.startswith("ASSAY DIFFERS FROM CELLDEEP RANGE BASIS") for note in notes) == 2
@@ -232,8 +232,9 @@ def test_header_identity_and_checks(report):
     assert "  Bloodwork Collected date (entered): 08/07/2026; lab header prints Coll. Date 08/07/2026" in staff_check
     assert "  lab PDF text pages: SAMPLE, ALEX - matches" in review and "  Name mismatches: none" in staff_check
     assert "COLLECTED DATE CHECK" not in review and "AGE CHECK" not in review
-    assert ("NON-FASTING DRAW: the lab header prints 'Fasting: N'; Glucose (fasting) was drawn non-fasting but the "
-            "report still labels and scores it as fasting") in review
+    assert ("NON-FASTING GLUCOSE: the lab header prints 'Fasting: N'; Glucose '95' on 08/07/2026 (page 3) is shown as "
+            "'Glucose (non-fasting)' with the lab's range (65 - 99) and flag, not scored against the fasting range") in review
+    assert "NON-FASTING DRAW" not in review  # nothing is still labelled fasting
     assert "FOUND IN SOURCE BUT MISSING" not in review.replace("'Magnesium' FOUND", "")  # "mg" units: known item
 
 
@@ -328,9 +329,10 @@ def test_limited_report_safeguards(limited_report):
     assert "100–180" not in text and "250–500" not in text
     # No printed unit, no unit shown.
     assert "600–900 — 540 August 7, 2026" in text and "measured 540 on 08/07/2026" in text  # "540", no unit
-    assert "Cortisol, Total (AM) Not scored, no range printed no range printed — 12.0 August 7, 2026" in text
+    # No morning window printed on this panel: no "(AM)"; the collection time is shown.
+    assert "Cortisol, Total Not scored, no range printed no range printed — 12.0 August 7, 2026 collected 07:45" in text
     # Glucose drawn non-fasting: staff note only.
-    assert "NON-FASTING DRAW: the lab header prints 'Fasting: N'; Glucose (fasting) was drawn non-fasting" in review
+    assert "NON-FASTING GLUCOSE: the lab header prints 'Fasting: N'; Glucose '101' on 08/07/2026 (page 1)" in review
     assert "NON-FASTING" not in text
     # One draw and one scan: no trend or change claims anywhere.
     for claim in ("improved", "moved from", "down from", "up from", "increased", "decreased", "since your first",
