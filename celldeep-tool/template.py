@@ -678,16 +678,16 @@ def _lab_flag_words(flag) -> str:
 
 
 def lab_flag_differs(m) -> bool:
-    """The lab printed a flag for the current result and CellDeep's status is one that does not already say
-    so (clinic_config.LAB_FLAG_DISAGREES_WITH: by default anything but Flagged). A result printed as a limit
-    shows its flag next to the value instead, so it gets no extra line."""
+    """The lab printed H/L for the current result while CellDeep's status is one listed in
+    clinic_config.LAB_FLAG_DISAGREES_WITH (default: Optimal only). A result printed as a limit shows its flag
+    next to the value instead, so it never gets an extra line."""
     return (bool(m.lab_flag_now) and m.lab_flag_now in clinic_config.LAB_FLAG_WORDS
             and m.now_tier in clinic_config.LAB_FLAG_DISAGREES_WITH
             and not scoring.is_censored(m.disp_now, m.now))
 
 
 def _lab_flag_line(m) -> str:
-    """'Lab flag: Low (lab range 38-380)' under a current value whose lab flag CellDeep's status does not show."""
+    """'Lab flag: Low (lab range 38-380)' under a scored value whose lab flag disagrees."""
     if not (clinic_config.SHOW_LAB_FLAG_WHEN_IT_DIFFERS and lab_flag_differs(m)):
         return ""
     lab_range = (m.lab_range_now or {}).get("display")

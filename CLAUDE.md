@@ -142,8 +142,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    the staff notes and raises a `COVERAGE GAP` note otherwise.
 6. **Copy and render**: `generation_prompt.build_copy` fills patient-facing text;
    `template.render` writes the patient PDF. Full-panel column headers name a date only when every
-   value in the column is from it (`template.panel_column_headers`). The lab's own flag is shown under every
-   current result the lab flagged unless CellDeep calls it Flagged (`clinic_config.LAB_FLAG_DISAGREES_WITH`).
+   value in the column is from it (`template.panel_column_headers`). The lab's own flag is shown under a
+   current result only where CellDeep calls it Optimal (`clinic_config.LAB_FLAG_DISAGREES_WITH`; the clinic
+   deliberately does not show it on Moderate or unscored results); a censored value shows it next to the value.
    The summary lists the systems whose current results come from a draw before the headline date
    (`generation_prompt.earlier_draw_systems`).
 7. **Staff notes**: `_write_review_notes` / `format_review_notice` write the staff-only review

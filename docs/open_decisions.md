@@ -24,6 +24,7 @@ decision first. Evidence cites the repository as of this branch (`celldeep-tool/
 | 17 | What the confirmation screen lists | Clinic | How often staff are asked |
 | 18 | "Where you are now" when the latest scan has no body composition | Clinic | DEXA display |
 | 19 | Scoring estimated and computed DEXA body fat | Clinic | Structure score |
+| 20 | Lab H/L flag on Moderate or unscored results (off by default) | Clinic | Scored-marker display |
 
 ---
 
@@ -395,4 +396,18 @@ from 96% to 73%). The patient report shows the value with its label.
 **Options.** A. Score them (current). B. Show them but leave them out of the score, with a staff note.
 
 **Decision needed.** Clinic.
+
+## 20. Lab H/L flag on Moderate or unscored results (off by default)
+
+**Decision (clinic).** The lab's own flag line ("Lab flag: High (lab range 250-1100)") is shown under a current
+result only where CellDeep calls it Optimal, and a censored value (printed as a limit) shows the flag next to the
+value. The clinic deliberately does not show it on Moderate or unscored results (for example testosterone in men,
+where the lab's range is not the clinic's target). The staff notes list every Optimal-vs-lab disagreement.
+
+**Setting.** `clinic_config.LAB_FLAG_DISAGREES_WITH` (default `("optimal",)`). Adding `"moderate"` and/or `None`
+(results CellDeep does not score) shows the line for those too; a result CellDeep calls Flagged never gets it.
+`test_vitality_flags_earlier_draws.py` covers both the default and the opt-in setting.
+
+**Open.** Nothing unless the clinic wants the line on Moderate or unscored results; then change the setting in a
+reviewed PR.
 

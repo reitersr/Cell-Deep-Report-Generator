@@ -44,11 +44,7 @@ def test_disagreement_rule_follows_the_setting(monkeypatch):
     marker = Marker(name="Ferritin", category="Foundational", unit="", kind="range", disp_range="",
                     now=20.0, disp_now="20", now_tier="moderate", lab_flag_now="L",
                     lab_range_now={"lo": 38, "hi": 380, "display": "38-380"})
-    # Default: shown for every status except Flagged (a Moderate result here).
+    assert not template.lab_flag_differs(marker)
+    monkeypatch.setattr(clinic_config, "LAB_FLAG_DISAGREES_WITH", ("optimal", "moderate"))
     assert template.lab_flag_differs(marker)
     assert "Lab flag: Low (lab range 38-380)" in template._lab_flag_line(marker)
-    flagged = Marker(**{**marker.__dict__, "now_tier": "flag"})
-    assert not template.lab_flag_differs(flagged)
-    # The setting still controls it.
-    monkeypatch.setattr(clinic_config, "LAB_FLAG_DISAGREES_WITH", ("optimal",))
-    assert not template.lab_flag_differs(marker)
