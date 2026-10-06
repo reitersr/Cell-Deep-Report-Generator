@@ -20,6 +20,10 @@ decision first. Evidence cites the repository as of this branch (`celldeep-tool/
 | 13 | Unrecognized lipid-ratio, particle-size, apolipoprotein and omega-3 names | Clinic | Lab-reported coverage |
 | 14 | New clinic defaults: "computed" body-fat label, DEXA age tolerance, stale-scan warning | Clinic | DEXA display and staff notes |
 | 15 | Remaining places that can silently accept, drop or substitute a value | Owner + clinic | Pipeline hardening |
+| 16 | Scanned bloodwork: no sampling control; 2-of-3 reads | Owner | Scan cost and certainty |
+| 17 | What the confirmation screen lists | Clinic | How often staff are asked |
+| 18 | "Where you are now" when the latest scan has no body composition | Clinic | DEXA display |
+| 19 | Scoring estimated and computed DEXA body fat | Clinic | Structure score |
 
 ---
 
@@ -91,9 +95,11 @@ number, with DOB staff-entered, never read from the lab PDF.
 
 ## 4. Caveat for DEXA "(e)" estimated values
 
-> **Status: partly implemented.** "(e)" values are now kept as an `estimated` field and shown with an
-> "estimated" label. Still open: whether estimated values should count toward the Structure score, and
-> option C (body fat % derived from masses).
+> **Status: partly implemented.** "(e)" values are kept as an `estimated` field and shown with the
+> `clinic_config.DEXA_ESTIMATED_LABEL` label everywhere (history, first/current scan, summary line, headline);
+> a value printed identically with "(e)" on only some reads or pages is kept and shown as estimated. Option C
+> is implemented as "computed" (fat / (fat + lean), labelled). Still open: whether estimated values should
+> count toward the Structure score (today they do; see item 19).
 
 **Evidence.** DEXA reports mark some values as estimated with "(e)". The DEXA extraction prompt and
 schema (`extraction_prompt.py`, `dexa_history`) have no field for it, so an estimated value is
@@ -287,8 +293,11 @@ Already decided in this change (exact aliases to existing lab-reported, not-scor
 
 **Evidence.** `celldeep-tool/clinic_config.py` now holds three defaults chosen without a clinic decision:
 - `DEXA_COMPUTED_LABEL = "computed"`: shown after a DEXA body fat % that the scan did not print and that is
-  computed from the printed fat and total mass. A printed % is always used when printed; a printed but
-  contested % (reads or pages disagree) stays empty and is never computed.
+  computed as fat / (fat + lean) from the printed fat and lean mass (the scan's own definition; it was fat /
+  total mass before this change, which also counts bone mass and reads about 1 point lower). A printed % is
+  always used when printed; a printed but contested % (reads or pages disagree) stays empty and is never
+  computed.
+- `DEXA_ESTIMATED_LABEL = "estimated"`: shown after a DEXA value the scan printed with "(e)".
 - `DEXA_AGE_TOLERANCE_YEARS = 2`: an unnamed DEXA page is attributed to the patient only when its printed age
   is within 2 years of the median age across the pages (and of the staff-entered age). A DEXA file that
   bundles scans more than 2 years apart, with no name printed, would lose its oldest unnamed pages (listed
@@ -315,3 +324,62 @@ change); each has a suggested test.
 | `pipeline._attach_report_collection_dates` | Fills a missing `date_display` from the report's single collection date for a source label: a date the row itself did not print. Not called by the report path today (only `test_report_regressions.py` uses it), so it is a latent risk if re-wired. | Remove it, or add a test that the report path never calls it (any row without a date stays undated and is listed for staff). |
 | `app.generate` | Age typed with decimals ("45.5") raises in `int(age)` and shows the generic "Generation failed" instead of a field error. | Post age "45.5" → form re-rendered with "Age must be a whole number". |
 | `pipeline.reconcile_marker_occurrences` | A marker whose only result is older than the newest draw is shown as "Not retested" in the earlier column; correct, but staff are not told which markers were not retested in the latest draw. | Two draws, one marker only in the earlier one → STAFF CHECK lists it under "not in the latest draw". |
+
+## 16. Scanned bloodwork: no sampling control; 2-of-3 reads
+
+**Evidence.** The SDK production installs (`anthropic==1.5.0`) accepts no `temperature`, `top_p` or `top_k`
+and has no seed (`test_sdk_contract.py` checks every argument against it). Newer models reject sampling
+parameters at the API too, and `temperature=0` never guaranteed identical output. Passing it through
+`extra_body` would bypass the SDK check and break on the next model change, so it is not used.
+`scan_bloodwork.py` now reads each scanned page twice and, when the two reads disagree on a result row, a
+third time (`SCAN_MAX_READS = 3`); a row is kept when at least two reads print exactly the same value, flag
+and range (`SCAN_AGREEMENT_READS = 2`).
+
+**Risk.** (a) Two of three reads can agree on the same wrong value; this is less likely than one read being
+wrong, but not impossible. (b) A page with any disagreement costs a third model call (about 50% more for
+that page).
+
+**Options.** A. Keep 2-of-3 (current). B. Require all three reads to agree after a disagreement (fewer
+values kept, more listed for staff). C. Read every page three times always (cost) and require 2-of-3.
+
+**Proposal.** A, with staff spot-checks of scanned values (`docs/staff_guide.md`). Revisit with real
+disagreement counts from the staff notes after a month of use.
+
+## 17. What the confirmation screen lists
+
+**Evidence.** `pipeline.preflight_items` / `note_preflight` list every excluded lab page or section, every
+excluded scanned result row, DEXA pages not attributed to the patient, unreadable DEXA pages, printed results
+whose test name is not recognized (one line naming them) and a provider note that was not read (or read in
+part). Headings without a value never count. On the synthetic runs (`test_scenarios.py`): 0 items for the
+clean CHL, scanned and mixed reports; 1 for the Quest and Labcorp layouts (each has one unrecognized test
+name); 1 for the noisy scan (one 3-way disagreement); 1 for the clinic DEXA file (the foreign page);
+3 for the variant layout.
+
+**Risk.** Real Quest reports often print tests the library does not know (item 13), so the screen may appear
+on most Quest runs, and staff may start clicking through it.
+
+**Options.** A. Keep listing unrecognized tests (current). B. List them only when the lab flagged them H/L.
+C. Keep a clinic-maintained list of tests that are deliberately not reported, and stop listing those.
+
+**Proposal.** C, once the clinic has gone through item 13.
+
+## 18. "Where you are now" when the latest scan has no body composition
+
+**Evidence.** "When you came in" and "Where you are now" are the first and latest accepted scans with a body
+fat % or total/fat/lean mass (`scoring.has_body_composition`). A later VAT-only scan is shown in the history
+but not as "Where you are now". When no scan has body composition, the template falls back to the first/last
+scan and shows dashes (item 15).
+
+**Decision needed.** Confirm that a VAT-only follow-up should never be "Where you are now".
+
+## 19. Scoring estimated and computed DEXA body fat
+
+**Evidence.** `template.build_rollups` scores the Structure system from the current scan's body fat % and VAT
+area. An "(e)" body fat or a computed body fat now counts (before this change, an "(e)" value marked on only
+one page was withheld, so Structure was scored from VAT alone: on the synthetic clinic file the DEXA score went
+from 96% to 73%). The patient report shows the value with its label.
+
+**Options.** A. Score them (current). B. Show them but leave them out of the score, with a staff note.
+
+**Decision needed.** Clinic.
+

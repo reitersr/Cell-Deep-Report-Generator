@@ -1,7 +1,7 @@
 # CellDeep Report Generator
 
 Turns a patient's lab PDF, DEXA PDF(s) and a structured provider note into the CellDeep
-patient report (PDF) plus staff-only review notes. All code lives in `celldeep-tool/`.
+patient report (PDF) plus staff-only review notes. All code lives in `celldeep-tool/` (plus `scripts/smoke_test.py`).
 
 ## Non-negotiables
 
@@ -47,7 +47,9 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/test_*.py` | Test suite (pytest). |
 | `calibration_baselines/` | Synthetic calibration snapshots. |
 | `celldeep-tool/ranges_audit.py` | Read-only audit of each marker's threshold source; `--write` regenerates `docs/ranges_audit.md` (a test keeps it in sync). |
-| `docs/` | Audits and open clinical decisions. |
+| `celldeep-tool/synthetic_fixtures/scenarios.py` | End-to-end synthetic scenarios with a scripted vision model (smoke test, `test_scenarios.py`). |
+| `scripts/smoke_test.py` | Generates reports from synthetic fixtures and prints PASS/FAIL (no API key, no network, under a minute). |
+| `docs/` | Audits, open clinical decisions (`open_decisions.md`), `staff_guide.md`, `what_the_tool_guarantees.md`. |
 | `.github/workflows/tests.yml` | CI: full suite offline on every pull request. |
 
 ## Running tests
