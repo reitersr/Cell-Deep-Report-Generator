@@ -1560,7 +1560,8 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
 # ---------------------------------------------------------------------------
 
 def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], patient_name: str | None,
-                              dob_sink: list | None = None, name_sink: list | None = None):
+                              dob_sink: list | None = None, name_sink: list | None = None,
+                              excluded_sink: list | None = None, confirmed_sink: list | None = None):
     """Read every DEXA page twice and keep only measurements both reads agree on (scan_dexa.gate).
     Returns (dexa_history, staff_notes, summary_lines)."""
     import scan_bloodwork
@@ -1589,7 +1590,11 @@ def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], pa
             printed = {" ".join(read["patient_name"].split()) for read in reads if read["patient_name"]}
             if len(printed) == 1 and all(read["patient_name"] for read in reads):
                 name_sink.append(("DEXA", f"file {key[0]} page {key[1]}", printed.pop()))
-    return scan_dexa.gate(pages, patient_name, failures, dob_sink)
+    excluded = [] if excluded_sink is None else excluded_sink
+    result = scan_dexa.gate(pages, patient_name, failures, dob_sink, excluded)
+    if confirmed_sink is not None:  # pages read twice whose printed name matched the staff-entered patient
+        confirmed_sink.extend(sorted({key for key, _ in pages} - {key for key, _ in excluded}))
+    return result
 
 def has_scanned_pages(pdf: bytes | str | os.PathLike) -> bool:
     """True when a lab PDF (a path, or its bytes) has image-only pages, which only staff-entered identity
@@ -1667,6 +1672,12 @@ def _age_from_dob(dob_sources: list, collected: str | None) -> dict:
         return {"age_from_dob": None, "dob_conflict": True, "dob_notes": [
             f"DOB CONFLICT: the printed date of birth ({labels}) does not fit the collection date; no age is shown"]}
     return {"age_from_dob": age, "dob_notes": []}
+
+
+def scan_dexa_incomplete_notice(exclusions: list) -> list[str]:
+    import scan_dexa
+
+    return scan_dexa.incomplete_notice(exclusions)
 
 
 def scan_collected_date(text: str) -> str:
@@ -1973,7 +1984,10 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     scan_summary = _scan_summary(scan_numbers, scan_notes, collected_date) if scan_numbers else []
     lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
     lab_review_notes.extend(lab_notes)
-    dexa_history, dexa_notes, dexa_summary = (_extract_dexa_with_claude(client, dexa_pdfs, patient_name, dob_sources, printed_names)
+    dexa_exclusions = []  # DEXA pages not attributed to this patient: listed under INCOMPLETE
+    dexa_confirmed = []  # (file, page) keys confirmed as this patient's
+    dexa_history, dexa_notes, dexa_summary = (_extract_dexa_with_claude(client, dexa_pdfs, patient_name, dob_sources,
+                                                                        printed_names, dexa_exclusions, dexa_confirmed)
                                               if dexa_pdfs else ([], [], []))
     note = parse_provider_note(note_text)
     for match in re.finditer(r"^\s*Patient(?: Name)?\s*:\s*(.+?)\s*$", note["accepted_text"] or "", re.I | re.M):
@@ -2004,6 +2018,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "scan_summary": scan_summary,
         "parse_exclusions": parse_exclusions,
         "dexa_summary": dexa_summary,
+        "dexa_incomplete": scan_dexa_incomplete_notice(dexa_exclusions),
+        "dexa_confirmed_pages": dexa_confirmed,
         "printed_names": printed_names,
         **_age_from_dob(dob_sources, latest["date_display"] if latest else None),
         "other_notes": [*lab_review_notes, *note["other_notes"]],
@@ -2280,6 +2296,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             f"INCOMPLETE - pages/sections excluded: lab PDF page(s) {', '.join(map(str, pages))} could not be "
             "parsed deterministically; their results are NOT in this report - review them by hand",
             *[f"  - page {item['page']} ({item['section']}): {item['reason']}" for item in exclusions]]
+    notice.incomplete.extend(extracted.get("dexa_incomplete", []))
     notice.name_header = name_header(extracted.get("name"), extracted.get("printed_names", []))
     unrecognized_names = {" ".join(item["raw_name"].split()).casefold()
                           for item in extracted.get("unrecognized_markers", [])}
@@ -2383,7 +2400,9 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     with open(f"{_diagnostic_path_prefix(patient_name)}_report_copy.json", "w", encoding="utf-8") as f:
         json.dump(copy, f, indent=2, ensure_ascii=False)
 
-    dexa_images = _extract_dexa_scan_images(dexa_pdfs)
+    # The scan image is page 1 of the first DEXA PDF: embed it only when that page passed the name gate.
+    page_one_confirmed = (1, 1) in extracted.get("dexa_confirmed_pages", [])
+    dexa_images = _extract_dexa_scan_images(dexa_pdfs) if page_one_confirmed else []
     first_image = dexa_images[0] if dexa_images else None
     if first_image and record.dexa_history:
         record.dexa_history[0].scan_image_b64 = first_image[0]

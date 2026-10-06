@@ -62,12 +62,18 @@ Disagreeing DOBs give a staff notice and no age in the report.
 
 Every DEXA page is read twice (`scan_dexa.py`). A measurement is kept only when both reads agree
 after normalization; a field printed in one read only or read differently is excluded and listed
-with page and reason; a scan date the reads disagree on excludes that whole scan; a page printing
-another patient's name is excluded with a notice at the top of the staff notes. Scans are merged
+with page and reason; a scan date the reads disagree on excludes that whole scan. A page is used only
+when both reads print a name matching the staff-entered patient: a page printing another name, or
+no readable name, is excluded whole (history, current values and summary) and listed under
+"INCOMPLETE - pages excluded" at the top of the staff notes with its page number and the printed
+name. Scans are merged
 by date across pages and sorted oldest first, so page order and model output order never change
 the result. Values the scanner marks "(e)" are kept and shown with an "estimated" label.
 
 ## Bloodwork
+
+The full-panel column headers show a date only when every result in that column is from that date;
+otherwise they read "Earlier" / "Latest" and each value carries its own date.
 
 Each readable bloodwork page must print its own Current/Historical column header (with governing
 dates), or In Range / Out of Range columns. Table state never carries across pages; readable

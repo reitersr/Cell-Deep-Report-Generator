@@ -91,8 +91,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      duplicate results, one Order ID with two Collected dates) still stops the job.
 3. **DEXA**: `_extract_dexa_with_claude` renders every DEXA page and `scan_dexa` reads it twice; a
    measurement is kept only when both reads agree, a scan date the reads disagree on drops the
-   whole scan, a page printing another patient's name is dropped, and kept scans are merged by date
-   and sorted oldest first. Outcomes open the staff notes (DEXA block).
+   whole scan, a page is used only when both reads print the staff-entered patient's name (another
+   name or no readable name drops the page and lists it under "INCOMPLETE - pages excluded"), and kept
+   scans are merged by date and sorted oldest first. Outcomes open the staff notes (DEXA block).
 4. **Provider note**: `parse_provider_note` reads only the documented template sections
    (including `## Treatment Status`); every other line is listed with its reason.
 4a. **Identity**: age comes from the printed date of birth and collection date when printed
@@ -104,7 +105,8 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    (shown, never scored). `coverage_gaps` checks that every printed row reached the report or
    the staff notes and raises a `COVERAGE GAP` note otherwise.
 6. **Copy and render**: `generation_prompt.build_copy` fills patient-facing text;
-   `template.render` writes the patient PDF.
+   `template.render` writes the patient PDF. Full-panel column headers name a date only when every
+   value in the column is from it (`template.panel_column_headers`).
 7. **Staff notes**: `_write_review_notes` / `format_review_notice` write the staff-only review
    file, downloadable separately from the report.
 

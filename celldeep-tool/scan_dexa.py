@@ -115,10 +115,38 @@ def _display(day):
     return f"{day[1]:02d}/{day[2]:02d}/{day[0]:04d}"
 
 
-def gate(pages, patient_name, failures=(), dob_sink=None):
+def _name_exclusion(reads, patient_name):
+    """Why a page cannot be attributed to the staff-entered patient, or None when both reads print a
+    name that matches it. A page with no readable name is never assumed to be the patient's."""
+    names = [" ".join((read["patient_name"] or "").split()) for read in reads]
+    keys = {name_key(name) for name in names}
+    if not all(names) or () in keys:
+        printed = " / ".join(f"read {index}: {name!r}" if name else f"read {index}: none"
+                             for index, name in enumerate(names, start=1))
+        return f"no readable patient name ({printed}); not assumed to be this patient"
+    if keys != {name_key(patient_name)}:
+        printed = repr(names[0]) if len(set(names)) == 1 else " / ".join(map(repr, names))
+        return f"prints patient name {printed}, not the staff-entered patient"
+    return None
+
+
+def incomplete_notice(exclusions):
+    """INCOMPLETE lines for the top of the staff notes: DEXA pages not attributed to this patient."""
+    if not exclusions:
+        return []
+    labels = ", ".join(f"file {key[0]} page {key[1]}" for key, _ in exclusions)
+    return [f"INCOMPLETE - pages excluded: DEXA {labels} not confirmed as this patient's; their scans are NOT "
+            "in this report (history, current values or summary) - confirm which patient they belong to",
+            *[f"  - DEXA file {key[0]} page {key[1]}: {reason}" for key, reason in exclusions]]
+
+
+def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None):
     """pages: [((file, page), [read1, read2])]; failures: [((file, page), partial_reads, reason)].
     Returns (history, staff_notes, summary_lines). history is sorted oldest first and is a list of
-    DexaReading-shaped dicts with an extra 'estimated' list of DexaReading field names."""
+    DexaReading-shaped dicts with an extra 'estimated' list of DexaReading field names.
+    A page is used only when both reads print a name matching the staff-entered patient; every other
+    page is excluded whole and (key, reason) is appended to excluded_sink (reasons may hold the
+    printed name, so they go to the staff notes only, never to logs)."""
     notes, mismatches, page_lines, kept_by_page = [], [], [], {}
     candidates = {}  # date -> field -> {(value, text, estimated): [page labels]}
 
@@ -133,11 +161,17 @@ def gate(pages, patient_name, failures=(), dob_sink=None):
     for key, reads in sorted(pages, key=lambda item: item[0]):
         label = label_of(key)
         counts = [len(read["scans"]) for read in reads]
-        printed = {name_key(read["patient_name"]) for read in reads if read["patient_name"]}
-        if patient_name and printed and printed != {name_key(patient_name)}:
-            mismatches.append(f"STAFF REVIEW - DEXA PATIENT NAME MISMATCH: {label} prints a patient name that "
-                              "differs from the staff-entered name; page excluded - confirm which patient it belongs to")
-            log(key, counts, 0, 0, "excluded", "patient gate: printed name differs from staff entry")
+        reason = _name_exclusion(reads, patient_name) if patient_name else None
+        if reason:
+            if reason.startswith("no readable"):
+                heading, problem = "UNREADABLE", "has no readable patient name"
+            else:
+                heading, problem = "MISMATCH", "prints a patient name that differs from the staff-entered name"
+            mismatches.append(f"STAFF REVIEW - DEXA PATIENT NAME {heading}: {label} {problem}; page excluded - "
+                              "confirm which patient it belongs to")
+            if excluded_sink is not None:
+                excluded_sink.append((key, reason))
+            log(key, counts, 0, 0, "excluded", f"patient gate: {problem}")  # never the printed name itself
             continue
         if dob_sink is not None:
             dobs = {scan_date(read.get("date_of_birth")) for read in reads}
