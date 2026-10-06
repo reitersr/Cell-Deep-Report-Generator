@@ -49,13 +49,14 @@ def test_full_vitality_index_renders_all_domains_and_concern_levels(tmp_path):
     assert scoring.symptom_percent_optimized(record.vitality_index) == (14 - 6) / 14 * 100
 
 
-def test_missing_vitality_index_renders_not_assessed_without_score(tmp_path):
+def test_missing_vitality_index_renders_not_provided_without_score(tmp_path):
     record, text = _rendered_text(tmp_path)
     normalized_text = " ".join(text.split())
 
     assert scoring.symptom_percent_optimized(record.vitality_index) is None
     assert "Symptom / Vitality Index" in text
-    assert "Not assessed this round" in normalized_text
+    assert "Not provided NOT PROVIDED. No Vitality Index answers were provided for this report" in normalized_text
+    assert "No Concern" not in normalized_text  # never defaulted
     assert "Seven scored domains" in text
 
 

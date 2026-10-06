@@ -154,6 +154,7 @@
   "staff_unrecognized": [],
   "scan_summary": [],
   "staff_notes": [
-    "ERROR: missing threshold for LH / male - using printed lab range"
+    "ERROR: missing threshold for LH / male - using printed lab range",
+    "LAB FLAG DIFFERS FROM CELLDEEP STATUS: hs-CRP '1.4' (lab flag H, CellDeep moderate)"
   ]
 }

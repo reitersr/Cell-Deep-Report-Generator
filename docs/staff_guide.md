@@ -19,7 +19,8 @@ and listed in the staff notes. You check those items and decide whether the repo
 - **Bloodwork Collected Date**: the "Collected" date printed on the lab report. It is required when the lab
   PDF has scanned pages, because it identifies those pages.
 - **Age**: the patient's age. It is also used to check that unnamed DEXA pages belong to this patient.
-- **Sex** and the **Vitality Index** answers.
+- **Sex** and the **Vitality Index** answers. Leave a domain at "Not Assessed" if the patient was not asked; it is
+  then taken from the provider note, or shown as not provided. Never copy answers from another patient.
 
 ## 3. The confirmation screen
 
@@ -45,6 +46,7 @@ Download the staff notes with the report and read the STAFF CHECK block first. C
 | DEXA vs bloodwork | How old the "Where you are now" scan is. Above the limit: check whether a newer DEXA scan is missing. |
 | Lab pages accepted / LAB EXCLUDED | Every lab page is accounted for. An excluded page's results are not in the report. |
 | Provider note | "read". "NOT READ" means the protocol and concerns are missing from the report. |
+| Vitality Index | Where each answer came from (upload form or provider note). "not provided" means the report shows the section as not provided and does not score it. Check that the answers are this patient's, especially when all seven read "No Concern". |
 | Scored markers / rows excluded / unrecognized rows | Excluded and unrecognized results are listed below the block, each with its reason. |
 | Name mismatches | Any source that prints a different name. |
 

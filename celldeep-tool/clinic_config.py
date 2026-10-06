@@ -37,10 +37,11 @@ CENSORED_SUMMARY_LABEL = "Reported as a limit"
 # the staff notes list every disagreement either way.
 SHOW_LAB_FLAG_WHEN_IT_DIFFERS = True
 
-# CellDeep statuses that count as disagreeing with a printed lab H/L flag. Default: only "optimal"
-# (a result the lab calls High or Low that CellDeep calls Optimal). Add "moderate" to also show the
-# line when CellDeep calls the result Moderate.
-LAB_FLAG_DISAGREES_WITH = ("optimal",)
+# CellDeep statuses for which the lab's printed flag is shown under the current result: every status
+# except "flag" (CellDeep Flagged already says it), i.e. Optimal, Moderate and None (no CellDeep tier: the
+# result is not scored). A result printed as a limit already shows its flag next to the value. Remove a
+# status to stop showing the line for it.
+LAB_FLAG_DISAGREES_WITH = ("optimal", "moderate", None)
 
 # Wording of the line under the value. {flag} is the word from LAB_FLAG_WORDS; {lab_range} is
 # " (lab range <printed range>)" when the lab printed one, otherwise empty.
@@ -81,3 +82,18 @@ DEXA_ESTIMATED_LABEL = "estimated"
 # Staff notes warn when the latest accepted DEXA scan ("Where you are now") is more than this many days
 # older than the latest bloodwork draw. The report still shows that scan; nothing is changed.
 DEXA_STALE_DAYS = 60
+
+
+# ---- Vitality Index ----------------------------------------------------------------------------------
+
+# Shown in the Symptom / Vitality Index box when no domain has an answer on the upload form or in a read
+# provider note. The box is then not scored and no domain is shown as "No Concern".
+VITALITY_NOT_PROVIDED_LABEL = "Not provided"
+
+
+# ---- Summary ------------------------------------------------------------------------------------------
+
+# Label of the patient summary bullet that lists, per system, the current results taken from a draw earlier
+# than the report's headline (latest) draw date, e.g. "Pace: TSH (03/02/2026)".
+EARLIER_DRAW_SUMMARY_LABEL = "Results from earlier draws"
+

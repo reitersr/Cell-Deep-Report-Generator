@@ -55,7 +55,8 @@
     {% endif %}
   {% endwith %}
 
-  <form action="/generate" method="post" enctype="multipart/form-data">
+  <!-- autocomplete off: the browser must never restore a previous patient's Vitality answers or fields. -->
+  <form action="/generate" method="post" enctype="multipart/form-data" autocomplete="off">
     <label>Patient Name</label>
     <input type="text" name="patient_name" value="{{ form.patient_name or '' }}" required>
 
