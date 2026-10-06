@@ -1748,9 +1748,11 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"],
                            timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS, max_retries=ANTHROPIC_MAX_RETRIES)
     reads = []
+    # The staff-identified gate decides on a 2-of-3 majority, so a third read is made where two disagree.
+    max_reads = scan.SCAN_MAX_READS if staff else 2
     for page in pages:
         try:
-            reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL))
+            reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL, max_reads))
         except scan.ScanGateError as error:
             failures.append((page.number + 1, error.reads, str(error)))
     if name_sink is not None:
@@ -2001,7 +2003,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     row_audit = []
     scan_numbers = []
     parse_exclusions = []  # pages/sections that could not be parsed deterministically
-    scan_row_exclusions = []  # scanned rows whose two reads disagree: listed under INCOMPLETE
+    scan_row_exclusions = []  # scanned result rows left out (reads disagree or a check failed): INCOMPLETE
     lab_text_pages, scan_notes = [], []
     dob_sources = []  # (source label, (y, m, d)); used only to compute age, never stored
     printed_names = []  # (source, page or None, name as printed) for the staff-notes header
@@ -2356,7 +2358,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             f"INCOMPLETE - pages/sections excluded: lab PDF page(s) {', '.join(map(str, pages))} could not be "
             "parsed deterministically; their results are NOT in this report - review them by hand",
             *[f"  - page {item['page']} ({item['section']}): {item['reason']}" for item in exclusions]]
-    notice.incomplete.extend(f"INCOMPLETE - row excluded: {item['name']} (reads disagree: {item['reads']}) - "
+    notice.incomplete.extend(f"INCOMPLETE - row excluded: {item['name']} ({scan_row_reason(item)}) - "
                              f"scanned lab page {item['page']}; not in this report"
                              for item in extracted.get("scan_row_exclusions", []))
     notice.incomplete.extend(extracted.get("dexa_incomplete", []))
@@ -2375,6 +2377,14 @@ class GenerationAborted(RuntimeError):
 _SCAN_PAGE_EXCLUDED_RE = re.compile(r"source=scan page (\d+): (.+); page excluded$")
 
 
+def scan_row_reason(item: dict) -> str:
+    """Why a scanned result row was excluded, with what each read printed: 'reads disagree: 3.1 / 2.8 / 4.0'
+    when no two reads agree, otherwise the failed check and the reads."""
+    if item.get("reason", "agreement gate").startswith("agreement gate"):
+        return f"reads disagree: {item['reads']}"
+    return f"{item['reason'].split(': ', 1)[-1]}; reads: {item['reads']}"
+
+
 def preflight_items(parse_exclusions, scan_notes, scan_row_exclusions, dexa_exclusions, dexa_info) -> list[str]:
     """Every lab page/section, scanned row and DEXA page left out of the report, one line each, for the
     confirmation step before the report is built (staff can stop there). Empty when nothing was left out."""
@@ -2382,7 +2392,7 @@ def preflight_items(parse_exclusions, scan_notes, scan_row_exclusions, dexa_excl
     for note in scan_notes:
         if match := _SCAN_PAGE_EXCLUDED_RE.match(note):
             items.append(f"Lab PDF page {match[1]} (scanned): {match[2]}")
-    items += [f"Lab PDF page {item['page']} (scanned): row {item['name']} excluded - the two reads disagree"
+    items += [f"Lab PDF page {item['page']} (scanned): result {item['name']} excluded - {scan_row_reason(item)}"
               for item in scan_row_exclusions]
     items += [f"DEXA file {key[0]} page {key[1]}: {reason}" for key, reason in dexa_exclusions]
     items += [f"DEXA file {key[0]} page {key[1]}: could not be read ({reason})"
@@ -2425,8 +2435,10 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
         for note in extracted.get("other_notes", []):
             if match := _SCAN_PAGE_EXCLUDED_RE.match(note):
                 lines.append(f"  LAB EXCLUDED page {match[1]} (scanned): {match[2]}")
-    excluded_rows = len(extracted.get("scan_row_exclusions", []))
-    lines.append(f"  Scored markers: {len(record.markers)}; rows excluded (reads disagree): {excluded_rows}; "
+    row_exclusions = extracted.get("scan_row_exclusions", [])
+    disagree = sum(scan_row_reason(item).startswith("reads disagree") for item in row_exclusions)
+    lines.append(f"  Scored markers: {len(record.markers)}; rows excluded (reads disagree): {disagree}; "
+                 f"rows excluded by other checks: {len(row_exclusions) - disagree}; "
                  f"unrecognized rows (staff list only): {len(extracted.get('unrecognized_markers', []))}")
     mismatches = [line.strip() for line in notice.name_header if "NAME MISMATCH" in line]
     mismatches += [note for note in [*notice.other_notes, *notice.dexa_summary] if "NAME MISMATCH" in note]

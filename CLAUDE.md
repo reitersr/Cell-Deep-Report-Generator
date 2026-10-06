@@ -87,13 +87,15 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      under each page's own Current/Historical or In Range/Out of Range header. Names match
      the marker library by exact alias only; anything else becomes an unrecognized-marker
      review item.
-   - Image-only pages: `_extract_scan_bloodwork` renders each page, reads it twice with the
-     vision model (no sampling settings: anthropic 1.x rejects temperature/top_p/top_k; consistency comes
-     from the agreement rule; transport retries only, no content re-read, no tie-break), and
-     `scan_bloodwork.gate_staff_identified_reads` keeps a row only when both
-     reads agree and it passes the value-format and flag-vs-range checks. A row the reads disagree on
-     is listed as "INCOMPLETE - row excluded: <marker> (reads disagree: X / Y)". Staff-entered name
-     and Collected date identify the pages.
+   - Image-only pages: `_extract_scan_bloodwork` renders each page and reads it twice with the vision model
+     (no sampling settings: anthropic 1.x accepts no temperature/top_p/top_k and has no seed); when the two
+     reads disagree on any result row, a third read is made (`scan_bloodwork.SCAN_MAX_READS`). Transport
+     retries only. `scan_bloodwork.gate_staff_identified_reads` keeps a row only when at least two reads print
+     exactly the same value, flag and range (both, when only two reads exist) and it passes the value-format
+     and flag-vs-range checks. A row no two reads agree on is listed as "INCOMPLETE - row excluded: <marker>
+     (reads disagree: X / Y / Z)"; every other excluded result row is listed with its check. A row no read
+     prints a value for (a section heading) is not a result and is never listed or confirmed. Staff-entered
+     name and Collected date identify the pages.
    - `_merge_scan_occurrences` combines both sources.
    - A section or page that cannot be parsed is excluded whole and listed under "INCOMPLETE" at the
      top of the staff notes; the rest of the report is built. A text page with result rows under no
