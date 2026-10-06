@@ -93,9 +93,12 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    measurement is kept only when both reads agree, a scan date the reads disagree on drops the
    whole scan, and `scan_dexa.attribute_pages` decides which pages are the patient's: a page printing a
    different name is dropped and listed under "INCOMPLETE - pages excluded"; a page with no name
-   confirmed by both reads is accepted with a "STAFF REVIEW - DEXA name not printed" notice unless its
-   printed age is more than `AGE_TOLERANCE_YEARS` from the patient's (name-matched pages' ages, else the
-   staff-entered age, else agreement among the unnamed pages). Kept scans are merged by date and
+   confirmed by both reads is accepted with a "STAFF REVIEW - DEXA name not printed" notice only when the
+   age it prints (header or scan rows, decimals allowed, both reads agreeing) is within
+   `clinic_config.DEXA_AGE_TOLERANCE_YEARS` of the median age across the pages, which must form a clear
+   cluster, and of the staff-entered age when entered; an unnamed page with no readable age is never
+   accepted. Excluded pages reach no history row, current/first-visit value, summary, scan image or
+   score. Kept scans are merged by date and
    sorted oldest first. Outcomes open the staff notes (DEXA block). Names everywhere compare with
    `scan_bloodwork.names_match` (any order and case, or first name plus last initial).
 4. **Provider note**: `parse_provider_note` reads only the documented template sections

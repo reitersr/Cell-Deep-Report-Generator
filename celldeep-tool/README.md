@@ -66,9 +66,12 @@ with page and reason; a scan date the reads disagree on excludes that whole scan
 another patient's name is excluded whole (history, current values and summary) and listed under
 "INCOMPLETE - pages excluded" at the top of the staff notes with its page number and the printed
 name. A page with no printed name (e.g. redacted) is accepted for the staff-entered patient with a
-"STAFF REVIEW - DEXA name not printed" notice, unless the age printed on it is more than one year
-from the patient's (ages on name-matched pages, else the staff-entered age, else the other unnamed
-pages, which must then agree). A staff-entered name matches a printed one in any order and case, or as
+"STAFF REVIEW - DEXA name not printed" notice only when the age it prints (in its header or scan rows,
+e.g. "45.2") is within two years (`clinic_config.DEXA_AGE_TOLERANCE_YEARS`) of the median age printed
+across the DEXA pages, and of the staff-entered age when one was entered. More than half of the pages
+that print an age must sit within that band, otherwise no unnamed page is accepted. An unnamed page
+that prints no readable age is excluded and flagged. Excluded pages are listed under INCOMPLETE with the
+age they print and reach no part of the patient report. A staff-entered name matches a printed one in any order and case, or as
 first name plus last-name initial ("Pat S" matches "SYNTHETIC, PAT"). Scans are merged
 by date across pages and sorted oldest first, so page order and model output order never change
 the result. Values the scanner marks "(e)" are kept and shown with an "estimated" label.

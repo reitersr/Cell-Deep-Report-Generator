@@ -508,9 +508,9 @@ CLAUDE_DEXA_HISTORY = [
      "lean_mass_lb": 110.0, "body_fat_pct": "30.4%", "vat_fat_mass_lb": 0.88, "visceral_fat_area_cm2": 71.5},
 ]
 _DEXA_SCANS = [
-    {"date": "05/12/2025", "total_mass": "172.0", "fat_mass": "58.0", "lean_mass": "108.9", "body_fat_pct": "33.7%",
+    {"date": "05/12/2025", "age": None, "total_mass": "172.0", "fat_mass": "58.0", "lean_mass": "108.9", "body_fat_pct": "33.7%",
      "vat_mass": "1.06", "vat_area": "84.0"},
-    {"date": "02/03/2026", "total_mass": "166.0", "fat_mass": "50.5", "lean_mass": "110.0", "body_fat_pct": "30.4%",
+    {"date": "02/03/2026", "age": None, "total_mass": "166.0", "fat_mass": "50.5", "lean_mass": "110.0", "body_fat_pct": "30.4%",
      "vat_mass": "0.88", "vat_area": "71.5"},
 ]
 

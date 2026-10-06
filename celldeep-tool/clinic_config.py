@@ -60,3 +60,11 @@ NO_RANGE_LABEL = "no range printed"
 
 # Status chip for that unscored case.
 NO_RANGE_CHIP_LABEL = "Not scored, no range printed"
+
+
+# ---- DEXA pages without a printed patient name ----------------------------------------------------
+
+# An unnamed DEXA page is attributed to the patient only when the age printed on it is within this many
+# years of the median age printed across the DEXA pages (and of the staff-entered age, when entered).
+# Pages further away are excluded and listed for staff; pages that print no age are never accepted.
+DEXA_AGE_TOLERANCE_YEARS = 2
