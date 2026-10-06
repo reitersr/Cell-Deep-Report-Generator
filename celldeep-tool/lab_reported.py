@@ -20,7 +20,8 @@ from schema import normalize_date_for_matching
 URINALYSIS = "Urinalysis"
 OTHER_FLAGGED = "Other Lab-Flagged Results"
 GROUP_ORDER = ("Complete Blood Count", "Chemistry", "Iron Studies", "Lipids", "Fatty Acids (OmegaCheck)",
-               "Cardiovascular", "Inflammation", "Hormones", "Infectious Disease", URINALYSIS, OTHER_FLAGGED)
+               "Cardiovascular", "Inflammation", "Hormones", "Tumor Markers", "Infectious Disease", URINALYSIS,
+               OTHER_FLAGGED)
 
 
 def _entries(group, rows):
@@ -29,8 +30,9 @@ def _entries(group, rows):
 
 LAB_REPORTED_LIBRARY = {
     **_entries("Complete Blood Count", [
-        ("White Blood Cell Count", ["white blood cell count", "wbc", "wbc count", "white blood cells"]),
-        ("Red Blood Cell Count", ["red blood cell count", "rbc", "rbc count", "red blood cells"]),
+        ("White Blood Cell Count", ["white blood cell count", "wbc", "wbc count", "white blood cells",
+                                    "white blood cell"]),
+        ("Red Blood Cell Count", ["red blood cell count", "rbc", "rbc count", "red blood cells", "red blood cell"]),
         ("Hemoglobin", ["hemoglobin", "hgb"]),
         ("Hematocrit", ["hematocrit", "hct"]),
         ("MCV", ["mcv", "mean corpuscular volume"]),
@@ -111,6 +113,10 @@ LAB_REPORTED_LIBRARY = {
         ("Estrogens, Total", ["estrogens, total", "estrogens, total, ia", "total estrogens"]),
         ("Prolactin", ["prolactin"]),
     ]),
+    **_entries("Tumor Markers", [
+        ("Free PSA", ["free psa", "psa, free"]),
+        ("% Free PSA", ["% free psa", "percent free psa", "psa, % free"]),
+    ]),
     **_entries("Infectious Disease", [
         ("SARS-CoV-2", ["sars cov2", "sars-cov-2", "sars cov 2", "sars-cov2"]),
         ("SARS-CoV-2 RNA", ["sars-cov-2 rna", "sars cov 2 rna", "sars-cov-2 rna, qual rt-pcr"]),
@@ -118,7 +124,7 @@ LAB_REPORTED_LIBRARY = {
     ]),
     **{f"{URINALYSIS} — {name}": dict(group=URINALYSIS, aliases=aliases) for name, aliases in [
         ("Color", ["color"]), ("Appearance", ["appearance"]), ("Specific Gravity", ["specific gravity"]),
-        ("pH", ["ph"]), ("Glucose", ["glucose"]), ("Bilirubin", ["bilirubin"]), ("Ketones", ["ketones"]),
+        ("pH", ["ph"]), ("Glucose", ["glucose"]), ("Bilirubin", ["bilirubin", "bili"]), ("Ketones", ["ketones"]),
         ("Protein", ["protein"]), ("Nitrite", ["nitrite"]), ("Leukocyte Esterase", ["leukocyte esterase", "leukocytes"]),
         ("Urobilinogen", ["urobilinogen"]), ("Blood", ["blood", "occult blood"]), ("WBC", ["wbc"]), ("RBC", ["rbc"]),
         ("Squamous Epithelial Cells", ["squamous epithelial cells"]), ("Bacteria", ["bacteria"]),

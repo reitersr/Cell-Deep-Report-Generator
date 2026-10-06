@@ -91,7 +91,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
 2. **Bloodwork** (`pipeline.extract`):
    - Pages with a text layer: `lab_layouts.select` picks a registered layout (today `access_medical`: header
      block for patient, DOB, age, two-digit-year Coll. Date and Fasting; rows only under a section title in the
-     Test Name | Results | Reference Range | Units pattern; the OUT OF RANGE SUMMARY only cross-checks; word results
+     Test Name | Results | Reference Range | Units pattern; the OUT OF RANGE SUMMARY is found by its heading wherever it
+     is printed and ignored silently, except that a summary line matching no table row (or a different value) is a
+     staff note; "Bili" is resolved by section or left out with a notice; word results
      and assays that differ from the CellDeep range basis are lab-reported; units are never filled in). Otherwise
      `_parse_bloodwork_tables` reads rows by printed column position
      under each page's own Current/Historical or In Range/Out of Range header. Names match

@@ -120,7 +120,7 @@ MARKER_LIBRARY = {
             "female": dict(lo=None, hi=None, disp_range="postmenopausal BHRT target only"),
             "male": dict(lo=20, hi=45, disp_range="20\u201345"),
         },
-        aliases=["estradiol", "e2"]),
+        aliases=["estradiol", "e2", "estradiol (e2)"]),
     "Testosterone, Total": dict(category="Hormones", unit="ng/dL", kind="range",
         disp_range="sex-specific default (see sex_variants)",
         default_sex="female",
@@ -243,7 +243,7 @@ MARKER_LIBRARY = {
     # ---- Also Monitored ----
     "Creatinine": dict(category="Also Monitored", unit="mg/dL", kind="range",
         lo=0.50, hi=0.97, disp_range="0.50\u20130.97",
-        aliases=["creatinine"]),
+        aliases=["creatinine", "creatinine, serum"]),
     "Troponin T, HS": dict(category="Also Monitored", unit="ng/L", kind="bounded",
         direction="lower", optimal=6, moderate=6, inclusive=False, disp_range="optimal <6",
         aliases=["troponin, high sensitivity", "hs troponin", "hs troponin t", "hs-troponin t",

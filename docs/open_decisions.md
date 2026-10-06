@@ -456,3 +456,9 @@ the lab-reported list, so it is listed for staff and on the confirmation screen 
 **Decision needed.** Add it (and any other test the real reports print) to `lab_reported.py` (shown, not scored) or
 to the marker library with thresholds.
 
+> **Status: partly done.** "PSA, Free" and "% Free PSA" are now lab-reported (shown with the lab's range and flag,
+> not scored) in a new "Tumor Markers" group, as are "White Blood Cell" / "Red Blood Cell"; "Creatinine, Serum" and
+> "Estradiol (E2)" map to the scored Creatinine and Estradiol; "Bili" is urine bilirubin under urinalysis, total
+> bilirubin under chemistry/liver, and left out with a notice under any other section. Still open: CellDeep
+> thresholds for Free PSA / % Free PSA, if the clinic wants them scored.
+

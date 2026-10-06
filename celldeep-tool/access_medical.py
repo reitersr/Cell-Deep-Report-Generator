@@ -44,7 +44,11 @@ _TITLE_RE = re.compile(r"[A-Z][A-Z0-9 /&,.'-]*[A-Z)]")
 _EXPLANATORY_NAME_RE = re.compile(r"^(?:stage|grade|class|risk|probability|morning|afternoon|evening|note|"
                                   r"comment|method|performed|reference)\b", re.IGNORECASE)
 _CONTINUED_RE = re.compile(r"\s*\(continued(?: on next page)?\)\s*$", re.IGNORECASE)
-_SUMMARY_TITLE = "OUT OF RANGE SUMMARY"
+_SUMMARY_HEADING_RE = re.compile(r"\s*out\s+of\s+range\s+summary\b", re.IGNORECASE)
+_FLAGS = ("H", "L", "HH", "LL")
+# Printed names that mean a different test depending on the section: "Bili" is urine bilirubin under urinalysis
+# and total bilirubin under chemistry/liver. Under any other section it is left out with a notice, never guessed.
+_SECTION_SCOPED_NAMES = {"bili": ("URINALYSIS", "CHEMISTRY", "LIVER", "HEPATIC")}
 _UNITLESS_RE = re.compile(r"\bratio\b|^ph$|^specific gravity$", re.IGNORECASE)
 
 _HEADER_FIELDS = {
@@ -200,7 +204,7 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
     audit = row_audit if row_audit is not None else []
     excluded = exclusions if exclusions is not None else []
     notes = review_notes if review_notes is not None else []
-    headers, summary, table, no_units, staff = [], {}, {}, [], []
+    headers, summary_lines, table, no_units, staff = [], [], {}, [], []
     section = None
 
     def exclude(page, where, reason):
@@ -227,33 +231,55 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
         date = header["collected"]
         start, columns = found
         mode = "table"
-        for words in lines[start + 1:]:
+        for index, words in enumerate(lines):
             text = _text(words)
+            # The OUT OF RANGE SUMMARY is recognized by its heading wherever it is printed (before or after the
+            # column header, across columns) and its lines are kept only to cross-check the result tables.
+            if _SUMMARY_HEADING_RE.match(text):
+                mode, section = "summary", None
+                continue
+            if index == start:
+                if mode == "summary":
+                    mode = "table"
+                continue
+            if mode == "summary" and index < start:
+                summary_lines.append((text, number))
+                continue
+            if index < start:
+                continue  # the header block
             if _CONTINUED_RE.fullmatch(text) or re.fullmatch(r"\(continued on next page\)", text, re.I):
                 continue
             cells, by_column = _split_columns(words, columns)
             only_name = not (cells["results"] or cells["range"] or cells["units"])
             title = _CONTINUED_RE.sub("", cells["name"]).strip()
             if only_name and _TITLE_RE.fullmatch(title) and title == title.upper() and len(title) >= 4:
-                if title == _SUMMARY_TITLE:
-                    mode, section = "summary", None
-                else:
-                    mode, section = "table", title
+                mode, section = "table", title
+                continue
+            if mode == "summary":
+                summary_lines.append((text, number))
                 continue
             indented = by_column["name"] and by_column["name"][0][0] > columns["name"] + _INDENT_PT
             row, reason = (None, "indented explanatory line") if indented else _row(cells)
             name = " ".join(cells["name"].split())
             if row is None:
-                if cells["results"] and not indented and _known(name, section):
+                # A known test name on a line that does not fit the row pattern is excluded with a notice, unless
+                # that test was already read in this section: then the line is its interpretation text (e.g. the
+                # "% Free PSA" probability table under the "% Free PSA" result).
+                kind = "urine" if (section or "").upper().startswith("URINALYSIS") else "serum"
+                already_read = (kind, name.casefold()) in table and table[(kind, name.casefold())][3] == section
+                if cells["results"] and not indented and not already_read and _known(name, section):
                     exclude(number, section or "no section", f"row {name!r} not read: {reason}")
                 continue
             value, flag, printed_range, unit = row
             key = name.casefold()
-            if mode == "summary":
-                summary[key] = (name, value, flag, number)
-                continue
             if section is None:
                 exclude(number, "no section", f"row {name!r} is printed under no section title; not read")
+                continue
+            scope = _SECTION_SCOPED_NAMES.get(key)
+            if scope and not any(word in section.upper() for word in scope):
+                exclude(number, section, f"row {name!r} means a different test depending on its section "
+                                         f"({', '.join(scope)}); under {section!r} it cannot be told apart, so it "
+                                         "was not read")
                 continue
             # Urine and serum tests share names (Glucose, Protein, Bilirubin): they are different results.
             key = ("urine" if section.upper().startswith("URINALYSIS") else "serum", key)
@@ -262,7 +288,7 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
                     raise pipeline.BloodworkHardStop(f"{name} on {date}: conflicting results on pages "
                                                      f"{table[key][2]} and {number}")
                 continue  # the same row printed twice is read once
-            table[key] = (value, flag, number)
+            table[key] = (value, flag, number, section)
             label = f"{NAME} Acc# {header.get('accession', '?')} (collected {date}); {section}"
             heading = "Urinalysis" if section.upper().startswith("URINALYSIS") else section
             start_occ, start_unk = len(occurrences), len(unrecognized)
@@ -314,15 +340,7 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
                           "occurrences": [dict(item) for item in occurrences[start_occ:]],
                           "unrecognized": unrecognized[start_unk:]})
 
-    for key, (name, value, flag, page) in sorted(summary.items()):
-        printed = table.get(("serum", key)) or table.get(("urine", key))
-        if printed is None:
-            staff.append(f"OUT OF RANGE SUMMARY: {name} {value} {flag or ''} (page {page}) appears in the summary "
-                         "but in no result table; not used - check the PDF".replace("  ", " "))
-        elif printed[:2] != (value, flag):
-            staff.append(f"OUT OF RANGE SUMMARY DISAGREES: {name} is {value} {flag or ''} in the summary (page "
-                         f"{page}) but {printed[0]} {printed[1] or ''} in the result table (page {printed[2]}); "
-                         "the table value is used - check the PDF".replace("  ", " "))
+    staff.extend(summary_checks(summary_lines, table))
     info = {"layout": NAME, "headers": headers, "no_units": no_units, "notes": staff}
     if headers:
         for field in ("patient", "dob", "age", "sex", "collected", "fasting", "accession"):
@@ -342,6 +360,38 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
                      + "; the report shows these results without units (none are filled in)")
     notes.extend(staff)
     return occurrences, unrecognized, info
+
+
+def summary_checks(summary_lines, table):
+    """Each OUT OF RANGE SUMMARY line must repeat a row printed in a result table (same name, value and flag).
+    Lines that do (the normal case) are ignored silently; a line naming no table row, or printing a different
+    value or flag, is a staff notice. Lines with no digit (the block's own column labels, notes) are skipped."""
+    rows = {}  # printed name (casefolded) -> [(value, flag, page)]
+    for (_, key), (value, flag, page, _section) in table.items():
+        rows.setdefault(key, []).append((value, flag, page))
+    notes = []
+    for text, page in summary_lines:
+        line = " ".join(text.split())
+        if not re.search(r"\d", line):
+            continue
+        names = [name for name in rows if line.casefold().startswith(name + " ")]
+        if not names:
+            notes.append(f"OUT OF RANGE SUMMARY: {line!r} (page {page}) matches no row in the result tables; "
+                         "not used - check the PDF")
+            continue
+        name = max(names, key=len)
+        tokens = line[len(name):].split()
+        if len(tokens) > 1 and tokens[0] in ("<", ">", "<=", ">="):
+            tokens = [tokens[0] + tokens[1], *tokens[2:]]
+        match = _RESULT_RE.fullmatch(" ".join(tokens[:2])) if len(tokens) > 1 and tokens[1] in _FLAGS else None
+        match = match or (_RESULT_RE.fullmatch(tokens[0]) if tokens else None)
+        printed = (match["value"].replace(" ", ""), match["flag"]) if match else None
+        if printed not in [(value, flag) for value, flag, _ in rows[name]]:
+            table_value = "; ".join(f"{value} {flag or ''}".strip() + f" (page {row_page})"
+                                    for value, flag, row_page in rows[name])
+            notes.append(f"OUT OF RANGE SUMMARY DISAGREES: {line!r} (page {page}) does not match the result table "
+                         f"({table_value}); the table value is used - check the PDF")
+    return notes
 
 
 def _known(name, section):

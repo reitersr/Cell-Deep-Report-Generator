@@ -119,7 +119,8 @@ def build(name, folder):
     if name.startswith("access_medical"):
         # One draw (Access Medical Laboratories layout) and one DEXA scan: names redacted, the age printed on one
         # page only, no VAT/SAT page.
-        labs = access_medical_lab.write(folder / "labs.pdf")
+        limited = name == "access_medical_limited"  # the limited male panel of the clinic's first run
+        labs = access_medical_lab.write(folder / "labs.pdf", access_medical_lab.limited_pages() if limited else None)
         dexa = dexa_fx.write_pdf(folder / "dexa.pdf", ["access-image", "access-segmental"])
         scan = dexa_fx.scan(ACCESS_SCAN_DATE, "172.0", "30.1", "136.4", "18.1 %")
         reads = {(str(dexa), 1): [dexa_fx.read([scan], patient_name=None, age="21.5")] * 2,
@@ -134,7 +135,7 @@ def build(name, folder):
 
 ACCESS_SCAN_DATE = "07/20/2026"
 SCENARIOS = ["quest_digital", "chl_digital", "labcorp_digital", "scanned", "mixed", "variant", "scanned_noisy",
-             "clinic_dexa", "clinic_dexa_no_age", "access_medical"]
+             "clinic_dexa", "clinic_dexa_no_age", "access_medical", "access_medical_limited"]
 
 
 def run_scenario(name, folder, monkeypatch=None):

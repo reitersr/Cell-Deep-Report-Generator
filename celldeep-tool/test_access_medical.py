@@ -83,12 +83,16 @@ def test_the_summary_block_is_never_counted_and_is_cross_checked(tmp_path):
     assert counts == {"MCV": 1, "BUN/Creat Ratio": 1, "Estradiol": 1}
     assert not any("OUT OF RANGE SUMMARY" in note for note in notes)  # the summary agrees with the table
     disagreeing = [("MCV", "101 H", "80 - 100", "fL"), ("Estradiol", "50 H", "8 - 35", "pg/mL"),
-                   ("Ferritin", "9 L", "38 - 380", "ng/mL")]
-    *_, notes = _parse(tmp_path, am.pages(summary=disagreeing))
-    assert ("OUT OF RANGE SUMMARY DISAGREES: Estradiol is 50 H in the summary (page 1) but 52 H in the result "
-            "table (page 4); the table value is used - check the PDF") in notes
-    assert ("OUT OF RANGE SUMMARY DISAGREES: Ferritin is 9 L in the summary (page 1) but 120 in the result table "
-            "(page 3); the table value is used - check the PDF") in notes
+                   ("Ferritin", "9 L", "38 - 380", "ng/mL"), ("Zinc", "55 L", "60 - 130", "ug/dL")]
+    *_, excluded, notes = _parse(tmp_path, am.pages(summary=disagreeing))
+    assert ("OUT OF RANGE SUMMARY DISAGREES: 'Estradiol 50 H 8 - 35 pg/mL' (page 1) does not match the result "
+            "table (52 H (page 4)); the table value is used - check the PDF") in notes
+    assert ("OUT OF RANGE SUMMARY DISAGREES: 'Ferritin 9 L 38 - 380 ng/mL' (page 1) does not match the result "
+            "table (120 (page 3)); the table value is used - check the PDF") in notes
+    assert ("OUT OF RANGE SUMMARY: 'Zinc 55 L 60 - 130 ug/dL' (page 1) matches no row in the result tables; not "
+            "used - check the PDF") in notes
+    assert not any("MCV" in note for note in notes if "SUMMARY" in note)  # an agreeing row stays silent
+    assert excluded == []  # the summary never reaches the confirmation screen
 
 
 def test_the_header_supplies_patient_dob_age_two_digit_date_and_fasting(tmp_path):
@@ -255,3 +259,84 @@ def test_nothing_staff_only_reaches_the_patient_report(report):
                    "STAFF CHECK", "INCOMPLETE"):
         assert marker not in report["text"], marker
     assert without_staff_check(report["review"])
+
+
+# --- the limited male panel of the clinic's first run -------------------------------------------------------
+
+def test_limited_panel_reads_every_row_once_and_the_summary_silently(tmp_path):
+    occurrences, unrecognized, _, audit, excluded, notes = _parse(tmp_path, am.limited_pages())
+    assert _rows(audit) == am.LIMITED_EXPECTED
+    assert excluded == []  # nothing reaches the confirmation screen
+    assert not any("SUMMARY" in note for note in notes)  # the summary agrees with the tables: no staff note
+    items, remaining, _ = pipeline.lab_reported.build(unrecognized)
+    assert remaining == []  # every name is recognized
+    assert {"Free PSA", "% Free PSA", "White Blood Cell Count", "Red Blood Cell Count"} <= {i["name"] for i in items}
+
+
+def test_a_summary_row_missing_from_the_tables_warns(tmp_path):
+    summary = [*am.LIMITED_SUMMARY, ("Ferritin", "12 L", "38 - 380", "ng/mL")]
+    *_, excluded, notes = _parse(tmp_path, am.limited_pages(summary=summary))
+    assert notes.count("OUT OF RANGE SUMMARY: 'Ferritin 12 L 38 - 380 ng/mL' (page 1) matches no row in the result "
+                       "tables; not used - check the PDF") == 1
+    assert excluded == []
+
+
+@pytest.mark.parametrize(("printed", "section", "canonical"), [
+    ("White Blood Cell", None, "White Blood Cell Count"), ("Red Blood Cell", None, "Red Blood Cell Count"),
+    ("PSA, Free", "TUMOR MARKERS", "Free PSA"), ("% Free PSA", "TUMOR MARKERS", "% Free PSA"),
+    ("Bili", "URINALYSIS GROSS EXAMINATION", "Urinalysis — Bilirubin"), ("Bili", "GENERAL CHEMISTRY", "Bilirubin, Total"),
+])
+def test_lab_reported_aliases(printed, section, canonical):
+    assert pipeline.lab_reported.lookup(printed, section)[0] == canonical
+
+
+@pytest.mark.parametrize(("printed", "canonical"), [("Creatinine, Serum", "Creatinine"), ("Estradiol (E2)", "Estradiol")])
+def test_scored_aliases(printed, canonical):
+    assert pipeline._match_row_name(printed, "GENERAL CHEMISTRY")[0] == canonical
+
+
+def test_bili_is_resolved_by_section_and_left_out_when_ambiguous(tmp_path):
+    occurrences, unrecognized, _, _, excluded, _ = _parse(tmp_path, am.limited_pages())
+    shown = {item["name"]: item["results"][0]["disp_value"]
+             for item in pipeline.lab_reported.build(unrecognized)[0]}
+    assert shown["Urinalysis — Bilirubin"] == "Negative" and shown["Bilirubin, Total"] == "0.7"
+    _, unrecognized, _, audit, excluded, _ = _parse(tmp_path, am.limited_pages(bili_section="ENDOCRINE EVALUATION"))
+    assert excluded == [{"page": 1, "section": "ENDOCRINE EVALUATION", "reason": "row 'Bili' means a different test "
+                         "depending on its section (URINALYSIS, CHEMISTRY, LIVER, HEPATIC); under 'ENDOCRINE EVALUATION' "
+                         "it cannot be told apart, so it was not read"}]
+    assert "Bilirubin, Total" not in {item["name"] for item in pipeline.lab_reported.build(unrecognized)[0]}
+
+
+def test_interpretation_text_after_a_result_is_not_a_row(tmp_path):
+    _, unrecognized, _, audit, excluded, _ = _parse(tmp_path, am.limited_pages())
+    assert sum(row["name"] == "% Free PSA" for row in audit) == 1
+    values = {u["cells"][0]["disp_value"] for u in unrecognized}
+    assert not values & {"56%", "28%", "0 - 10%", "Probability of", "60 to 89"}
+    assert not any(row["name"].startswith(("Stage", "eGFR is", "Interpretation")) for row in audit)
+
+
+@pytest.fixture(scope="module")
+def limited_report(tmp_path_factory):
+    return run_scenario("access_medical_limited", tmp_path_factory.mktemp("limited") / "run")
+
+
+def test_limited_report_safeguards(limited_report):
+    text, review = limited_report["text"], limited_report["review"]
+    assert limited_report["confirmation"] == []
+    # Free/Bioavailable testosterone: lab-reported with the lab's own range, never against a CellDeep range.
+    assert "Free Testosterone 5.7 - 17.9 — 9.8" in text and "Bioavailable Testosterone 126 - 412 — 240" in text
+    assert "100–180" not in text and "250–500" not in text
+    # No printed unit, no unit shown.
+    assert "600–900 — 540 August 7, 2026" in text and "measured 540 on 08/07/2026" in text  # "540", no unit
+    assert "Cortisol, Total (AM) Not scored, no range printed no range printed — 12.0 August 7, 2026" in text
+    # Glucose drawn non-fasting: staff note only.
+    assert "NON-FASTING DRAW: the lab header prints 'Fasting: N'; Glucose (fasting) was drawn non-fasting" in review
+    assert "NON-FASTING" not in text
+    # One draw and one scan: no trend or change claims anywhere.
+    for claim in ("improved", "moved from", "down from", "up from", "increased", "decreased", "since your first",
+                  "When you came in", " to 0.", "change since"):
+        assert claim not in text, claim
+    # DEXA with no VAT line: none shown, none invented, a staff notice.
+    assert "lb VAT" not in text and "VAT" not in text and "Visceral fat" not in text  # (the disclaimer names
+    assert "DEXA VAT/SAT NOT FOUND" in review                                        # "visceral-fat ranges" only)
+    assert "OUT OF RANGE SUMMARY" not in review
