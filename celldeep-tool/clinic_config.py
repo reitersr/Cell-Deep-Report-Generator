@@ -69,9 +69,14 @@ NO_RANGE_CHIP_LABEL = "Not scored, no range printed"
 # Pages further away are excluded and listed for staff; pages that print no age are never accepted.
 DEXA_AGE_TOLERANCE_YEARS = 2
 
-# Label shown after a DEXA body fat % that the scan did not print and that is computed from the printed
-# fat and total mass instead. A printed body fat % is always used when one was printed.
+# Label shown after a DEXA body fat % that the scan did not print and that is computed instead, as
+# fat / (fat + lean) from the printed fat and lean mass (the scan's own definition). A printed body fat %
+# is always used when one was printed.
 DEXA_COMPUTED_LABEL = "computed"
+
+# Label shown after a DEXA value the scan printed with its "(e)" estimate marker. The printed value is used
+# (in the history, the first/current scan, the summary line, the headline and the score) and labelled.
+DEXA_ESTIMATED_LABEL = "estimated"
 
 # Staff notes warn when the latest accepted DEXA scan ("Where you are now") is more than this many days
 # older than the latest bloodwork draw. The report still shows that scan; nothing is changed.

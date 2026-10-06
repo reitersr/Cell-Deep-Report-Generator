@@ -39,6 +39,7 @@ from generation_prompt import build_copy
 import clinic_config
 import lab_reported
 import scoring
+from dexa_reference import dexa_percent_optimized
 import template
 
 if os.path.exists(".env"):
@@ -2351,6 +2352,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     notice.scan_summary = list(extracted.get("scan_summary", []))
     notice.dexa_summary = list(extracted.get("dexa_summary", []))
     notice.other_notes.extend(dexa_staleness_notes(record.dexa_history, extracted.get("latest_draw_date")))
+    notice.other_notes.extend(dexa_score_notes(record))
     exclusions = extracted.get("parse_exclusions", [])
     if exclusions:
         pages = sorted({item["page"] for item in exclusions})
@@ -2447,9 +2449,9 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
 
 
 def dexa_staleness_notes(dexa_history: list, latest_draw: str | None) -> list[str]:
-    """Warn staff when the scan shown as "Where you are now" (the latest complete accepted scan) is more
+    """Warn staff when the scan shown as "Where you are now" (the latest accepted body-composition scan) is more
     than clinic_config.DEXA_STALE_DAYS older than the latest bloodwork draw. Nothing in the report changes."""
-    complete = [d for d in dexa_history if None not in (d.total_mass_lb, d.fat_mass_lb, d.lean_mass_lb)]
+    complete = scoring.body_composition_scans(dexa_history)
     scan_day = _normalize_date_for_matching(complete[-1].date_display) if complete else None
     draw_day = _normalize_date_for_matching(latest_draw or "")
     if not (isinstance(scan_day, tuple) and isinstance(draw_day, tuple)):
@@ -2459,6 +2461,24 @@ def dexa_staleness_notes(dexa_history: list, latest_draw: str | None) -> list[st
         return []
     return [f"DEXA SCAN OLDER THAN BLOODWORK: \"Where you are now\" shows the DEXA scan of {complete[-1].date_display}, "
             f"{gap} days before the latest bloodwork draw ({latest_draw}); confirm no newer DEXA scan was left out"]
+
+
+def dexa_score_notes(record: PatientRecord) -> list[str]:
+    """The patient report leaves out the DEXA "% optimized" figure when it has nothing to score (it is never
+    shown as "—% optimized"); this staff note says so and why."""
+    if not record.dexa_history:
+        return []
+    scans = scoring.body_composition_scans(record.dexa_history)
+    latest = scans[-1] if scans else record.dexa_history[-1]
+    if dexa_percent_optimized(latest.body_fat_pct, latest.visceral_fat_area_cm2, record.sex) is not None:
+        return []
+    missing = [] if record.sex in ("male", "female") else ["no sex entered for the body fat ranges"]
+    if latest.body_fat_pct is None:
+        missing.append("no body fat % (printed, or computable from printed fat and lean mass) for that scan")
+    if latest.visceral_fat_area_cm2 is None:
+        missing.append("no VAT area printed for that scan")
+    return [f"DEXA SCORE NOT SHOWN: the patient report shows no DEXA \"% optimized\" for the scan of "
+            f"{latest.date_display} ({'; '.join(missing)}); the Structure score is left out of the overall score"]
 
 
 def name_header(staff_name: str | None, printed: list) -> list[str]:

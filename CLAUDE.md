@@ -111,8 +111,13 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    and of the staff-entered age; an unnamed page with no age is accepted only when every scan date it
    shows is on a validated page. Every other page is listed under "INCOMPLETE - pages excluded" with its
    dates and reason, and reaches no history row, current/first-visit value, summary, scan image or score.
-   The printed body fat % is used whenever printed; it is computed from fat/total only when never printed
-   (labelled `clinic_config.DEXA_COMPUTED_LABEL`) and never when printed but contested ("withheld").
+   The printed body fat % is used whenever printed, including "(e)" values (labelled
+   `clinic_config.DEXA_ESTIMATED_LABEL`; a value printed identically with "(e)" on only some reads/pages is kept
+   as estimated); it is computed as fat / (fat + lean) only when never printed (labelled
+   `clinic_config.DEXA_COMPUTED_LABEL`) and never when printed but contested ("withheld"). The same value and
+   label appear in the history, "When you came in", "Where you are now" (the latest accepted scan with body
+   composition, `scoring.has_body_composition`), the summary line, the headline and the score; with nothing to
+   score, the "% optimized" figure is left out (never "—%") and the staff notes say why (`dexa_score_notes`).
    Staff notes warn when "Where you are now" is older than the latest bloodwork by more than
    `DEXA_STALE_DAYS`. Kept scans are merged by date and
    sorted oldest first. Outcomes open the staff notes (DEXA block). Names everywhere compare with

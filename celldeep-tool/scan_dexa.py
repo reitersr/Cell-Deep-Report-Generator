@@ -6,8 +6,9 @@ only one read printed, or that the reads disagree on, is excluded and listed for
 date the two reads disagree on excludes that whole scan. A page that prints a different patient
 name than the staff entry is excluded. Kept scans are grouped by date across pages, merged, and
 sorted oldest first, so the history never depends on page order or model output order.
-Values the scanner marks "(e)" are kept and flagged as estimated. Nothing is computed, converted
-or carried between dates here.
+Values the scanner marks "(e)" are kept and flagged as estimated; a value both reads (or several pages)
+print identically is kept even when only some of them show the "(e)" marker, and is then shown as estimated.
+Nothing is computed, converted or carried between dates here.
 """
 
 import json
@@ -257,6 +258,7 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
     appended to excluded_sink (reasons may hold the printed name, so they go to the staff notes only,
     never to logs)."""
     notes, mismatches, page_lines, kept_by_page = [], [], [], {}
+    estimate_notes = []  # values kept and shown as estimated because only some reads/pages print "(e)"
     candidates = {}  # date -> field -> {(value, text, estimated): [page labels]}
     contested = set()  # (date, field) printed on an accepted page but excluded there
 
@@ -329,12 +331,17 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                     continue
                 if a is None or b is None:
                     reason = "printed in only one read"
-                elif a[0] != b[0] or a[2] != b[2]:
+                elif a[0] != b[0]:
                     reason = "independent reads disagree"
                 else:
+                    # Both reads print the same number. The "(e)" marker only labels the value: when one read
+                    # sees it and the other does not, the value stands and is shown as estimated.
+                    if a[2] != b[2]:
+                        estimate_notes.append(f"{label}: scan {_display(day)} {field_label} - the reads agree on the "
+                                              "value but only one shows the \"(e)\" marker; shown as estimated")
                     text = min(a[1], b[1], key=lambda t: (len(t), t))
                     candidates.setdefault(day, {}).setdefault(field, {}).setdefault(
-                        (a[0], text, a[2]), []).append(label)
+                        (a[0], text, a[2] or b[2]), []).append(label)
                     kept_fields += 1
                     continue
                 notes.append(f"{label}: scan {_display(day)} {field_label} excluded - {reason}")
@@ -364,7 +371,7 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
         for field, (target, field_label) in FIELDS.items():
             options = candidates[day].get(field, {})
             values = {value for value, _, _ in options}
-            if len(values) > 1 or len({estimated for _, _, estimated in options}) > 1:
+            if len(values) > 1:
                 pages_listed = sorted({page for labels in options.values() for page in labels})
                 notes.append(f"DEXA scan {_display(day)} {field_label} excluded - pages {', '.join(pages_listed)} "
                              "print different values")
@@ -376,7 +383,13 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                 if (day, field) in contested:
                     reading["withheld"].append(target)
                 continue
-            value, text, estimated = min(options, key=lambda option: (len(option[1]), option[1]))
+            value, text, _ = min(options, key=lambda option: (len(option[1]), option[1]))
+            # The same number on several pages, marked "(e)" on some of them: it is an estimate wherever shown.
+            estimated = any(marked for _, _, marked in options)
+            if estimated and not all(marked for _, _, marked in options):
+                pages_listed = sorted({page for labels in options.values() for page in labels})
+                estimate_notes.append(f"DEXA scan {_display(day)} {field_label} {text} - pages {', '.join(pages_listed)} print "
+                             "the same value, marked \"(e)\" on some pages only; shown as estimated")
             reading[target] = f"{text}%" if field == "body_fat_pct" else value
             if estimated:
                 reading["estimated"].append(target)
@@ -395,6 +408,9 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                            f"{estimated}")
         summary.append(f"  Excluded: {len(notes)} item(s)")
         summary += [f"    - {note}" for note in notes]
+        if estimate_notes:
+            summary.append("  Shown as estimated:")
+            summary += [f"    - {note}" for note in estimate_notes]
         if page_lines:
             summary.append("  Page outcomes:")
             summary += [f"    - {line}" for line in page_lines]

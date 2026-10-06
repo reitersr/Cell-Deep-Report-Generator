@@ -494,10 +494,10 @@ def _default_structure_headline(record: PatientRecord) -> str:
 
 
 def _is_complete_dexa_reading(d: DexaReading) -> bool:
-    """A partial scan (e.g. a VAT-only follow-up, see scoring.normalize_dexa_body_fat) has real
-    None for total/fat/lean mass - it belongs in the full scan history, never as the snapshot
-    "current"/"when you came in" reading, which needs actual body-composition numbers to show."""
-    return d.total_mass_lb is not None and d.fat_mass_lb is not None and d.lean_mass_lb is not None
+    """A partial scan (e.g. a VAT-only follow-up) belongs in the full scan history, never as the snapshot
+    "current"/"when you came in" reading. One definition for the report, copy and staff notes:
+    scoring.has_body_composition (a body fat %, or total, fat and lean mass)."""
+    return scoring.has_body_composition(d)
 
 
 def _first_complete_dexa_reading(dexa_history: list[DexaReading]) -> DexaReading:
@@ -514,7 +514,8 @@ def _dexa_value(reading: DexaReading, field: str, suffix: str = "") -> str:
     value = getattr(reading, field)
     if value is None:
         return f"{fmt(value)}{suffix}"
-    label = ' <span class="dexa-est">estimated</span>' if field in (reading.estimated or []) else ""
+    label = (f' <span class="dexa-est">{_html(clinic_config.DEXA_ESTIMATED_LABEL)}</span>'
+             if field in (reading.estimated or []) else "")
     if field in (reading.computed or []):
         label += f' <span class="dexa-est">{_html(clinic_config.DEXA_COMPUTED_LABEL)}</span>'
     return f"{fmt(value)}{suffix}{label}"
@@ -564,6 +565,11 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
     # only a genuine 2+ scan comparison earns the before/after layout and improvement badge -
     # a single scan on file has nothing to compare against, so it gets one "current scan" box
     has_comparison = first is not latest  # two different complete scans, as in the summary line
+    # No DEXA score (no body fat % or VAT area for the current scan, or no sex entered): the stat is left out,
+    # never shown as "—% optimized"; the staff notes say why (pipeline.dexa_score_notes).
+    optimized_html = ("" if structure_now in (None, "") else
+                      f'<div class="dexa-stat"><div class="num" style="color:{color};">{fmt(structure_now)}%</div>'
+                      '<div class="cap">Optimized</div></div>')
     badge_html = f'<div class="dexa-badge">{CHECK}</div>' if has_comparison else ""
     if has_comparison:
         stat_block_html = f'''<div class="dexa-stat-block">
@@ -581,7 +587,7 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
               <div class="dexa-stat"><div class="num">{_dexa_value(latest, "body_fat_pct")}</div><div class="cap">Body fat</div></div>
               <div class="dexa-stat"><div class="num">{_dexa_value(latest, "fat_mass_lb")}</div><div class="cap">Fat mass, lb</div></div>
               <div class="dexa-stat"><div class="num">{_dexa_value(latest, "lean_mass_lb")}</div><div class="cap">Lean mass, lb</div></div>
-              <div class="dexa-stat"><div class="num" style="color:{color};">{fmt(structure_now)}%</div><div class="cap">Optimized</div></div>
+              {optimized_html}
             </div>
           </div>
         </div>'''
@@ -593,7 +599,7 @@ def dexa_panel(record: PatientRecord, copy, roll, dexa_img_b64: str | None):
               <div class="dexa-stat"><div class="num">{_dexa_value(latest, "body_fat_pct")}</div><div class="cap">Body fat</div></div>
               <div class="dexa-stat"><div class="num">{_dexa_value(latest, "fat_mass_lb")}</div><div class="cap">Fat mass, lb</div></div>
               <div class="dexa-stat"><div class="num">{_dexa_value(latest, "lean_mass_lb")}</div><div class="cap">Lean mass, lb</div></div>
-              <div class="dexa-stat"><div class="num" style="color:{color};">{fmt(structure_now)}%</div><div class="cap">Optimized</div></div>
+              {optimized_html}
             </div>
           </div>
         </div>'''

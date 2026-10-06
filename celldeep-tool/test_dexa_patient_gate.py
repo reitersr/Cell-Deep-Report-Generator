@@ -253,7 +253,10 @@ def test_body_fat_computed_only_when_never_printed_and_labelled(tmp_path, monkey
     unprinted = {"a": _same(_scan(S1[0], S1[1], S1[2], S1[3], None), _scan(S4[0], S4[1], S4[2], S4[3], None),
                             patient_name=None, age="45.4")}
     text, _, review, _ = _generate(tmp_path, monkeypatch, ["a"], pages=unprinted)
-    assert "24.7% computed" in text and "14.9% computed" in text
+    # fat / (fat + lean), the scan's own definition: 44.6 / 174.5 = 25.6%, 25.3 / 163.9 = 15.4%.
+    assert "25.6% computed" in text and "15.4% computed" in text
+    assert "24.7%" not in text and "14.9%" not in text  # never fat / total mass
+    assert "Body fat 25.6% (computed) on 11/03/2025 to 15.4% (computed) on 04/20/2026." in text
     assert "DEXA scan dates accepted: 11/03/2025 (body fat % computed), 04/20/2026 (body fat % computed)" in review
 
 
