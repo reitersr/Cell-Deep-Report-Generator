@@ -51,6 +51,10 @@ cortisol have different expected values. That is an inference the source does no
 - C. Ask for the draw time at upload and label accordingly.
 
 **Proposal.** B. It matches "never infer": the label comes from print or staff, never assumed.
+
+> **Status: implemented for the Access Medical layout** (`pipeline.label_cortisol`): "(AM)" is kept only when the
+> printed Coll. Time is inside the lab's printed morning window, and the collection time is shown next to the value.
+> Quest and Cleveland HeartLab reports print no collection time and are unchanged.
 Cortisol also has no CellDeep threshold today (item 9), so it is scored only against the printed
 lab range.
 
@@ -437,6 +441,10 @@ fasting (no wording was changed).
 
 **Decision needed.** For a non-fasting draw: keep the fasting label and score, relabel ("Glucose (non-fasting)"),
 or show it lab-reported and unscored.
+
+> **Status: decided for the Access Medical layout.** On "Fasting: N" glucose is shown as lab-reported "Glucose
+> (non-fasting)" with the lab's range and flag and the note in `clinic_config.NON_FASTING_GLUCOSE_NOTE`, never scored.
+> Still open: Fasting Insulin on a non-fasting draw, and labs whose header prints no fasting status.
 
 ## 23. Single-draw and single-scan wording
 

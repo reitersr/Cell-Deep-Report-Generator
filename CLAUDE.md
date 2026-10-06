@@ -93,7 +93,11 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      block for patient, DOB, age, two-digit-year Coll. Date and Fasting; rows only under a section title in the
      Test Name | Results | Reference Range | Units pattern; the OUT OF RANGE SUMMARY is found by its heading wherever it
      is printed and ignored silently, except that a summary line matching no table row (or a different value) is a
-     staff note; "Bili" is resolved by section or left out with a notice; word results
+     staff note (summary-looking rows under no section that repeat a table row are ignored too); "Bili" is resolved by
+     section or left out with a notice; "Fasting: N" shows glucose as lab-reported "Glucose (non-fasting)" with
+     `clinic_config.NON_FASTING_GLUCOSE_NOTE`, never scored; cortisol keeps "(AM)" only when the printed Coll. Time
+     is inside the lab's printed morning window (`pipeline.label_cortisol`) and shows the time; lab-reported rows show
+     the printed unit; word results
      and assays that differ from the CellDeep range basis are lab-reported; units are never filled in). Otherwise
      `_parse_bloodwork_tables` reads rows by printed column position
      under each page's own Current/Historical or In Range/Out of Range header. Names match
@@ -147,7 +151,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    `markers_reference.py` thresholds, collects staff notices. Unrecognized rows that match
    `lab_reported.py`, and any other row the lab flagged H/L, become `record.lab_reported`
    (shown, never scored). `coverage_gaps` checks that every printed row reached the report or
-   the staff notes and raises a `COVERAGE GAP` note otherwise.
+   the staff notes and raises a `COVERAGE GAP` note otherwise. `verify_extraction_completeness` warns "FOUND IN
+   SOURCE BUT MISSING" only for a printed line that starts with a test name followed by a result and that no
+   parser read (`_pdf_row_text` gives lines by word position); unit text, headings and prose never count. The
+   STAFF CHECK "Scored markers" count is the markers with a CellDeep tier, as in the report.
 6. **Copy and render**: `generation_prompt.build_copy` fills patient-facing text;
    `template.render` writes the patient PDF. Full-panel column headers name a date only when every
    value in the column is from it (`template.panel_column_headers`). The lab's own flag is shown under a

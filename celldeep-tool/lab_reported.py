@@ -169,9 +169,11 @@ def _results(unknown):
         if not cell.get("present") or cell.get("status") == "not_performed" or not cell.get("disp_value"):
             continue
         flag = cell.get("lab_flag")
+        unit = (unknown.get("raw_unit") or "").strip()
         results.append({"date_display": cell["date_display"], "disp_value": cell["disp_value"],
                         "lab_flag": flag if flag in _FLAGS else None,
-                        "lab_range": (unknown.get("raw_range") or "").strip() or None})
+                        "lab_range": (unknown.get("raw_range") or "").strip() or None,
+                        **({"unit": unit} if unit else {})})  # the lab's printed unit only, never filled in
     return results
 
 
@@ -200,6 +202,8 @@ def build(unrecognized):
             canonical, group = match
         item = items.setdefault(_key(canonical), {"name": canonical, "group": group, "results": [],
                                                   "printed_names": []})
+        if unknown.get("patient_note"):
+            item["note"] = unknown["patient_note"]
         item["printed_names"].append(unknown["raw_name"])
         item["results"].extend(results)
     final = []

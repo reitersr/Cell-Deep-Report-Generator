@@ -382,6 +382,16 @@ def _pdf_text(path: str | None) -> str:
         return "\n".join(_page_text(page) for page in document)
 
 
+def _pdf_row_text(path: str | None) -> str:
+    """The lab PDF's text layer as printed lines (words grouped by their position on the page), so a table row
+    reads "Test name  result  range  unit" on one line, as it does on paper."""
+    if not path:
+        return ""
+    with fitz.open(path) as document:
+        return "\n".join(_line_text(words) for page in document
+                         for words in _group_lines(_page_words(page), _LINE_TOLERANCE_PT))
+
+
 def _page_text(page) -> str:
     text = page.get_text()
     fitz.TOOLS.store_shrink(100)  # see _page_words: do not keep scanned pages' decoded images cached
@@ -672,6 +682,10 @@ def _nearby_cadence(note_text: str, start: int, end: int) -> str | None:
     return nearest.group(1)
 
 
+_ROW_RESULT_RE = re.compile(r"[<>]=?|[<>]=?\d+(?:\.\d+)?[hl]?|\d+(?:\.\d+)?[hl]?|negative|positive|trace|normal|"
+                            r"not|none|detected|yellow|clear|tnp")
+
+
 def verify_extraction_completeness(extracted: dict, provider_note_text: str = "",
                                    lab_text: str = "", dexa_text: str = "",
                                    dexa_scanned: bool = False) -> ExtractionReviewNotice:
@@ -716,14 +730,22 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
     shown_as_lab_reported = {match[0] for item in extracted.get("lab_reported", [])
                              for printed in [item["name"], *item.get("printed_names", [])]
                              if (match := markers_reference_lookup(printed)) is not None}
-    lab_lower = lab_text.lower()
+    # Only names printed as result rows count as "found in source": a line that starts with the test name and
+    # carries a result right after it. Unit text ("mg/dL"), headings ("URINALYSIS ..."), notes and prose never do,
+    # and a row the parser already read under any name (e.g. urine "Blood") is accounted for.
+    read_names = {" ".join(row["name"].split()).casefold() for row in extracted.get("source_rows", [])}
+    read_names |= {" ".join(item.get("raw_name", "").split()).casefold()
+                   for item in extracted.get("unrecognized_markers", [])}
+    row_lines = [" ".join(line.split()).casefold() for line in lab_text.splitlines()]
     for canonical, config in MARKER_LIBRARY.items():
         names = [canonical, *config.get("aliases", [])]
         source_positions = set()
-        for name in names:
-            source_positions.update(match.start() for match in re.finditer(
-                rf"(?<!\w){re.escape(name.lower())}(?!\w)", lab_lower
-            ))
+        for index, line in enumerate(row_lines):
+            for name in names:
+                name = " ".join(name.split()).casefold()
+                rest = line[len(name):].split() if line.startswith(name + " ") else []
+                if rest and _ROW_RESULT_RE.fullmatch(rest[0]) and name not in read_names:
+                    source_positions.add(index)
         source_mentions = len(source_positions)
         if not source_mentions or (canonical in shown_as_lab_reported and canonical not in extracted_markers):
             continue
@@ -1746,13 +1768,13 @@ def lab_header_checks(info: dict, staff_collected: str | None, staff_age: int | 
     if sex and staff_sex and sex != staff_sex:
         notes.append(f"SEX CHECK: the lab header prints Sex {info['sex']}; staff entered {staff_sex}; the report "
                      "uses the staff entry")
-    if info.get("fasting") == "N":
-        fasting_markers = sorted({occ["name"] for occ in occurrences
-                                  if occ["name"] in ("Glucose (fasting)", "Fasting Insulin")})
-        notes.append("NON-FASTING DRAW: the lab header prints 'Fasting: N'"
-                     + (f"; {', '.join(fasting_markers)} {'was' if len(fasting_markers) == 1 else 'were'} drawn "
-                        f"non-fasting but the report still labels and scores {'it' if len(fasting_markers) == 1 else 'them'}"
-                        " as fasting (clinic decision, docs/open_decisions.md)" if fasting_markers else ""))
+    fasting_markers = sorted({occ["name"] for occ in occurrences if occ["name"] in ("Glucose (fasting)", "Fasting Insulin")})
+    if info.get("fasting") == "N" and fasting_markers:
+        # Glucose is relabelled by the layout (NON-FASTING GLUCOSE note); anything still labelled fasting is listed.
+        notes.append(f"NON-FASTING DRAW: the lab header prints 'Fasting: N'; {', '.join(fasting_markers)} "
+                     f"{'was' if len(fasting_markers) == 1 else 'were'} drawn non-fasting but the report still labels "
+                     f"and scores {'it' if len(fasting_markers) == 1 else 'them'} as fasting (clinic decision, "
+                     "docs/open_decisions.md)")
     return notes
 
 
@@ -2237,6 +2259,44 @@ def _marker_unit(cfg: dict, raw: dict) -> str:
     return "" if raw.get("unit_now_printed") == "" else cfg["unit"]
 
 
+def _clock_minutes(text: str | None) -> int | None:
+    """'07:45' / '7:45 AM' / '1:30 PM' -> minutes after midnight; None when not a printed clock time."""
+    match = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*([AaPp][Mm])?\s*", text or "")
+    if not match:
+        return None
+    hour, minute = int(match[1]), int(match[2])
+    if match[3]:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if match[3].upper() == "PM" else 0)
+    return hour * 60 + minute if hour < 24 and minute < 60 else None
+
+
+def label_cortisol(markers: list, lab_header: dict) -> list[str]:
+    """For a lab layout that prints the collection time (lab_header): "Cortisol, Total (AM)" keeps "(AM)" only
+    when the printed collection time is inside the lab's printed morning window; otherwise it reads "Cortisol,
+    Total". The collection time is shown next to the value. Scoring is unchanged (still unscored without a
+    range). Reports from layouts that print no collection time are not changed."""
+    if not lab_header:
+        return []
+    notes = []
+    for marker in markers:
+        if marker.name != "Cortisol, Total (AM)" or marker.now is None and not marker.disp_now:
+            continue
+        printed_time = lab_header.get("collection_time")
+        minutes, window = _clock_minutes(printed_time), lab_header.get("morning_window")
+        inside = minutes is not None and window is not None and window[0] * 60 <= minutes <= window[1] * 60
+        marker.display_name = "Cortisol, Total (AM)" if inside else "Cortisol, Total"
+        if printed_time:
+            marker.value_note = f"collected {printed_time}"
+        if not inside:
+            why = ("no collection time printed" if minutes is None else
+                   "no morning window printed" if window is None else
+                   f"collected {printed_time}, outside the lab's morning window {window[0]}-{window[1]}")
+            notes.append(f"CORTISOL LABEL: shown as 'Cortisol, Total' without '(AM)' ({why})")
+    return notes
+
+
 def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionReviewNotice]:
     """Step 2: deterministic. No AI. Takes extraction's structured output, matches markers against
     the reference library, computes tiers/percentages via scoring.py (the same math as data.py),
@@ -2397,9 +2457,11 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
         cns_domains=extracted.get("cns_domains"),
         vitality_index=scoring.normalize_vitality_index(extracted.get("vitality_index")),
         provider_note_raw=extracted.get("provider_note_raw"),
-        lab_reported=[LabReportedResult(name=item["name"], group=item["group"], results=item["results"])
+        lab_reported=[LabReportedResult(name=item["name"], group=item["group"], results=item["results"],
+                                        note=item.get("note"))
                       for item in extracted.get("lab_reported", [])],
     )
+    notice.other_notes.extend(label_cortisol(markers, extracted.get("lab_header") or {}))
     censored = [f"{m.name} {disp!r} on {date}" + (f" (lab flag {flag})" if flag else "")
                 for m in markers
                 for disp, value, date, flag in ((m.disp_then, m.then, m.then_date_display, m.lab_flag_then),
@@ -2544,7 +2606,9 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
         lines.append(f"  Vitality Index: {vitality_status(extracted)}")
     row_exclusions = extracted.get("scan_row_exclusions", [])
     disagree = sum(scan_row_reason(item).startswith("reads disagree") for item in row_exclusions)
-    lines.append(f"  Scored markers: {len(record.markers)}; rows excluded (reads disagree): {disagree}; "
+    # Only markers with a CellDeep tier, as in the report's own "Of your N scored markers" (cortisol etc. excluded).
+    scored = sum(m.now_tier in ("optimal", "moderate", "flag") for m in record.markers)
+    lines.append(f"  Scored markers: {scored}; rows excluded (reads disagree): {disagree}; "
                  f"rows excluded by other checks: {len(row_exclusions) - disagree}; "
                  f"unrecognized rows (staff list only): {len(extracted.get('unrecognized_markers', []))}")
     mismatches = [line.strip() for line in notice.name_header if "NAME MISMATCH" in line]
@@ -2708,7 +2772,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     """Build the patient report and staff notes. confirm(items) is called after the documents are read and
     before anything is built, only when pages or rows were left out; returning False stops the run
     (GenerationAborted) so staff can fix the inputs instead of sending a report with gaps."""
-    raw_lab_text = _pdf_text(labs_pdf)
+    raw_lab_text = _pdf_row_text(labs_pdf)
     raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
     client = Anthropic(
         api_key=os.environ["ANTHROPIC_API_KEY"],
