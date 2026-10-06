@@ -101,7 +101,10 @@ def build(name, folder):
             first = 2 if name == "mixed" else 1
             for page in layouts._scan_pages(first):
                 reads[(str(labs), page["page"])] = [page, page]
-        return str(labs), [], reads, {"collected_date": layouts.SCAN_DATE, "age": 44}
+        options = {"collected_date": layouts.SCAN_DATE, "age": 44}
+        if name == "variant":  # a pasted medication list instead of the structured note
+            options["note"] = "Testosterone cypionate 100 mg weekly\nBPC-157 250 mcg daily\n"
+        return str(labs), [], reads, options
     if name == "scanned_noisy":
         labs = layouts.scanned(folder / "labs.pdf")
         one, two = noisy_scan_reads()
@@ -116,7 +119,7 @@ def build(name, folder):
     raise KeyError(name)
 
 
-SCENARIOS = ["quest_digital", "chl_digital", "labcorp_digital", "scanned", "mixed", "scanned_noisy",
+SCENARIOS = ["quest_digital", "chl_digital", "labcorp_digital", "scanned", "mixed", "variant", "scanned_noisy",
              "clinic_dexa", "clinic_dexa_no_age"]
 
 
@@ -143,7 +146,7 @@ def run_scenario(name, folder, monkeypatch=None):
 
     try:
         out = folder / "report.pdf"
-        pipeline.run(labs, dexa, None, clinic_dexa.PATIENT if dexa else layouts.PATIENT, options.get("age"),
+        pipeline.run(labs, dexa, options.get("note"), clinic_dexa.PATIENT if dexa else layouts.PATIENT, options.get("age"),
                      "male", str(out), collected_date=options.get("collected_date"), confirm=confirm)
     finally:
         if monkeypatch is None:

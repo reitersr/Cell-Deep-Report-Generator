@@ -80,8 +80,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    Please try again". Scanned pages are rendered once per page via `scan_bloodwork.render_page_png_b64`
    (200 DPI, MuPDF cache emptied) so peak memory does not grow with page count (`test_memory.py`).
    After the documents are read and before anything is built, `pipeline.run(confirm=...)` pauses the job
-   when any lab page/section, scanned row or DEXA page was left out (`extracted["preflight"]`); the
-   generating page lists them and staff continue or stop (`/generate/decision/<id>`, `GenerationAborted`).
+   when anything was left out (`extracted["preflight"]`: a lab page/section, a scanned result row, a printed
+   result with an unrecognized test name, a DEXA page, or a provider note not read); headings are never
+   listed. The generating page lists them and staff continue or stop (`/generate/decision/<id>`,
+   `GenerationAborted`).
 2. **Bloodwork** (`pipeline.extract`):
    - Pages with a text layer: `_parse_bloodwork_tables` reads rows by printed column position
      under each page's own Current/Historical or In Range/Out of Range header. Names match
@@ -137,8 +139,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    value in the column is from it (`template.panel_column_headers`).
 7. **Staff notes**: `_write_review_notes` / `format_review_notice` write the staff-only review
    file, downloadable separately from the report. It opens with the one-screen STAFF CHECK
-   (`pipeline.staff_check_block`: entered name and date, DEXA dates accepted/excluded with ages, lab pages
-   accepted/excluded, counts, name mismatches), then INCOMPLETE; tests read past it with
+   (`pipeline.staff_check_block`: entered name and date, DEXA dates accepted/excluded with ages and body fat
+   labels, the current DEXA scan vs the latest draw, lab pages accepted/excluded, provider note status, counts,
+   name mismatches), then INCOMPLETE; tests read past it with
    `unknown_marker_policy.without_staff_check`.
 
 ## Pull request workflow

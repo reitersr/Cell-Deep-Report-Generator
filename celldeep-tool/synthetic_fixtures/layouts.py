@@ -185,10 +185,30 @@ class ScanReader:
                                stop_reason="end_turn")
 
 
+def variant(path):
+    """A second layout variant of the digital report: a recognized section, a table under header wording the
+    parser does not know ("Analyte / Result / Prior Result"), a renamed marker, and a page with a header but no
+    rows, in a different page order (the empty page first)."""
+    x = fx.LAB_X
+    known = (fx.section_preamble("SYN-V-KNOWN", SCAN_DATE) + fx.header_line(100)
+             + fx.row(130, "TSH", "1.9", units="uIU/mL", lab_range="0.40-4.50")
+             + fx.row(144, "hs-CRP", "0.4", units="mg/L", lab_range="0.0-3.0"))
+    new_header = (fx.section_preamble("SYN-V-HEADER", SCAN_DATE)
+                  + [(x["name"], 100, "Analyte"), (x["current"], 100, "Result"), (x["hist1"], 100, "Prior Result"),
+                     (x["units"], 100, "Units"), (x["range"], 100, "Reference")]
+                  + [(x["name"], 130, "Ferritin"), (x["current"], 130, "88"), (x["units"], 130, "ng/mL")]
+                  + [(x["name"], 144, "Vitamin B12"), (x["current"], 144, "512"), (x["units"], 144, "pg/mL")])
+    renamed = (fx.section_preamble("SYN-V-RENAMED", SCAN_DATE) + fx.header_line(100)
+               + fx.row(130, "Thyroid Stimulating Hormone Ultra", "2.1", units="uIU/mL", lab_range="0.40-4.50"))
+    no_rows = fx.section_preamble("SYN-V-EMPTY", SCAN_DATE) + fx.header_line(100)
+    return fx.write_lab_pdf(path, [no_rows, renamed, new_header, known])
+
+
 FIXTURES = {
     "quest_digital": (quest_digital, None),
     "chl_digital": (chl_digital, None),
     "labcorp_digital": (labcorp_digital, None),
     "scanned": (scanned, lambda: ScanReader(_scan_pages(1))),
     "mixed": (mixed, lambda: ScanReader(_scan_pages(2))),
+    "variant": (variant, None),
 }
