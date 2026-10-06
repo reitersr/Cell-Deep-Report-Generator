@@ -123,9 +123,10 @@ def _patient_pdf(tmp_path, monkeypatch, labels, staff_age):
     return _generate(folder, monkeypatch, labels, staff_age=staff_age)
 
 
-@pytest.mark.parametrize("staff_age", [None, 45])
+@pytest.mark.parametrize("staff_age", [None, 45, 46])
 def test_seven_unnamed_pages_exclude_the_other_profile_by_age(tmp_path, monkeypatch, staff_age):
-    """(a) no age on the form and (b) an age on the form: page 6 (ages 34.0/34.1 per scan row) is excluded."""
+    """(a) no age on the form and (b) an age on the form: page 6 (ages 34.0/34.1 per scan row) is excluded.
+    Regression: with staff age 46 entered, the PR #8 gate accepted page 6 because decimal ages never parsed."""
     text, html, review, _ = _patient_pdf(tmp_path, monkeypatch, SEVEN, staff_age)
     assert "33.7%" in text and "30.4%" in text
     _assert_other_values_absent(text, html)
@@ -202,3 +203,13 @@ def test_page_age_reads_decimal_and_per_row_ages(page, rows, expected):
 def test_page_age_needs_both_reads_to_print_the_same_ages():
     assert scan_dexa.page_age([fx.read([], age="45.2"), fx.read([], age="45.3")]) is None
     assert scan_dexa.page_age([fx.read([], age="45.2"), fx.read([], age=None)]) is None
+
+
+@pytest.mark.parametrize("printed", ["34.1", "34.0"])
+def test_staff_age_46_excludes_a_decimal_age_page(printed):
+    """The production failure: staff age 46, six pages at 45.x, page 6 printing a decimal 34.x age."""
+    pages = [((1, n), [fx.read([], patient_name=None, age=age)] * 2)
+             for n, age in enumerate(["45.0", "45.1", "45.2", "45.3", "45.4", printed, "45.4"], start=1)]
+    accepted, _, excluded = scan_dexa.attribute_pages(pages, fx.PATIENT, staff_age=46)
+    assert (1, 6) not in accepted and len(accepted) == 6
+    assert excluded == [((1, 6), f"no patient name printed and it prints age {printed}; the DEXA pages center on age 45.2")]
