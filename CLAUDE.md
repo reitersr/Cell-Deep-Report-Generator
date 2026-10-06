@@ -1,7 +1,7 @@
 # CellDeep Report Generator
 
 Turns a patient's lab PDF, DEXA PDF(s) and a structured provider note into the CellDeep
-patient report (PDF) plus staff-only review notes. All code lives in `celldeep-tool/`.
+patient report (PDF) plus staff-only review notes. All code lives in `celldeep-tool/` (plus `scripts/smoke_test.py`).
 
 ## Non-negotiables
 
@@ -47,7 +47,9 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/test_*.py` | Test suite (pytest). |
 | `calibration_baselines/` | Synthetic calibration snapshots. |
 | `celldeep-tool/ranges_audit.py` | Read-only audit of each marker's threshold source; `--write` regenerates `docs/ranges_audit.md` (a test keeps it in sync). |
-| `docs/` | Audits and open clinical decisions. |
+| `celldeep-tool/synthetic_fixtures/scenarios.py` | End-to-end synthetic scenarios with a scripted vision model (smoke test, `test_scenarios.py`). |
+| `scripts/smoke_test.py` | Generates reports from synthetic fixtures and prints PASS/FAIL (no API key, no network, under a minute). |
+| `docs/` | Audits, open clinical decisions (`open_decisions.md`), `staff_guide.md`, `what_the_tool_guarantees.md`. |
 | `.github/workflows/tests.yml` | CI: full suite offline on every pull request. |
 
 ## Running tests
@@ -80,20 +82,24 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    Please try again". Scanned pages are rendered once per page via `scan_bloodwork.render_page_png_b64`
    (200 DPI, MuPDF cache emptied) so peak memory does not grow with page count (`test_memory.py`).
    After the documents are read and before anything is built, `pipeline.run(confirm=...)` pauses the job
-   when any lab page/section, scanned row or DEXA page was left out (`extracted["preflight"]`); the
-   generating page lists them and staff continue or stop (`/generate/decision/<id>`, `GenerationAborted`).
+   when anything was left out (`extracted["preflight"]`: a lab page/section, a scanned result row, a printed
+   result with an unrecognized test name, a DEXA page, or a provider note not read); headings are never
+   listed. The generating page lists them and staff continue or stop (`/generate/decision/<id>`,
+   `GenerationAborted`).
 2. **Bloodwork** (`pipeline.extract`):
    - Pages with a text layer: `_parse_bloodwork_tables` reads rows by printed column position
      under each page's own Current/Historical or In Range/Out of Range header. Names match
      the marker library by exact alias only; anything else becomes an unrecognized-marker
      review item.
-   - Image-only pages: `_extract_scan_bloodwork` renders each page, reads it twice with the
-     vision model (no sampling settings: anthropic 1.x rejects temperature/top_p/top_k; consistency comes
-     from the agreement rule; transport retries only, no content re-read, no tie-break), and
-     `scan_bloodwork.gate_staff_identified_reads` keeps a row only when both
-     reads agree and it passes the value-format and flag-vs-range checks. A row the reads disagree on
-     is listed as "INCOMPLETE - row excluded: <marker> (reads disagree: X / Y)". Staff-entered name
-     and Collected date identify the pages.
+   - Image-only pages: `_extract_scan_bloodwork` renders each page and reads it twice with the vision model
+     (no sampling settings: anthropic 1.x accepts no temperature/top_p/top_k and has no seed); when the two
+     reads disagree on any result row, a third read is made (`scan_bloodwork.SCAN_MAX_READS`). Transport
+     retries only. `scan_bloodwork.gate_staff_identified_reads` keeps a row only when at least two reads print
+     exactly the same value, flag and range (both, when only two reads exist) and it passes the value-format
+     and flag-vs-range checks. A row no two reads agree on is listed as "INCOMPLETE - row excluded: <marker>
+     (reads disagree: X / Y / Z)"; every other excluded result row is listed with its check. A row no read
+     prints a value for (a section heading) is not a result and is never listed or confirmed. Staff-entered
+     name and Collected date identify the pages.
    - `_merge_scan_occurrences` combines both sources.
    - A section or page that cannot be parsed is excluded whole and listed under "INCOMPLETE" at the
      top of the staff notes; the rest of the report is built. A text page with result rows under no
@@ -109,8 +115,13 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    and of the staff-entered age; an unnamed page with no age is accepted only when every scan date it
    shows is on a validated page. Every other page is listed under "INCOMPLETE - pages excluded" with its
    dates and reason, and reaches no history row, current/first-visit value, summary, scan image or score.
-   The printed body fat % is used whenever printed; it is computed from fat/total only when never printed
-   (labelled `clinic_config.DEXA_COMPUTED_LABEL`) and never when printed but contested ("withheld").
+   The printed body fat % is used whenever printed, including "(e)" values (labelled
+   `clinic_config.DEXA_ESTIMATED_LABEL`; a value printed identically with "(e)" on only some reads/pages is kept
+   as estimated); it is computed as fat / (fat + lean) only when never printed (labelled
+   `clinic_config.DEXA_COMPUTED_LABEL`) and never when printed but contested ("withheld"). The same value and
+   label appear in the history, "When you came in", "Where you are now" (the latest accepted scan with body
+   composition, `scoring.has_body_composition`), the summary line, the headline and the score; with nothing to
+   score, the "% optimized" figure is left out (never "—%") and the staff notes say why (`dexa_score_notes`).
    Staff notes warn when "Where you are now" is older than the latest bloodwork by more than
    `DEXA_STALE_DAYS`. Kept scans are merged by date and
    sorted oldest first. Outcomes open the staff notes (DEXA block). Names everywhere compare with
@@ -130,8 +141,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    value in the column is from it (`template.panel_column_headers`).
 7. **Staff notes**: `_write_review_notes` / `format_review_notice` write the staff-only review
    file, downloadable separately from the report. It opens with the one-screen STAFF CHECK
-   (`pipeline.staff_check_block`: entered name and date, DEXA dates accepted/excluded with ages, lab pages
-   accepted/excluded, counts, name mismatches), then INCOMPLETE; tests read past it with
+   (`pipeline.staff_check_block`: entered name and date, DEXA dates accepted/excluded with ages and body fat
+   labels, the current DEXA scan vs the latest draw, lab pages accepted/excluded, provider note status, counts,
+   name mismatches), then INCOMPLETE; tests read past it with
    `unknown_marker_policy.without_staff_check`.
 
 ## Pull request workflow

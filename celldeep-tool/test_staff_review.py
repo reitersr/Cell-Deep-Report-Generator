@@ -26,6 +26,9 @@ def _scan_reads():
     reads = [copy.deepcopy(page) for page in pages for _ in (1, 2)]
     reads[1]["rows"][0]["result_text"] = "58"          # page 2 reads disagree on IRON, TOTAL
     reads[2]["patient_name"] = "Different, Person"      # page 3 prints another name
+    third = copy.deepcopy(pages[0])                     # page 2's third read: a third value, no majority
+    third["rows"][0]["result_text"] = "57"
+    reads.insert(2, third)
     return reads
 
 

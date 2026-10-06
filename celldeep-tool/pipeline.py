@@ -39,6 +39,7 @@ from generation_prompt import build_copy
 import clinic_config
 import lab_reported
 import scoring
+from dexa_reference import dexa_percent_optimized
 import template
 
 if os.path.exists(".env"):
@@ -1748,9 +1749,11 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"],
                            timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS, max_retries=ANTHROPIC_MAX_RETRIES)
     reads = []
+    # The staff-identified gate decides on a 2-of-3 majority, so a third read is made where two disagree.
+    max_reads = scan.SCAN_MAX_READS if staff else 2
     for page in pages:
         try:
-            reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL))
+            reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL, max_reads))
         except scan.ScanGateError as error:
             failures.append((page.number + 1, error.reads, str(error)))
     if name_sink is not None:
@@ -2001,7 +2004,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     row_audit = []
     scan_numbers = []
     parse_exclusions = []  # pages/sections that could not be parsed deterministically
-    scan_row_exclusions = []  # scanned rows whose two reads disagree: listed under INCOMPLETE
+    scan_row_exclusions = []  # scanned result rows left out (reads disagree or a check failed): INCOMPLETE
     lab_text_pages, scan_notes = [], []
     dob_sources = []  # (source label, (y, m, d)); used only to compute age, never stored
     printed_names = []  # (source, page or None, name as printed) for the staff-notes header
@@ -2078,7 +2081,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "collected_date": collected_date,
         "lab_pages": {"text": lab_text_pages, "scanned": scan_numbers},
         "preflight": preflight_items(parse_exclusions, scan_notes if scan_numbers else [], scan_row_exclusions,
-                                     dexa_exclusions, dexa_info),
+                                     dexa_exclusions, dexa_info, unrecognized) + note_preflight(note),
+        "provider_note_status": note_status(note_text, note),
         "printed_names": printed_names,
         **_age_from_dob(dob_sources, latest["date_display"] if latest else None),
         "other_notes": [*lab_review_notes, *note["other_notes"]],
@@ -2349,6 +2353,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     notice.scan_summary = list(extracted.get("scan_summary", []))
     notice.dexa_summary = list(extracted.get("dexa_summary", []))
     notice.other_notes.extend(dexa_staleness_notes(record.dexa_history, extracted.get("latest_draw_date")))
+    notice.other_notes.extend(dexa_score_notes(record))
     exclusions = extracted.get("parse_exclusions", [])
     if exclusions:
         pages = sorted({item["page"] for item in exclusions})
@@ -2356,7 +2361,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             f"INCOMPLETE - pages/sections excluded: lab PDF page(s) {', '.join(map(str, pages))} could not be "
             "parsed deterministically; their results are NOT in this report - review them by hand",
             *[f"  - page {item['page']} ({item['section']}): {item['reason']}" for item in exclusions]]
-    notice.incomplete.extend(f"INCOMPLETE - row excluded: {item['name']} (reads disagree: {item['reads']}) - "
+    notice.incomplete.extend(f"INCOMPLETE - row excluded: {item['name']} ({scan_row_reason(item)}) - "
                              f"scanned lab page {item['page']}; not in this report"
                              for item in extracted.get("scan_row_exclusions", []))
     notice.incomplete.extend(extracted.get("dexa_incomplete", []))
@@ -2375,18 +2380,52 @@ class GenerationAborted(RuntimeError):
 _SCAN_PAGE_EXCLUDED_RE = re.compile(r"source=scan page (\d+): (.+); page excluded$")
 
 
-def preflight_items(parse_exclusions, scan_notes, scan_row_exclusions, dexa_exclusions, dexa_info) -> list[str]:
-    """Every lab page/section, scanned row and DEXA page left out of the report, one line each, for the
-    confirmation step before the report is built (staff can stop there). Empty when nothing was left out."""
+def scan_row_reason(item: dict) -> str:
+    """Why a scanned result row was excluded, with what each read printed: 'reads disagree: 3.1 / 2.8 / 4.0'
+    when no two reads agree, otherwise the failed check and the reads."""
+    if item.get("reason", "agreement gate").startswith("agreement gate"):
+        return f"reads disagree: {item['reads']}"
+    return f"{item['reason'].split(': ', 1)[-1]}; reads: {item['reads']}"
+
+
+def note_preflight(note: dict) -> list[str]:
+    """The confirmation-step line for a provider note that was given but not read at all, or read in part."""
+    if not note["other_notes"]:
+        return []
+    if not note["accepted"]:
+        return ["Provider note: NOT READ - it has no '## ' section headings, so its protocol, concerns, targets and "
+                "Vitality Index are not in the report (the staff notes list the required headings)"]
+    lines = sum(line.startswith("    line ") for line in note["other_notes"])
+    return [f"Provider note: {lines} line(s) outside the template were not read (listed in the staff notes)"]
+
+
+def note_status(note_text: str | None, note: dict) -> str:
+    if not note_text or not note_text.strip():
+        return "none given"
+    if not note["accepted"]:
+        return "NOT READ - no '## ' section headings (see the notes below for the required headings)"
+    unread = sum(line.startswith("    line ") for line in note["other_notes"])
+    return f"read; {unread} line(s) outside the template not read" if unread else "read"
+
+
+def preflight_items(parse_exclusions, scan_notes, scan_row_exclusions, dexa_exclusions, dexa_info,
+                    unrecognized=()) -> list[str]:
+    """Every lab page/section, scanned result row, unrecognized printed result and DEXA page left out of the
+    report, one line each, for the confirmation step before the report is built (staff can stop there). Only
+    result rows count: a heading or label row with no value is never listed. Empty when nothing was left out."""
     items = [f"Lab PDF page {item['page']} ({item['section']}): {item['reason']}" for item in parse_exclusions]
     for note in scan_notes:
         if match := _SCAN_PAGE_EXCLUDED_RE.match(note):
             items.append(f"Lab PDF page {match[1]} (scanned): {match[2]}")
-    items += [f"Lab PDF page {item['page']} (scanned): row {item['name']} excluded - the two reads disagree"
+    items += [f"Lab PDF page {item['page']} (scanned): result {item['name']} excluded - {scan_row_reason(item)}"
               for item in scan_row_exclusions]
     items += [f"DEXA file {key[0]} page {key[1]}: {reason}" for key, reason in dexa_exclusions]
     items += [f"DEXA file {key[0]} page {key[1]}: could not be read ({reason})"
               for key, reason in dexa_info.get("failed", [])]
+    if unrecognized:
+        names = ", ".join(dict.fromkeys(" ".join(item["raw_name"].split()) for item in unrecognized))
+        items.append(f"Lab PDF: {len(unrecognized)} printed result(s) with a test name the tool does not recognize, "
+                     f"left out of the report and listed in the staff notes: {names}")
     return items
 
 
@@ -2405,6 +2444,7 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
              f"  Bloodwork Collected date (entered): {extracted.get('collected_date') or '(none entered)'}"]
     if record.dexa_history:
         dates = ", ".join(reading.date_display + (" (body fat % computed)" if "body_fat_pct" in reading.computed
+                                                  else " (body fat % estimated)" if "body_fat_pct" in reading.estimated
                                                   else "") for reading in record.dexa_history)
         lines.append(f"  DEXA scan dates accepted: {dates}" + (f"; ages printed on accepted pages: {', '.join(ages)}"
                                                                if ages else ""))
@@ -2415,6 +2455,8 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
                      + ("prints a different patient name" if reason.startswith("prints patient name") else reason))
     for key, reason in info.get("failed", []):
         lines.append(f"  DEXA EXCLUDED file {key[0]} page {key[1]}: could not be read ({reason})")
+    if record.dexa_history:
+        lines.append(f"  {dexa_bloodwork_gap(record.dexa_history, extracted.get('latest_draw_date'))}")
     if lab["text"] or lab["scanned"]:
         kept_text = [page for page in lab["text"] if page not in lab_excluded]
         kept_scan = [page for page in lab["scanned"] if page not in scan_excluded]
@@ -2425,8 +2467,12 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
         for note in extracted.get("other_notes", []):
             if match := _SCAN_PAGE_EXCLUDED_RE.match(note):
                 lines.append(f"  LAB EXCLUDED page {match[1]} (scanned): {match[2]}")
-    excluded_rows = len(extracted.get("scan_row_exclusions", []))
-    lines.append(f"  Scored markers: {len(record.markers)}; rows excluded (reads disagree): {excluded_rows}; "
+    if extracted.get("provider_note_status"):
+        lines.append(f"  Provider note: {extracted['provider_note_status']}")
+    row_exclusions = extracted.get("scan_row_exclusions", [])
+    disagree = sum(scan_row_reason(item).startswith("reads disagree") for item in row_exclusions)
+    lines.append(f"  Scored markers: {len(record.markers)}; rows excluded (reads disagree): {disagree}; "
+                 f"rows excluded by other checks: {len(row_exclusions) - disagree}; "
                  f"unrecognized rows (staff list only): {len(extracted.get('unrecognized_markers', []))}")
     mismatches = [line.strip() for line in notice.name_header if "NAME MISMATCH" in line]
     mismatches += [note for note in [*notice.other_notes, *notice.dexa_summary] if "NAME MISMATCH" in note]
@@ -2434,10 +2480,26 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
     return [*lines, STAFF_CHECK_END]
 
 
+def dexa_bloodwork_gap(dexa_history: list, latest_draw: str | None) -> str:
+    """One STAFF CHECK line: the scan shown as "Where you are now" and how far it is from the latest draw."""
+    scans = scoring.body_composition_scans(dexa_history)
+    if not scans:
+        return "DEXA vs bloodwork: no accepted scan with body composition"
+    current = scans[-1].date_display
+    scan_day, draw_day = _normalize_date_for_matching(current), _normalize_date_for_matching(latest_draw or "")
+    if not (isinstance(scan_day, tuple) and isinstance(draw_day, tuple)):
+        return f"DEXA vs bloodwork: current DEXA scan {current}; no bloodwork draw date to compare"
+    gap = (date(*draw_day) - date(*scan_day)).days
+    when = f"{gap} days before" if gap >= 0 else f"{-gap} days after"
+    flag = " - OLDER THAN THE LIMIT, see the warning below" if gap > clinic_config.DEXA_STALE_DAYS else ""
+    return (f"DEXA vs bloodwork: current DEXA scan {current} is {when} the latest bloodwork draw ({latest_draw}); "
+            f"limit {clinic_config.DEXA_STALE_DAYS} days{flag}")
+
+
 def dexa_staleness_notes(dexa_history: list, latest_draw: str | None) -> list[str]:
-    """Warn staff when the scan shown as "Where you are now" (the latest complete accepted scan) is more
+    """Warn staff when the scan shown as "Where you are now" (the latest accepted body-composition scan) is more
     than clinic_config.DEXA_STALE_DAYS older than the latest bloodwork draw. Nothing in the report changes."""
-    complete = [d for d in dexa_history if None not in (d.total_mass_lb, d.fat_mass_lb, d.lean_mass_lb)]
+    complete = scoring.body_composition_scans(dexa_history)
     scan_day = _normalize_date_for_matching(complete[-1].date_display) if complete else None
     draw_day = _normalize_date_for_matching(latest_draw or "")
     if not (isinstance(scan_day, tuple) and isinstance(draw_day, tuple)):
@@ -2447,6 +2509,24 @@ def dexa_staleness_notes(dexa_history: list, latest_draw: str | None) -> list[st
         return []
     return [f"DEXA SCAN OLDER THAN BLOODWORK: \"Where you are now\" shows the DEXA scan of {complete[-1].date_display}, "
             f"{gap} days before the latest bloodwork draw ({latest_draw}); confirm no newer DEXA scan was left out"]
+
+
+def dexa_score_notes(record: PatientRecord) -> list[str]:
+    """The patient report leaves out the DEXA "% optimized" figure when it has nothing to score (it is never
+    shown as "—% optimized"); this staff note says so and why."""
+    if not record.dexa_history:
+        return []
+    scans = scoring.body_composition_scans(record.dexa_history)
+    latest = scans[-1] if scans else record.dexa_history[-1]
+    if dexa_percent_optimized(latest.body_fat_pct, latest.visceral_fat_area_cm2, record.sex) is not None:
+        return []
+    missing = [] if record.sex in ("male", "female") else ["no sex entered for the body fat ranges"]
+    if latest.body_fat_pct is None:
+        missing.append("no body fat % (printed, or computable from printed fat and lean mass) for that scan")
+    if latest.visceral_fat_area_cm2 is None:
+        missing.append("no VAT area printed for that scan")
+    return [f"DEXA SCORE NOT SHOWN: the patient report shows no DEXA \"% optimized\" for the scan of "
+            f"{latest.date_display} ({'; '.join(missing)}); the Structure score is left out of the overall score"]
 
 
 def name_header(staff_name: str | None, printed: list) -> list[str]:

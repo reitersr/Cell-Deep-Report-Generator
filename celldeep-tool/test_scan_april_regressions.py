@@ -39,11 +39,12 @@ def _pages():
             {**base, "page": 3, "rows": [], "out_of_range_summary": summary}]
 
 
-def _reads(pages, tweak=None):
-    """Two independent reads per page; tweak(page_number, reading, page) edits one read."""
+def _reads(pages, tweak=None, third_read_pages=()):
+    """Two independent reads per page (three for the pages in third_read_pages, which the pipeline reads a
+    third time because the first two disagree); tweak(page_number, reading, page) edits one read."""
     reads = []
     for page in pages:
-        for reading in (0, 1):
+        for reading in ((0, 1, 2) if page["page"] in third_read_pages else (0, 1)):
             copied = copy.deepcopy(page)
             if tweak:
                 tweak(copied["page"], reading, copied)
@@ -117,12 +118,23 @@ def test_reads_spelling_the_same_printed_range_differently_agree(mixed_pdf, tmp_
 
 
 def test_genuinely_different_ranges_still_exclude_the_row(mixed_pdf, tmp_path):
-    def tweak(number, reading, page):
-        if number == 2 and reading == 1:
-            page["rows"][2]["reference_range"] = "> OR = 3.4 ng/mL"
-    extracted = _extract(mixed_pdf, tmp_path, _reads(_pages(), tweak))
+    def tweak(number, reading, page):  # three reads, three different ranges: no two agree
+        if number == 2 and reading:
+            page["rows"][2]["reference_range"] = ("> OR = 3.4 ng/mL", "> OR = 4.4 ng/mL")[reading - 1]
+    extracted = _extract(mixed_pdf, tmp_path, _reads(_pages(), tweak, third_read_pages={2}))
     assert "Folate" not in _latest(extracted)
     assert any("excluded 'FOLATE, SERUM': agreement gate" in note for note in extracted["other_notes"])
+
+
+def test_a_third_read_that_agrees_with_one_of_two_keeps_the_row(mixed_pdf, tmp_path):
+    """Two reads disagree, so the page is read a third time; the value two of the three reads print exactly
+    (value, flag and range) is kept, the same in every run."""
+    def tweak(number, reading, page):
+        if number == 2 and reading == 1:
+            page["rows"][3]["result_text"] = "3.4"  # read 2 misreads INSULIN; reads 1 and 3 print 3.1
+    extracted = _extract(mixed_pdf, tmp_path, _reads(_pages(), tweak, third_read_pages={2}))
+    assert _latest(extracted) == EXPECTED
+    assert extracted["scan_row_exclusions"] == [] and extracted["preflight"] == []
 
 
 def test_summary_that_contradicts_value_still_excludes(mixed_pdf, tmp_path):

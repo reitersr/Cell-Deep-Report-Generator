@@ -10,12 +10,17 @@ import fitz
 SCAN_RENDER_DPI = 200  # changing this changes what the vision model sees; keep it fixed
 
 
-# Run-to-run consistency comes from the two-read agreement rule, not from sampling settings (the SDK in use,
-# anthropic 1.x, does not accept temperature/top_p/top_k at all): a row is kept only when both independent
-# reads agree, and a row they disagree on is excluded and listed for staff, so the report never depends on
-# which read "won". Retries are transport-level only (the client's max_retries, see pipeline): a read that
-# fails the schema or page gate is never re-requested, there is no tie-break read, and every remaining
-# tie-break in the gates (e.g. strip_lab_code) is ordered explicitly.
+# Run-to-run consistency comes from the read-agreement rule, not from sampling settings: the SDK in use
+# (anthropic 1.x) accepts no temperature/top_p/top_k and offers no seed, and temperature 0 never guaranteed
+# identical output anyway. Every scanned page is read twice; when the two reads disagree on any result row,
+# a third independent read is made (SCAN_MAX_READS) and a row is kept only when at least two reads print exactly
+# the same value, flag and reference range (SCAN_AGREEMENT_READS). A row no two reads agree on is excluded and
+# listed for staff with every read's value, so the report never depends on which read "won". A row no read
+# prints a value for (a section heading such as "CBC (INCLUDES DIFF/PLT)") is not a result and is never listed
+# as an excluded result. Retries are transport-level only (the client's max_retries, see pipeline); every
+# remaining tie-break in the gates (e.g. strip_lab_code) is ordered explicitly.
+SCAN_MAX_READS = 3
+SCAN_AGREEMENT_READS = 2
 
 
 def _read_values(rows):
@@ -114,8 +119,11 @@ def _validate(value, schema, location="page"):
             _validate(child, schema["items"], f"{location}[{index}]")
 
 
-def read_page(page, client, create_message, model):
-    """Two independent reads of one page, both sent the same single render, which is released on return."""
+def read_page(page, client, create_message, model, max_reads=2):
+    """Independent reads of one page, all sent the same single render, which is released on return. Two reads
+    always; a third (when max_reads allows it) only when the first two disagree on a result row. A third read
+    that fails its schema or page gate is dropped: the first two still stand, and the rows they disagree on
+    are excluded."""
     image = render_page_png_b64(page)
     reads = []
     try:
@@ -125,6 +133,12 @@ def read_page(page, client, create_message, model):
             except ScanGateError as error:
                 error.reads = reads
                 raise
+        if max_reads >= 3 and reads_disagree(reads):
+            try:
+                reads.append(_read_transcription(page, image, 3, client, create_message, model))
+            except ScanGateError as error:
+                print(f"source=scan page={page.number + 1} third read failed: {json.dumps(str(error))}; "
+                      "rows the first two reads disagree on stay excluded")
     finally:
         del image
     return reads
@@ -304,12 +318,62 @@ def _footer_sequence(footer):
     return None
 
 
+def is_heading_row(row):
+    """A transcribed row that is not a result: a name with no value, flag or range, not marked illegible
+    (a section heading such as "CBC (INCLUDES DIFF/PLT)" or a panel label)."""
+    return (row["result_text"] is None and row["flag"] is None and row["reference_range"] is None
+            and not row["illegible"])
+
+
+def _signature(row):
+    return row["result_text"], row["flag"], _canonical_range(row["reference_range"])
+
+
+def _lab_codes(reads, lab_codes=()):
+    return {*lab_codes, *(row["lab_code"] for page in reads for row in page["rows"]
+                          if row["lab_code"] and re.fullmatch(r"[A-Z0-9]{2,5}", row["lab_code"]))}
+
+
+def _row_identities(reads, codes):
+    """{(name, section): [rows of read 1], [rows of read 2], ...} for one page's reads."""
+    identities = {}
+    for reading, page in enumerate(reads):
+        for row in page["rows"]:
+            name = strip_lab_code(" ".join(row["name"].split()), codes) if row["name"] else row["name"]
+            identities.setdefault((name, row["section"]), [[] for _ in reads])[reading].append(row)
+    return identities
+
+
+def _agreed(rows_per_read, needed):
+    """The reads (indexes) that print one identical row for this test, when at least `needed` of them do."""
+    votes = {}
+    for reading, rows in enumerate(rows_per_read):
+        if len(rows) == 1:
+            votes.setdefault(_signature(rows[0]), []).append(reading)
+    best = max(votes.values(), key=len, default=[])
+    return best if len(best) >= needed else None
+
+
+def reads_disagree(reads):
+    """True when the reads of one page do not print every result row identically (headings ignored)."""
+    codes = _lab_codes(reads)
+    for rows in _row_identities(reads, codes).values():
+        if all(is_heading_row(row) for read_rows in rows for row in read_rows):
+            continue
+        if _agreed(rows, len(reads)) is None:
+            return True
+    return False
+
+
 def gate_staff_identified_reads(reads, collected, result_re, patient_name, failures=(), lab_codes=(),
                                 row_exclusions=None):
     """Staff-entered patient name and Collected date identify every scanned page, so printed
-    footer/header/name/date are not gated. A row is kept only when both reads agree on its
-    value, flag and reference range and the printed value passes the identity-independent
-    format and flag checks; the printed summary excludes only rows it contradicts. A printed
+    footer/header/name/date are not gated. reads: one list of 2 or 3 reads per page. A row is kept only
+    when at least two reads print the same value, flag and reference range (both reads when only two were
+    made) and the agreed value passes the identity-independent format and flag checks; the printed summary
+    of the agreeing reads excludes only rows it contradicts. A row no read prints a value for is a heading,
+    not a result: it is noted and never listed as an excluded result. Every excluded result row is appended
+    to row_exclusions ({page, name, reason, reads}) for the staff notes and the confirmation step. A printed
     patient name that differs from the staff entry is a staff-review notice, never a rejection."""
     notes = []
     accepted = []
@@ -318,16 +382,15 @@ def gate_staff_identified_reads(reads, collected, result_re, patient_name, failu
         notes.append(message)
         print(message)
 
-    mismatched = sorted({page["page"] for pair in [*reads, *(partial for _, partial, _ in failures)]
-                         for page in pair if page["patient_name"]
+    mismatched = sorted({page["page"] for pages in [*reads, *(partial for _, partial, _ in failures)]
+                         for page in pages if page["patient_name"]
                          and not names_match(patient_name, page["patient_name"])})
     for number in mismatched:
         note(f"STAFF REVIEW - PATIENT NAME MISMATCH: source=scan page {number} prints a patient name "
              "that differs from the staff-entered name; rows were not rejected for this - confirm the "
              "page belongs to this patient")
 
-    codes = {*lab_codes, *(row["lab_code"] for pair in reads for page in pair for row in page["rows"]
-                          if row["lab_code"] and re.fullmatch(r"[A-Z0-9]{2,5}", row["lab_code"]))}
+    codes = _lab_codes([page for pages in reads for page in pages], lab_codes)
 
     def name_of(text):
         return strip_lab_code(" ".join(text.split()), codes)
@@ -340,74 +403,78 @@ def gate_staff_identified_reads(reads, collected, result_re, patient_name, failu
             text, flag = split[1], split[2]
         return text.casefold(), flag
 
-    summaries = ({}, {})
-    for pair in reads:
-        for reading, page in enumerate(pair):
+    # Printed out-of-range summaries, per read position (the n-th read of every page).
+    summaries = [{} for _ in range(max((len(pages) for pages in reads), default=0))]
+    for pages in reads:
+        for reading, page in enumerate(pages):
             for entry in page["out_of_range_summary"] or []:
                 if not entry["illegible"] and entry["name"] and entry["result_text"]:
                     summaries[reading].setdefault(name_of(entry["name"]).casefold(), set()).add(
                         summary_key(entry["result_text"], entry["flag"]))
 
-    def row_reason(rows):
-        first, second = rows
-        if len(first) != 1 or len(second) != 1:
-            return "agreement gate: missing or duplicate row in independent reads"
-        first, second = first[0], second[0]
-        if first["result_text"] != second["result_text"] or first["flag"] != second["flag"] or \
-                _canonical_range(first["reference_range"]) != _canonical_range(second["reference_range"]):
-            return "agreement gate: independent reads disagree on value, flag or range"
-        if first["illegible"] or second["illegible"] or not first["name"] or not first["result_text"]:
-            return "legibility gate: null or illegible row"
+    def row_reason(rows, needed):
+        agreeing = _agreed(rows, needed)
+        if agreeing is None:
+            if any(len(read_rows) != 1 for read_rows in rows):
+                return "agreement gate: missing or duplicate row in independent reads", None
+            return "agreement gate: independent reads disagree on value, flag or range", None
+        chosen = [rows[reading][0] for reading in agreeing]
+        first = chosen[0]
+        if any(row["illegible"] for row in chosen) or not first["name"] or not first["result_text"]:
+            return "legibility gate: null or illegible row", first
         numeric = result_re.fullmatch(first["result_text"])
         if numeric is None and first["result_text"].casefold() not in _STATUSES and \
                 re.fullmatch(r"[1-4]\+", first["result_text"]) is None:
-            return "grammar gate: unsupported printed result"
+            return "grammar gate: unsupported printed result", first
         if numeric and numeric["flag"]:
-            return "grammar gate: result_text includes a flag instead of a separate flag field"
+            return "grammar gate: result_text includes a flag instead of a separate flag field", first
         if not _numeric_flag(first, result_re):
-            return "flag gate: result contradicts numeric reference range"
+            return "flag gate: result contradicts numeric reference range", first
         key = summary_key(first["result_text"], first["flag"])
         if any(entries and key not in entries
-               for entries in (summary.get(name_of(first["name"]).casefold()) for summary in summaries)):
-            return "summary gate: row disagrees with printed out-of-range summary"
-        return None
+               for entries in (summaries[reading].get(name_of(first["name"]).casefold()) for reading in agreeing)):
+            return "summary gate: row disagrees with printed out-of-range summary", first
+        return None, first
 
     pages = []
-    for pair in reads:
-        number = pair[0]["page"]
-        identities = {}
-        for reading, page in enumerate(pair):
-            for row in page["rows"]:
-                identity = (name_of(row["name"]) if row["name"] else row["name"], row["section"])
-                identities.setdefault(identity, ([], []))[reading].append(row)
-        kept = 0
+    for page_reads in reads:
+        number = page_reads[0]["page"]
+        needed = len(page_reads) if len(page_reads) < 3 else SCAN_AGREEMENT_READS  # two reads: both must agree
+        identities = _row_identities(page_reads, codes)
+        kept = results = 0
         for (name, _section), rows in identities.items():
-            reason = row_reason(rows)
-            if reason and reason.startswith("agreement gate") and row_exclusions is not None:
-                row_exclusions.append({"page": number, "name": name or "(unnamed row)",
-                                       "reads": f"{_read_values(rows[0])} / {_read_values(rows[1])}"})
-            for row in rows[0] if reason is None else rows[0] or rows[1]:
-                if reason:
-                    note(f"source=scan page {number} excluded {row['name']!r}: {reason}")
-                else:
-                    accepted.append({**row, "name": name_of(row["name"]), "date": collected,
-                                     "specimen_id": None, "source": "scan"})
-                    kept += 1
-        if not identities:
+            if all(is_heading_row(row) for read_rows in rows for row in read_rows):
+                note(f"source=scan page {number} {name!r}: no read prints a result for it (a heading or label, "
+                     "not a result); not a result row")
+                continue
+            results += 1
+            reason, row = row_reason(rows, needed)
+            if reason is None:
+                accepted.append({**row, "name": name_of(row["name"]), "date": collected,
+                                 "specimen_id": None, "source": "scan"})
+                kept += 1
+                continue
+            printed = row or next(read_row for read_rows in rows for read_row in read_rows)
+            note(f"source=scan page {number} excluded {printed['name']!r}: {reason}")
+            if row_exclusions is not None:
+                row_exclusions.append({"page": number, "name": name or "(unnamed row)", "reason": reason,
+                                       "reads": " / ".join(_read_values(read_rows) for read_rows in rows)})
+        if not results:
             reason = "no result rows read; notice only"
             note(f"source=scan page {number}: {reason}")
         else:
             reason = None if kept else "row gates: no rows passed"
             if reason:
                 note(f"source=scan page {number}: {reason}; page excluded")
-        pages.append((number, [len(page["rows"]) for page in pair], kept, reason))
+        counts = [len(page["rows"]) for page in page_reads]
+        pages.append((number, counts, kept, reason))
     for number, partial_reads, reason in failures:
         note(f"source=scan page {number}: {reason}; page excluded")
         counts = [len(page["rows"]) for page in partial_reads]
         pages.append((number, counts + [None] * (2 - len(counts)), 0, reason))
     for number, counts, kept, reason in sorted(pages, key=lambda item: item[0]):
         verdict = "kept" if kept else "notice" if reason and reason.endswith("notice only") else "excluded"
-        print(f"source=scan page={number} rows_read={json.dumps(counts[0])}/{json.dumps(counts[1])} "
+        print(f"source=scan page={number} rows_read={'/'.join(json.dumps(count) for count in counts)} "
               f"identity=\"staff\" date={json.dumps(collected)} rows_kept={kept} verdict={verdict} "
               f"reason={json.dumps(reason or 'passed')}")
     return accepted, notes

@@ -99,10 +99,11 @@ def _clear_zero_sentinel_partial_scan(dexa_data: dict) -> None:
 
 
 def normalize_dexa_body_fat(dexa_data: dict) -> dict:
-    """The printed body-fat percentage when one was printed; computed from the reported fat and total
-    mass only when none was printed, and then listed in "computed" so it is labelled as such. A value
-    that was printed but excluded (reads or pages disagree) is "withheld": it stays empty, never
-    replaced by a computed one."""
+    """The printed body-fat percentage when one was printed (including one marked "(e)", which stays labelled
+    estimated); computed only when none was printed, and then listed in "computed" so it is labelled as such.
+    The computation is the scan's own definition, fat / (fat + lean) x 100, from the printed fat and lean mass
+    (never fat / total mass, which also counts bone). A value that was printed but excluded (reads or pages
+    disagree) is "withheld": it stays empty, never replaced by a computed one."""
     _clear_zero_sentinel_partial_scan(dexa_data)
     withheld = dexa_data.pop("withheld", None) or []
     body_fat = dexa_data.get("body_fat_pct")
@@ -112,27 +113,32 @@ def normalize_dexa_body_fat(dexa_data: dict) -> dict:
         dexa_data["body_fat_pct"] = None
         return dexa_data
 
-    total_mass = dexa_data.get("total_mass_lb")
-    fat_mass = dexa_data.get("fat_mass_lb")
-    if total_mass in (None, "") or fat_mass in (None, ""):
-        dexa_data["body_fat_pct"] = None
-        return dexa_data
-
     try:
-        total_mass = float(total_mass)
-        fat_mass = float(fat_mass)
+        fat_mass = float(dexa_data.get("fat_mass_lb"))
+        lean_mass = float(dexa_data.get("lean_mass_lb"))
     except (TypeError, ValueError):
         dexa_data["body_fat_pct"] = None
         return dexa_data
-
-    if total_mass == 0:
+    if fat_mass < 0 or lean_mass < 0 or fat_mass + lean_mass == 0:
         dexa_data["body_fat_pct"] = None
         return dexa_data
 
-    value = (fat_mass / total_mass) * 100
+    value = fat_mass / (fat_mass + lean_mass) * 100
     dexa_data["body_fat_pct"] = f"{value:.1f}%"
     dexa_data["computed"] = [*(dexa_data.get("computed") or []), "body_fat_pct"]
     return dexa_data
+
+
+def has_body_composition(reading) -> bool:
+    """A DEXA scan that can stand as "When you came in" / "Where you are now": it has a body fat % (printed or
+    computed) or its total, fat and lean mass. A VAT-only follow-up scan does not."""
+    return reading.body_fat_pct is not None or None not in (
+        reading.total_mass_lb, reading.fat_mass_lb, reading.lean_mass_lb)
+
+
+def body_composition_scans(dexa_history: list) -> list:
+    """The scans in history order (oldest first) that can stand as the first or current body composition."""
+    return [reading for reading in dexa_history if has_body_composition(reading)]
 
 
 def is_censored(disp, value) -> bool:

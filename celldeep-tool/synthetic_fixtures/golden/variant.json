@@ -1,0 +1,54 @@
+{
+  "first_draw_date": "",
+  "latest_draw_date": "04/14/2026",
+  "scored": [
+    {
+      "name": "TSH",
+      "then": null,
+      "then_date": "",
+      "now": "1.9",
+      "now_date": "04/14/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "0.40–5.50",
+      "range_source": "celldeep",
+      "unscored": null,
+      "lab_range_now": "0.40-4.50",
+      "lab_flag_then": null,
+      "lab_flag_now": null,
+      "history": []
+    },
+    {
+      "name": "hs-CRP",
+      "then": null,
+      "then_date": "",
+      "now": "0.4",
+      "now_date": "04/14/2026",
+      "then_tier": null,
+      "now_tier": "optimal",
+      "celldeep_range": "optimal <1.0",
+      "range_source": null,
+      "unscored": null,
+      "lab_range_now": "0.0-3.0",
+      "lab_flag_then": null,
+      "lab_flag_now": null,
+      "history": []
+    }
+  ],
+  "lab_reported": [],
+  "staff_unrecognized": [
+    {
+      "raw_name": "Thyroid Stimulating Hormone Ultra",
+      "raw_range": "0.40-4.50",
+      "cells": [
+        {
+          "date_display": "04/14/2026",
+          "disp_value": "2.1",
+          "lab_flag": null
+        }
+      ]
+    }
+  ],
+  "scan_summary": [],
+  "staff_notes": []
+}

@@ -96,10 +96,18 @@ def test_estimated_values_are_kept_flagged_and_labelled(tmp_path):
     estimated["vat_mass"] = "0.88 (e)"
     history, _, _, _ = _run(tmp_path, ["summary"], {"summary": _same(fx.BASELINE, estimated)})
     assert history[1]["vat_fat_mass_lb"] == 0.88 and history[1]["estimated"] == ["vat_fat_mass_lb"]
+    # The same number, with "(e)" seen by one read only: the value stands and is shown as estimated.
     mixed = copy.deepcopy(fx.FOLLOW_UP)
-    history2, notes, _, _ = _run(tmp_path, ["summary"], {"summary": (fx.read([estimated]), fx.read([mixed]))},
-                                 name="mixed.pdf")
-    assert history2[0]["vat_fat_mass_lb"] is None and "independent reads disagree" in notes[0]
+    history2, notes, summary, _ = _run(tmp_path, ["summary"], {"summary": (fx.read([estimated]), fx.read([mixed]))},
+                                       name="mixed.pdf")
+    assert history2[0]["vat_fat_mass_lb"] == 0.88 and history2[0]["estimated"] == ["vat_fat_mass_lb"]
+    assert notes == [] and any('only one shows the "(e)" marker; shown as estimated' in line for line in summary)
+    # A different number is still excluded, "(e)" or not.
+    different = copy.deepcopy(fx.FOLLOW_UP)
+    different["vat_mass"] = "0.91"
+    history3, notes3, _, _ = _run(tmp_path, ["summary"], {"summary": (fx.read([estimated]), fx.read([different]))},
+                                  name="different.pdf")
+    assert history3[0]["vat_fat_mass_lb"] is None and "independent reads disagree" in notes3[0]
     record, _ = pipeline.score_and_build_record({"name": "Synthetic", "sex": "male", "dexa_history": history})
     html = template.dexa_panel(record, {"headlines": {"Structure": "Tracked."}}, {"Structure": {"now": 80}}, None)
     assert '0.88 lb VAT <span class="dexa-est">estimated</span>' in html

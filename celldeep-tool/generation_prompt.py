@@ -12,7 +12,7 @@ fact. "Baseline"/"starting point" claims resolve via min() on normalized date;
 from markers_reference import (CATEGORY_TAGLINES, DATA_TO_PATIENT_CATEGORY, MARKER_DESCRIPTIONS,
                                NARRATIVE_CATEGORY_OVERRIDE, SYSTEM_ORDER)
 from schema import normalize_date_for_matching
-from scoring import is_censored
+from scoring import has_body_composition, is_censored
 import clinic_config
 
 PATIENT_SYSTEMS = ("Drive", "Pace", "Fuel", "Flow", "Repair", "Reserves")
@@ -124,7 +124,16 @@ def _tier_counts(markers) -> dict[str, int]:
 
 
 def _is_complete_reading(reading) -> bool:
-    return None not in (reading.total_mass_lb, reading.fat_mass_lb, reading.lean_mass_lb)
+    """A scan that can stand as the first or current body composition (scoring.has_body_composition)."""
+    return has_body_composition(reading)
+
+
+def body_fat_text(reading) -> str:
+    """The body fat % exactly as the report shows it everywhere, with its label when the scanner marked it
+    "(e)" estimated or it was computed because none was printed: '19.0% (estimated)', '22.2% (computed)'."""
+    labels = [clinic_config.DEXA_ESTIMATED_LABEL] if "body_fat_pct" in (reading.estimated or []) else []
+    labels += [clinic_config.DEXA_COMPUTED_LABEL] if "body_fat_pct" in (reading.computed or []) else []
+    return reading.body_fat_pct + (f" ({', '.join(labels)})" if labels else "")
 
 
 def _pct_number(text):
@@ -147,9 +156,10 @@ def _dexa_delta(record) -> str:
         return ""
     parts = []
     if first.body_fat_pct and latest.body_fat_pct:
-        parts.append(f"Body fat {first.body_fat_pct} on {first.date_display} to "
-                     f"{latest.body_fat_pct} on {latest.date_display}.")
-    parts.append(f"Lean mass {first.lean_mass_lb} lb to {latest.lean_mass_lb} lb.")
+        parts.append(f"Body fat {body_fat_text(first)} on {first.date_display} to "
+                     f"{body_fat_text(latest)} on {latest.date_display}.")
+    if first.lean_mass_lb is not None and latest.lean_mass_lb is not None:
+        parts.append(f"Lean mass {first.lean_mass_lb} lb to {latest.lean_mass_lb} lb.")
     return " ".join(parts)
 
 
@@ -275,7 +285,7 @@ def build_copy(record) -> dict:
                                else "Next 90 days: maintain your current approach.")
     latest_scan = next((d for d in reversed(record.dexa_history) if _is_complete_reading(d)), None)
     if latest_scan and latest_scan.body_fat_pct:
-        headlines["Structure"] = f"Body fat {latest_scan.body_fat_pct} on {latest_scan.date_display}."
+        headlines["Structure"] = f"Body fat {body_fat_text(latest_scan)} on {latest_scan.date_display}."
     box_stories["Structure"] = ""
 
     noteworthy = attention + [m for m in not_retested if m not in attention]
