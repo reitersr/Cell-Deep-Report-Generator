@@ -115,6 +115,23 @@ def _not_retested_markers(markers) -> list:
     return [m for m in markers if not is_retested(m) and (m.then is not None or m.disp_then)]
 
 
+def earlier_draw_systems(record) -> list[tuple[str, list]]:
+    """[(system, [markers])] for each system whose current results include one from a draw before the headline
+    (latest) draw date, in PATIENT_SYSTEMS order. Only results with a printed date are compared."""
+    latest = normalize_date_for_matching(record.latest_draw_date or "")
+    if not isinstance(latest, tuple):
+        return []
+    systems = []
+    for system in PATIENT_SYSTEMS:
+        earlier = [m for m in _system_markers(record, system)
+                   if (m.now is not None or m.disp_now)
+                   and isinstance(day := normalize_date_for_matching(m.now_date_display or ""), tuple)
+                   and day < latest]
+        if earlier:
+            systems.append((system, earlier))
+    return systems
+
+
 def _system_markers(record, system) -> list:
     return [m for m in record.markers if _system_of(m) == system]
 
@@ -245,6 +262,13 @@ def build_copy(record) -> dict:
         bullets.append(f"<b>What to focus on next:</b> {marker_sentence(priority)}")
     if not_retested:
         bullets.append(f"<b>Not retested this round:</b> {', '.join(m.name for m in not_retested)}.")
+    earlier = earlier_draw_systems(record)
+    if earlier:
+        listed = "; ".join(f"{system}: " + ", ".join(f"{m.name} ({m.now_date_display})" for m in markers)
+                           for system, markers in earlier)
+        bullets.append(f"<b>{clinic_config.EARLIER_DRAW_SUMMARY_LABEL}:</b> "
+                       f"{plural(len(earlier), 'This system uses', 'These systems use')} results from draws before "
+                       f"{record.latest_draw_date}: {listed}.")
     censored = [m for m in markers if is_censored(m.disp_now, m.now)]
     if censored:
         bullets.append(f"<b>{clinic_config.CENSORED_SUMMARY_LABEL}:</b> "

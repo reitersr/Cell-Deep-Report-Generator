@@ -304,9 +304,10 @@ def _run_report(job_directory: Path, job_data: dict, run) -> None:
         print(f"generation stopped at confirmation job_id={job_directory.name}")
     except Exception:
         job_id = job_directory.name
-        _write_job_status(job_directory, "error", error=f"Generation failed. Job ID: {job_id}", job_id=job_id)
+        # Log first, then publish the status: whoever sees "error" can already find the traceback.
         print(f"generation failed job_id={job_id}")
         print(traceback.format_exc())
+        _write_job_status(job_directory, "error", error=f"Generation failed. Job ID: {job_id}", job_id=job_id)
     finally:
         _delete_job_inputs(job_directory)
 

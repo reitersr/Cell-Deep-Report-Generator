@@ -2342,7 +2342,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 for disp, value, date, flag in ((m.disp_then, m.then, m.then_date_display, m.lab_flag_then),
                                                 (m.disp_now, m.now, m.now_date_display, m.lab_flag_now))
                 if scoring.is_censored(disp, value)]
-    differing = [f"{m.name} {m.disp_now!r} (lab flag {m.lab_flag_now}, CellDeep {m.now_tier})"
+    differing = [f"{m.name} {m.disp_now!r} (lab flag {m.lab_flag_now}, CellDeep {m.now_tier or 'not scored'})"
                  for m in markers if template.lab_flag_differs(m)]
     if differing:
         notice.other_notes.append("LAB FLAG DIFFERS FROM CELLDEEP STATUS: " + "; ".join(differing))
@@ -2469,6 +2469,8 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
                 lines.append(f"  LAB EXCLUDED page {match[1]} (scanned): {match[2]}")
     if extracted.get("provider_note_status"):
         lines.append(f"  Provider note: {extracted['provider_note_status']}")
+    if "vitality_sources" in extracted:
+        lines.append(f"  Vitality Index: {vitality_status(extracted)}")
     row_exclusions = extracted.get("scan_row_exclusions", [])
     disagree = sum(scan_row_reason(item).startswith("reads disagree") for item in row_exclusions)
     lines.append(f"  Scored markers: {len(record.markers)}; rows excluded (reads disagree): {disagree}; "
@@ -2575,6 +2577,46 @@ def markers_reference_lookup(raw_name: str):
     return lookup_marker(raw_name)
 
 
+def resolve_vitality(form_values: dict | None, note_values: dict | None) -> tuple[dict, dict, list[str]]:
+    """The Vitality Index answers and where each came from. A domain counts only when the upload form or a read
+    provider note gives it a concern level ("No Concern", "Some Concern", "Significant Concern"); "Not Assessed"
+    and an absent answer are no answer, never a default. When the form and the note give different answers for a
+    domain, neither is used and the staff notes say so. Returns ({label: value}, {label: "form" | "note"},
+    staff notes). With no answer at all the report shows the section as not provided and nothing is scored."""
+    answers = {"form": form_values or {}, "note": note_values or {}}
+    values, sources, notes = {}, {}, []
+    for label in scoring.VITALITY_LABELS:
+        given = {source: answers[source].get(label) for source in ("form", "note")
+                 if scoring.VITALITY_VALUE_SCORES.get(answers[source].get(label)) is not None}
+        if len(set(given.values())) > 1:
+            notes.append(f"VITALITY INDEX CONFLICT: {label} is '{given['form']}' on the upload form and "
+                         f"'{given['note']}' in the provider note; left out of the report and the score - "
+                         "confirm with the provider")
+            continue
+        if given:
+            source = "form" if "form" in given else "note"
+            values[label], sources[label] = given[source], source
+    return values, sources, notes
+
+
+def vitality_status(extracted: dict) -> str:
+    """One STAFF CHECK line: which Vitality Index answers the report uses and where they came from."""
+    values, sources = extracted.get("vitality_index") or {}, extracted.get("vitality_sources") or {}
+    if not values:
+        return ("not provided (no answer on the upload form or in a read provider note); shown as not provided, "
+                "not scored")
+    by_source = {}
+    for label, source in sources.items():
+        by_source.setdefault(source, []).append(f"{label} {values[label]}")
+    where = "; ".join(f"from the {'upload form' if source == 'form' else 'provider note'}: {', '.join(items)}"
+                      for source, items in by_source.items())
+    total = len(scoring.VITALITY_LABELS)
+    line = f"{len(values)} of {total} domains {where}"
+    if len(values) == total and set(values.values()) == {"No Concern"}:
+        line += " - all seven 'No Concern': confirm these are this patient's answers"
+    return line
+
+
 def resolve_age(extracted: dict, staff_age: int | None) -> int | None:
     """Printed DOB + collection date wins; conflicting DOBs mean no age at all; otherwise the staff entry."""
     notes = extracted.setdefault("other_notes", [])
@@ -2611,8 +2653,9 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     extracted["name"] = patient_name
     extracted["age"] = resolve_age(extracted, age)
     extracted["sex"] = sex
-    if vitality_index:
-        extracted["vitality_index"] = vitality_index
+    extracted["vitality_index"], extracted["vitality_sources"], vitality_notes = resolve_vitality(
+        vitality_index, extracted.get("vitality_index"))
+    extracted.setdefault("other_notes", []).extend(vitality_notes)
     # Protocol comes only from the note's structured Protocol section, never from scanning its prose.
     completeness_notice = verify_extraction_completeness(
         extracted, provider_note_text="", lab_text=raw_lab_text, dexa_text=raw_dexa_text,

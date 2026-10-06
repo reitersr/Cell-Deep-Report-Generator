@@ -128,6 +128,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    `scan_bloodwork.names_match` (any order and case, or first name plus last initial).
 4. **Provider note**: `parse_provider_note` reads only the documented template sections
    (including `## Treatment Status`); every other line is listed with its reason.
+4b. **Vitality Index** (`pipeline.resolve_vitality`): a domain's answer comes from the upload form or a read
+   provider note; "Not Assessed" (the form default) is no answer. A form/note disagreement leaves the domain
+   out (staff note). With no answer the box shows `clinic_config.VITALITY_NOT_PROVIDED_LABEL`, never "No
+   Concern", and the symptom score is left out of the overall score. The STAFF CHECK names each answer's source.
 4a. **Identity**: age comes from the printed date of birth and collection date when printed
    (`_age_from_dob`; DOB never stored, disagreeing DOBs give no age); `name_header` lists the name
    each source printed at the top of the staff notes.
@@ -138,7 +142,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    the staff notes and raises a `COVERAGE GAP` note otherwise.
 6. **Copy and render**: `generation_prompt.build_copy` fills patient-facing text;
    `template.render` writes the patient PDF. Full-panel column headers name a date only when every
-   value in the column is from it (`template.panel_column_headers`).
+   value in the column is from it (`template.panel_column_headers`). The lab's own flag is shown under every
+   current result the lab flagged unless CellDeep calls it Flagged (`clinic_config.LAB_FLAG_DISAGREES_WITH`).
+   The summary lists the systems whose current results come from a draw before the headline date
+   (`generation_prompt.earlier_draw_systems`).
 7. **Staff notes**: `_write_review_notes` / `format_review_notice` write the staff-only review
    file, downloadable separately from the report. It opens with the one-screen STAFF CHECK
    (`pipeline.staff_check_block`: entered name and date, DEXA dates accepted/excluded with ages and body fat

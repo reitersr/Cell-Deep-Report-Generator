@@ -457,10 +457,15 @@ def vitality_index_box_html(record: PatientRecord, symptom_now: float | None, lo
             f'<div class="vitality-domain"><span>{label}</span>'
             f'<span class="status" style="color:{status_color};">{status}</span></div>'
         )
-    if symptom_now is None:
+    why = "Current domain assessments"
+    if all(record.vitality_index.get(domain) is None for domain in scoring.VITALITY_DOMAINS):
+        # No answer on the upload form or in a read provider note: never shown as "No Concern", never scored.
         color = MUTE
-        score_html = '<div class="vitality-score-missing">Not assessed this round</div>'
-        tier_word = "NOT ASSESSED"
+        label = _html(clinic_config.VITALITY_NOT_PROVIDED_LABEL)
+        score_html = f'<div class="vitality-score-missing">{label}</div>'
+        tier_word = label.upper()
+        why = "No Vitality Index answers were provided for this report"
+        domain_rows = []
     else:
         score = round(symptom_now)
         color = GREEN if score >= 88 else YELLOW if score >= 50 else RED
@@ -472,7 +477,7 @@ def vitality_index_box_html(record: PatientRecord, symptom_now: float | None, lo
         <div class="box-titles"><div class="box-name">Symptom / Vitality Index</div><div class="box-sub">Seven scored domains</div></div>
         {score_html}
       </div>
-      <div class="box-why"><span class="box-tierword" style="color:{color}">{tier_word}.</span> Current domain assessments</div>
+      <div class="box-why"><span class="box-tierword" style="color:{color}">{tier_word}.</span> {why}</div>
       <div class="vitality-domains">{"".join(domain_rows)}</div>
       <div class="box-mark">{logo_mark}</div>
     </div>'''
@@ -673,13 +678,16 @@ def _lab_flag_words(flag) -> str:
 
 
 def lab_flag_differs(m) -> bool:
-    """The lab printed H/L for the current result while CellDeep calls it optimal."""
+    """The lab printed a flag for the current result and CellDeep's status is one that does not already say
+    so (clinic_config.LAB_FLAG_DISAGREES_WITH: by default anything but Flagged). A result printed as a limit
+    shows its flag next to the value instead, so it gets no extra line."""
     return (bool(m.lab_flag_now) and m.lab_flag_now in clinic_config.LAB_FLAG_WORDS
-            and m.now_tier in clinic_config.LAB_FLAG_DISAGREES_WITH)
+            and m.now_tier in clinic_config.LAB_FLAG_DISAGREES_WITH
+            and not scoring.is_censored(m.disp_now, m.now))
 
 
 def _lab_flag_line(m) -> str:
-    """'Lab flag: Low (lab range 38-380)' under a scored value whose lab flag disagrees."""
+    """'Lab flag: Low (lab range 38-380)' under a current value whose lab flag CellDeep's status does not show."""
     if not (clinic_config.SHOW_LAB_FLAG_WHEN_IT_DIFFERS and lab_flag_differs(m)):
         return ""
     lab_range = (m.lab_range_now or {}).get("display")
