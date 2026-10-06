@@ -306,18 +306,17 @@ def _extract_dexa_scan_images(dexa_pdfs: list[str]) -> list[tuple[str, str, int,
             page = document[0]
             pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2))
             image_bytes = pixmap.tobytes("png")
+            del pixmap
+            fitz.TOOLS.store_shrink(100)
             crop_source = "full rendered page 1"
-            report.write(f"file={pdf_path} page={page_number} source={crop_source}\n")
-            png_path = "/tmp/dexa_scan_page_1.png"
-            with open(png_path, "wb") as image_file:
-                image_file.write(image_bytes)
-            file_size = os.path.getsize(png_path)
-            report.write(f"file={pdf_path} page={page_number} png={png_path} "
+            file_size = len(image_bytes)  # no PNG copy is written to /tmp
+            report.write(f"file={pdf_path} page={page_number} "
                          f"source={crop_source} size_kb={file_size / 1024:.1f}\n")
             print(f"DEXA scan page: file={pdf_path} page={page_number} "
                   f"source={crop_source} size_kb={file_size / 1024:.1f}")
             encoded = base64.b64encode(image_bytes).decode("ascii")
-            images.append((encoded, pdf_path, page_number, png_path, file_size))
+            del image_bytes
+            images.append((encoded, pdf_path, page_number, None, file_size))
     return images
 
 
@@ -376,7 +375,13 @@ def _pdf_text(path: str | None) -> str:
     if not path:
         return ""
     with fitz.open(path) as document:
-        return "\n".join(page.get_text() for page in document)
+        return "\n".join(_page_text(page) for page in document)
+
+
+def _page_text(page) -> str:
+    text = page.get_text()
+    fitz.TOOLS.store_shrink(100)  # see _page_words: do not keep scanned pages' decoded images cached
+    return text
 
 
 _PRINTED_DATE_RE = re.compile(
@@ -759,7 +764,13 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
 
 def _page_words(page) -> list[tuple]:
     """(x0, y0, x1, y1, text) for every word on a page; accepts a fitz.Page or a prepared word list."""
-    raw = page.get_text("words") if hasattr(page, "get_text") else page
+    if hasattr(page, "get_text"):
+        raw = page.get_text("words")
+        # Reading a scanned page's text layer decodes its full-resolution image into MuPDF's cache;
+        # empty the cache so those images never accumulate (it is a cache only: output is unchanged).
+        fitz.TOOLS.store_shrink(100)
+    else:
+        raw = page
     return [(float(w[0]), float(w[1]), float(w[2]), float(w[3]), str(w[4]))
             for w in raw if str(w[4]).strip()]
 
@@ -1580,10 +1591,12 @@ def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], pa
                 name_sink.append(("DEXA", f"file {key[0]} page {key[1]}", printed.pop()))
     return scan_dexa.gate(pages, patient_name, failures, dob_sink)
 
-def has_scanned_pages(pdf_bytes: bytes) -> bool:
-    """True when a lab PDF has image-only pages, which only staff-entered identity can date."""
+def has_scanned_pages(pdf: bytes | str | os.PathLike) -> bool:
+    """True when a lab PDF (a path, or its bytes) has image-only pages, which only staff-entered identity
+    can date."""
     try:
-        with fitz.open(stream=pdf_bytes, filetype="pdf") as document:
+        with (fitz.open(stream=pdf, filetype="pdf") if isinstance(pdf, bytes) else
+              fitz.open(pdf, filetype="pdf")) as document:
             return any(not _page_words(page) for page in document)
     except RuntimeError:
         return False  # Unreadable PDFs fail visibly in the report job.
@@ -1943,7 +1956,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                 printed_names.extend(("lab PDF text pages", None, " ".join(name.split())) for name in sorted(
                     scan_bloodwork.digital_patient_names(digital_pages, _group_lines, _page_words)))
             for page in digital_pages:
-                for match in _DOB_RE.finditer(page.get_text()):
+                for match in _DOB_RE.finditer(_page_text(page)):
                     if (dob := _printed_dob(match.group(1))) is not None:
                         dob_sources.append((f"lab page {page.number + 1}", dob))
             if digital_pages:

@@ -19,11 +19,23 @@
   <script>
     const statusUrl = {{ url_for('generate_status', job_id=job_id)|tojson }};
     const statusElement = document.getElementById('status');
+    const interruptedMessage = {{ interrupted_message|tojson }};
 
     async function checkStatus() {
       try {
         const response = await fetch(statusUrl, {cache: 'no-store'});
+        if (response.status === 404) {
+          // The job no longer exists: its instance was killed or restarted. Stop polling.
+          statusElement.className = 'error';
+          statusElement.textContent = interruptedMessage;
+          return;
+        }
         const job = await response.json();
+        if (job.status === 'interrupted') {
+          statusElement.className = 'error';
+          statusElement.textContent = interruptedMessage;
+          return;
+        }
         if (job.status === 'done') {
           statusElement.className = 'result';
           statusElement.innerHTML = '<strong>Report generated.</strong><br><a href="' + job.report_url + '">Download patient report</a><br><a href="' + job.review_notes_url + '">Download internal QA file</a>';

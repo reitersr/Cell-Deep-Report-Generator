@@ -71,8 +71,11 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    `CELLDEEP_SECRET_KEY`, else a key derived from the password, never a per-process random key;
    every protected route goes through `app.is_staff_session`): patient name,
    age, sex, lab PDF, DEXA PDF(s), provider note, Vitality Index, and the bloodwork Collected date
-   (required when the lab PDF has image-only pages). Runs `pipeline.run` in a background job; a
-   failure shows "Generation failed. Job ID: <id>".
+   (required when the lab PDF has image-only pages). Runs `pipeline.run` in a background job, one at a
+   time per process; a failure shows "Generation failed. Job ID: <id>", and a job whose process died
+   (missing folder or heartbeat older than `STALE_JOB_SECONDS`) shows "This report job was interrupted.
+   Please try again". Scanned pages are rendered once per page via `scan_bloodwork.render_page_png_b64`
+   (200 DPI, MuPDF cache emptied) so peak memory does not grow with page count (`test_memory.py`).
 2. **Bloodwork** (`pipeline.extract`):
    - Pages with a text layer: `_parse_bloodwork_tables` reads rows by printed column position
      under each page's own Current/Historical or In Range/Out of Range header. Names match

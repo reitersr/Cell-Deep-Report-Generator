@@ -10,12 +10,11 @@ Values the scanner marks "(e)" are kept and flagged as estimated. Nothing is com
 or carried between dates here.
 """
 
-import base64
 import json
 import re
 from datetime import date as calendar_date
 
-from scan_bloodwork import ScanGateError, _nullable, _object, _validate, name_key
+from scan_bloodwork import ScanGateError, _nullable, _object, _validate, name_key, render_page_png_b64
 from schema import normalize_date_for_matching
 
 _TEXT = _nullable({"type": "string"})
@@ -51,14 +50,17 @@ _MEASURE_RE = re.compile(r"(?P<num>\d+(?:\.\d+)?)\s*(?:%|lbs?|cm2|cm²|cm\^2)?",
 
 def read_page(page, label, client, create_message, model):
     """Two independent literal reads of one DEXA page."""
-    image = base64.b64encode(page.get_pixmap(dpi=200, alpha=False).tobytes("png")).decode("ascii")
+    image = render_page_png_b64(page)
     reads = []
-    for reading in (1, 2):
-        try:
-            reads.append(_read(page, image, label, reading, client, create_message, model))
-        except ScanGateError as error:
-            error.reads = reads
-            raise
+    try:
+        for reading in (1, 2):
+            try:
+                reads.append(_read(page, image, label, reading, client, create_message, model))
+            except ScanGateError as error:
+                error.reads = reads
+                raise
+    finally:
+        del image
     return reads
 
 
