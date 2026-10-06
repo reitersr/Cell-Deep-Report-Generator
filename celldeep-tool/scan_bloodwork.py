@@ -5,6 +5,23 @@ import json
 import re
 from datetime import date as calendar_date
 
+import fitz
+
+SCAN_RENDER_DPI = 200  # changing this changes what the vision model sees; keep it fixed
+
+
+def render_page_png_b64(page, dpi=SCAN_RENDER_DPI):
+    """One page as a base64 PNG, holding only one page's render at a time. The pixmap and PNG bytes are
+    released before returning, and MuPDF's decoded-image cache (up to 256MB by default) is emptied so
+    a scanned page's full-resolution image does not stay in memory after it is rendered."""
+    pixmap = page.get_pixmap(dpi=dpi, alpha=False)
+    png = pixmap.tobytes("png")
+    del pixmap
+    fitz.TOOLS.store_shrink(100)
+    encoded = base64.b64encode(png).decode("ascii")
+    del png
+    return encoded
+
 
 class ScanGateError(ValueError):
     pass
@@ -82,14 +99,18 @@ def _validate(value, schema, location="page"):
 
 
 def read_page(page, client, create_message, model):
-    image = base64.b64encode(page.get_pixmap(dpi=200, alpha=False).tobytes("png")).decode("ascii")
+    """Two independent reads of one page, both sent the same single render, which is released on return."""
+    image = render_page_png_b64(page)
     reads = []
-    for reading in (1, 2):
-        try:
-            reads.append(_read_transcription(page, image, reading, client, create_message, model))
-        except ScanGateError as error:
-            error.reads = reads
-            raise
+    try:
+        for reading in (1, 2):
+            try:
+                reads.append(_read_transcription(page, image, reading, client, create_message, model))
+            except ScanGateError as error:
+                error.reads = reads
+                raise
+    finally:
+        del image
     return reads
 
 

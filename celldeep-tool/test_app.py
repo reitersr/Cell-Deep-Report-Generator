@@ -39,6 +39,7 @@ def test_generate_runs_as_disk_backed_background_job(staff_client, tmp_path, mon
 
     def fake_run(**kwargs):
         captured.update(kwargs)
+        captured["labs_bytes"] = Path(kwargs["labs_pdf"]).read_bytes()
         worker_started.set()
         assert release_worker.wait(timeout=2)
         Path(kwargs["out_path"]).write_bytes(b"synthetic report PDF")
@@ -74,7 +75,11 @@ def test_generate_runs_as_disk_backed_background_job(staff_client, tmp_path, mon
     assert captured["vitality_index"] == {
         label: "Not Assessed" for _, label in app.VITALITY_FIELDS
     }
-    assert Path(captured["labs_pdf"]).read_bytes() == b"synthetic input PDF"
+    assert captured["labs_bytes"] == b"synthetic input PDF"
+    # The upload is deleted once the job ends; only the downloads remain.
+    assert not Path(captured["labs_pdf"]).exists()
+    assert {path.name for path in (tmp_path / "jobs" / job_id).iterdir()} == {
+        "report.pdf", "review_notes.txt", "status.json", "heartbeat"}
 
 
 def test_unrecognized_lab_layout_fails_the_upload_job_visibly(staff_client, tmp_path, monkeypatch, capsys):
@@ -151,7 +156,7 @@ def test_scanned_lab_pdf_requires_collected_date_before_job_starts(staff_client,
         assert response.status_code == 302
         assert "contains scanned pages" in client.get("/").get_data(as_text=True)
     run.assert_not_called()
-    assert not (tmp_path / "jobs").exists()
+    assert not list((tmp_path / "jobs").glob("*"))  # the saved upload was removed with its job folder
 
 
 @pytest.mark.parametrize("scanned", [True, False])
@@ -161,9 +166,16 @@ def test_lab_pdf_with_date_or_without_scans_starts_job(staff_client, tmp_path, m
     data = {"patient_name": "Test Patient", "labs_pdf": (io.BytesIO(pdf), "labs.pdf")}
     if scanned:
         data["collected_date"] = "2026-04-14"
-    with patch.object(app.pipeline, "run", return_value=str(tmp_path / "review.txt")):
+    received = []
+
+    def fake_run(**kwargs):
+        received.append(Path(kwargs["labs_pdf"]).read_bytes())
         (tmp_path / "review.txt").write_text("synthetic review", encoding="utf-8")
+        return str(tmp_path / "review.txt")
+
+    with patch.object(app.pipeline, "run", side_effect=fake_run):
         response = staff_client.post("/generate", data=data)
     assert response.status_code == 200
     job_id = re.search(r'data-job-id="([a-f0-9]+)"', response.get_data(as_text=True)).group(1)
-    assert (tmp_path / "jobs" / job_id / "labs.pdf").read_bytes() == pdf
+    _wait_for_status(staff_client, job_id, "done")
+    assert received == [pdf]

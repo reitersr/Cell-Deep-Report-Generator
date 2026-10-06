@@ -170,6 +170,18 @@ def _job_directory(job_id: str) -> Path | None:
     return JOBS_DIR / job_id
 
 
+# A running job touches its heartbeat file every HEARTBEAT_SECONDS. A job still "processing" whose
+# heartbeat is older than STALE_JOB_SECONDS was killed with its process (out of memory, restart, redeploy).
+HEARTBEAT_SECONDS = 10
+STALE_JOB_SECONDS = 120
+JOB_INTERRUPTED_MESSAGE = "This report job was interrupted. Please try again"
+# One report at a time per process: each job renders scanned pages and starts Chromium, and two at once
+# do not fit a 512MB instance. Later jobs wait their turn (status stays "processing").
+_REPORT_SLOT = threading.Lock()
+# Job folder contents kept after a job ends; uploads and the intermediate HTML are deleted.
+_JOB_OUTPUTS = {"report.pdf", "review_notes.txt", "status.json", "status.tmp", "heartbeat"}
+
+
 def _write_job_status(job_directory: Path, status: str, **details) -> None:
     payload = {"status": status, **details}
     temporary_path = job_directory / "status.tmp"
@@ -184,9 +196,51 @@ def _read_job_status(job_directory: Path) -> dict:
     return json.loads(status_path.read_text(encoding="utf-8"))
 
 
-def _run_report_job(job_directory: Path, job_data: dict) -> None:
+def _touch_heartbeat(job_directory: Path) -> None:
+    (job_directory / "heartbeat").touch()
+
+
+def _heartbeat_loop(job_directory: Path, stop: threading.Event) -> None:
+    while not stop.wait(HEARTBEAT_SECONDS):
+        try:
+            _touch_heartbeat(job_directory)
+        except OSError:
+            return
+
+
+def _job_is_stale(job_directory: Path) -> bool:
+    beats = [path.stat().st_mtime for path in (job_directory / "heartbeat", job_directory / "status.json")
+             if path.exists()]
+    return time.time() - max(beats, default=job_directory.stat().st_mtime) > STALE_JOB_SECONDS
+
+
+def _delete_job_inputs(job_directory: Path) -> None:
+    """Uploaded PDFs and the intermediate report HTML are not needed once the job has ended."""
+    if not job_directory.is_dir():
+        return
+    for path in job_directory.iterdir():
+        if path.name in _JOB_OUTPUTS:
+            continue
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+
+
+def _run_report_job(job_directory: Path, job_data: dict, run=None) -> None:
+    stop_heartbeat = threading.Event()
+    threading.Thread(target=_heartbeat_loop, args=(job_directory, stop_heartbeat), daemon=True,
+                     name=f"celldeep-heartbeat-{job_directory.name}").start()
     try:
-        review_path = pipeline.run(
+        with _REPORT_SLOT:
+            _run_report(job_directory, job_data, run or pipeline.run)
+    finally:
+        stop_heartbeat.set()
+
+
+def _run_report(job_directory: Path, job_data: dict, run) -> None:
+    try:
+        review_path = run(
             labs_pdf=job_data["labs_path"],
             dexa_pdfs=job_data["dexa_paths"],
             note_text=job_data["note_text"],
@@ -197,13 +251,15 @@ def _run_report_job(job_directory: Path, job_data: dict) -> None:
             vitality_index=job_data["vitality_index"],
             collected_date=job_data.get("collected_date"),
         )
-        shutil.copyfile(review_path, job_directory / "review_notes.txt")
+        shutil.move(review_path, job_directory / "review_notes.txt")
         _write_job_status(job_directory, "done")
     except Exception:
         job_id = job_directory.name
         _write_job_status(job_directory, "error", error=f"Generation failed. Job ID: {job_id}", job_id=job_id)
         print(f"generation failed job_id={job_id}")
         print(traceback.format_exc())
+    finally:
+        _delete_job_inputs(job_directory)
 
 
 @app.route("/generate", methods=["POST"])
@@ -224,12 +280,6 @@ def generate():
             return redirect(url_for("index"))
 
         age = int(age) if age else None
-        labs_file = request.files.get("labs_pdf")
-        labs_bytes = labs_file.read() if labs_file and labs_file.filename else None
-        if labs_bytes and not collected_date and pipeline.has_scanned_pages(labs_bytes):
-            flash("This bloodwork PDF contains scanned pages. Enter the Bloodwork Collected Date "
-                  "so the scanned pages can be identified.")
-            return redirect(url_for("index"))
         if collected_date:
             try:
                 collected_date = pipeline.scan_collected_date(collected_date)
@@ -241,10 +291,17 @@ def generate():
         job_directory = _job_directory(job_id)
         job_directory.mkdir(parents=True, exist_ok=False)
 
+        # Uploads stream straight to the job folder; the PDF is never also held in memory as bytes.
+        labs_file = request.files.get("labs_pdf")
         labs_path = None
-        if labs_bytes is not None:
+        if labs_file and labs_file.filename:
             labs_path = job_directory / "labs.pdf"
-            labs_path.write_bytes(labs_bytes)
+            labs_file.save(labs_path)
+            if not collected_date and pipeline.has_scanned_pages(labs_path):
+                shutil.rmtree(job_directory, ignore_errors=True)
+                flash("This bloodwork PDF contains scanned pages. Enter the Bloodwork Collected Date "
+                      "so the scanned pages can be identified.")
+                return redirect(url_for("index"))
 
         dexa_paths = []
         for index, dexa_file in enumerate(request.files.getlist("dexa_pdfs")):
@@ -264,13 +321,14 @@ def generate():
             "collected_date": collected_date,
         }
         _write_job_status(job_directory, "processing")
+        _touch_heartbeat(job_directory)
         threading.Thread(
             target=_run_report_job,
-            args=(job_directory, job_data),
+            args=(job_directory, job_data, pipeline.run),  # bound now: the job may wait for its turn
             daemon=True,
             name=f"celldeep-report-{job_id}",
         ).start()
-        return render_template("generating.html", job_id=job_id)
+        return render_template("generating.html", job_id=job_id, interrupted_message=JOB_INTERRUPTED_MESSAGE)
 
     except Exception:
         job_id = uuid.uuid4().hex
@@ -283,9 +341,13 @@ def generate():
 @app.route("/generate/status/<job_id>", methods=["GET"])
 def generate_status(job_id):
     job_directory = _job_directory(job_id)
+    interrupted = {"status": "interrupted", "error": JOB_INTERRUPTED_MESSAGE}
     if job_directory is None or not job_directory.is_dir():
-        abort(404)
+        # The job's files are gone: the instance was replaced or restarted while it ran.
+        return jsonify(interrupted), 404
     status = _read_job_status(job_directory)
+    if status["status"] == "processing" and _job_is_stale(job_directory):
+        return jsonify(interrupted)
     if status["status"] == "done":
         status["report_url"] = url_for("download_report", job_id=job_id)
         status["review_notes_url"] = url_for("download_review_notes", job_id=job_id)

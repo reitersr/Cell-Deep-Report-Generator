@@ -40,6 +40,13 @@ local only) or `CELLDEEP_LIVE_VISION=1` skip otherwise.
   every 15 minutes and on requests).
 - **Failures** show "Generation failed. Job ID: <id>" on the page; the details are in the server
   log under that job id. Logs never contain patient names or the staff notice text.
+- **Interrupted jobs.** If the instance is killed or restarted while a report runs (for example out
+  of memory or a redeploy), the generating page shows "This report job was interrupted. Please try
+  again" instead of spinning: the job is gone, or it stopped writing its heartbeat for two minutes.
+- **Memory (512MB instance).** Scanned and DEXA pages are rendered one at a time at 200 DPI; each
+  render is sent to both reads and released before the next page, and MuPDF's decoded-image cache is
+  emptied after each page. Uploads stream to disk, and uploaded PDFs and the intermediate report HTML
+  are deleted when the job ends. One report runs at a time per process; later jobs wait their turn.
 
 ## Upload
 
