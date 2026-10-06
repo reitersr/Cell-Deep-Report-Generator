@@ -734,7 +734,22 @@ def bio_row_tr(m, copy, color_override=None):
     return row
 
 
-def bio_group(cat, record, copy, first_draw, latest_draw, show_headers=True):
+def _column_header(dates, fallback):
+    """A column header names a date only when every result in that column is from that date."""
+    distinct = {date for date in dates if date}
+    return fmt_date(distinct.pop()) if len(distinct) == 1 else fallback
+
+
+def panel_column_headers(record):
+    """(earlier, latest) headers for the full-panel table. A marker's earlier column can hold a result that
+    is not from the document's first draw (e.g. a single result older than the latest draw), so the
+    headers come from the dates actually shown in each column, never from the document-wide dates."""
+    earlier = [m.then_date_display for m in record.markers if m.then is not None or m.disp_then]
+    latest = [m.now_date_display for m in record.markers if m.now is not None or m.disp_now]
+    return (_column_header(earlier, "Earlier") if earlier else "", _column_header(latest, "Latest"))
+
+
+def bio_group(cat, record, copy, show_headers=True):
     rows = [m for m in record.markers if m.category == cat]
     if not rows:
         return ""
@@ -752,7 +767,7 @@ def bio_group(cat, record, copy, first_draw, latest_draw, show_headers=True):
     narrative = copy.get("group_narratives", {}).get(cat, "")
     narr_html = f'<p style="font-size:9.5px; color:#4c4744; margin:4px 0 8px; font-style:italic;">{fmt(narrative)}</p>' if narrative else ""
     tagline_html = f'<div style="font-size:10.5px; color:#4c4744; margin:4px 0 8px;">{fmt(tagline)}</div>' if tagline else ""
-    date_headers = (fmt_date(first_draw), fmt_date(latest_draw)) if first_draw else ("", fmt_date(latest_draw))
+    date_headers = panel_column_headers(record)
     header_html = (f'<div class="bio-table-row bio-table-header"><div>Marker</div><div>Reference Range</div><div>{date_headers[0]}</div><div>{date_headers[1]}</div></div>'
                    if show_headers else "")
     first_row = row_html[0]
@@ -875,7 +890,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         if c in ["Inflammation", "Lipids", "Metabolic", "Hormones", "Thyroid", "Foundational", "Also Monitored"]
         else 99))
     breakdown_groups = [
-        bio_group(c, record, copy, record.first_draw_date, record.latest_draw_date, index == 0)
+        bio_group(c, record, copy, index == 0)
         for index, c in enumerate(data_categories)
     ]
     first_breakdown = breakdown_groups[0] if breakdown_groups else ""
