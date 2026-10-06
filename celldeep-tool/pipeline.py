@@ -268,6 +268,9 @@ def reconcile_marker_occurrences(occurrences: list[dict]) -> list[dict]:
             "lab_range_now_display": now_occ.get("lab_range_display", "") if now_occ else "",
             "lab_flag_then": (then_occ.get("lab_flag") or None) if then_occ else None,
             "lab_flag_now": (now_occ.get("lab_flag") or None) if now_occ else None,
+            # The unit the lab printed for the current result: "" when the layout has a Units column the lab
+            # left empty (shown without a unit, never filled in); None when the layout prints no units column.
+            "unit_now_printed": now_occ.get("printed_unit") if now_occ else None,
             "full_history": history,
         })
     return reconciled
@@ -709,6 +712,10 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
         match = markers_reference_lookup(marker.get("name", ""))
         if match:
             extracted_markers.add(match[0])
+    # A known test the layout deliberately shows as lab-reported (word result, assay differs) is accounted for.
+    shown_as_lab_reported = {match[0] for item in extracted.get("lab_reported", [])
+                             for printed in [item["name"], *item.get("printed_names", [])]
+                             if (match := markers_reference_lookup(printed)) is not None}
     lab_lower = lab_text.lower()
     for canonical, config in MARKER_LIBRARY.items():
         names = [canonical, *config.get("aliases", [])]
@@ -718,7 +725,7 @@ def verify_extraction_completeness(extracted: dict, provider_note_text: str = ""
                 rf"(?<!\w){re.escape(name.lower())}(?!\w)", lab_lower
             ))
         source_mentions = len(source_positions)
-        if not source_mentions:
+        if not source_mentions or (canonical in shown_as_lab_reported and canonical not in extracted_markers):
             continue
         if canonical not in extracted_markers:
             warning = (f"WARNING: MARKER '{canonical}' FOUND IN SOURCE BUT MISSING FROM EXTRACTION - "
@@ -1716,6 +1723,39 @@ def _age_from_dob(dob_sources: list, collected: str | None) -> dict:
     return {"age_from_dob": age, "dob_notes": []}
 
 
+def lab_header_checks(info: dict, staff_collected: str | None, staff_age: int | None, staff_sex: str | None,
+                      dexa_info: dict, occurrences: list) -> list[str]:
+    """Staff notices comparing what a lab layout's header printed (Coll. Date, Age, Sex, Fasting) with the
+    staff entries and the DEXA pages. The printed Coll. Date is the one the results use; nothing is changed
+    here, only reported."""
+    notes = []
+    printed = info.get("collected")
+    if printed and staff_collected and _normalize_date_for_matching(printed) != \
+            _normalize_date_for_matching(staff_collected):
+        notes.append(f"COLLECTED DATE CHECK: staff entered {staff_collected}, the lab header prints Coll. Date "
+                     f"{printed}; the results use the printed date - confirm which draw this is")
+    age = info.get("age")
+    if age is not None and staff_age is not None and int(age) != int(staff_age):
+        notes.append(f"AGE CHECK: the lab header prints Age {age}; staff entered {staff_age}")
+    dexa_ages = sorted({float(text) for _, text in dexa_info.get("accepted", []) if text})
+    if age is not None and dexa_ages and any(abs(value - int(age)) > clinic_config.DEXA_AGE_TOLERANCE_YEARS
+                                             for value in dexa_ages):
+        notes.append(f"AGE CHECK: the lab header prints Age {age}; accepted DEXA pages print age(s) "
+                     f"{', '.join(f'{value:g}' for value in dexa_ages)} - confirm both are this patient's")
+    sex = {"M": "male", "F": "female"}.get(info.get("sex"))
+    if sex and staff_sex and sex != staff_sex:
+        notes.append(f"SEX CHECK: the lab header prints Sex {info['sex']}; staff entered {staff_sex}; the report "
+                     "uses the staff entry")
+    if info.get("fasting") == "N":
+        fasting_markers = sorted({occ["name"] for occ in occurrences
+                                  if occ["name"] in ("Glucose (fasting)", "Fasting Insulin")})
+        notes.append("NON-FASTING DRAW: the lab header prints 'Fasting: N'"
+                     + (f"; {', '.join(fasting_markers)} {'was' if len(fasting_markers) == 1 else 'were'} drawn "
+                        f"non-fasting but the report still labels and scores {'it' if len(fasting_markers) == 1 else 'them'}"
+                        " as fasting (clinic decision, docs/open_decisions.md)" if fasting_markers else ""))
+    return notes
+
+
 def scan_dexa_incomplete_notice(exclusions: list) -> list[str]:
     import scan_dexa
 
@@ -1997,7 +2037,8 @@ def parse_provider_note(note_text: str | None) -> dict:
 
 def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             patient_name: str | None = None, audit_root: str | None = None,
-            client: Anthropic | None = None, collected_date: str | None = None, age: int | None = None) -> dict:
+            client: Anthropic | None = None, collected_date: str | None = None, age: int | None = None,
+            sex: str | None = None) -> dict:
     """Parse readable labs and notes deterministically; gate scan transcription; extract DEXA via Claude."""
     collected_date = scan_collected_date(collected_date) if collected_date else None
     occurrences, unrecognized, lab_review_notes = [], [], []
@@ -2008,6 +2049,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     lab_text_pages, scan_notes = [], []
     dob_sources = []  # (source label, (y, m, d)); used only to compute age, never stored
     printed_names = []  # (source, page or None, name as printed) for the staff-notes header
+    layout, layout_info = None, {}  # a registered lab layout (lab_layouts) and what its header printed
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
             pages = list(document)
@@ -2015,15 +2057,27 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             lab_text_pages = [page.number + 1 for page in digital_pages]
             scans = [page for page in pages if not _page_words(page)]
             scan_numbers = [page.number + 1 for page in scans]
-            if digital_pages:
+            import lab_layouts
+
+            layout = lab_layouts.select(digital_pages) if digital_pages else None
+            if digital_pages and layout is None:
                 import scan_bloodwork
                 printed_names.extend(("lab PDF text pages", None, " ".join(name.split())) for name in sorted(
                     scan_bloodwork.digital_patient_names(digital_pages, _group_lines, _page_words)))
-            for page in digital_pages:
+            for page in digital_pages if layout is None else ():
                 for match in _DOB_RE.finditer(_page_text(page)):
                     if (dob := _printed_dob(match.group(1))) is not None:
                         dob_sources.append((f"lab page {page.number + 1}", dob))
-            if digital_pages:
+            if layout is not None:
+                # A registered lab layout reads its own header (patient, DOB, age, Coll. Date) and table.
+                occurrences, unrecognized, layout_info = layout.parse(
+                    digital_pages, row_audit=row_audit, review_notes=lab_review_notes,
+                    exclusions=parse_exclusions, sex=sex)
+                if layout_info.get("patient"):
+                    printed_names.append(("lab PDF text pages", None, layout_info["patient"]))
+                if (dob := _printed_dob(layout_info.get("dob"))) is not None:
+                    dob_sources.append(("lab header", dob))
+            elif digital_pages:
                 occurrences, unrecognized = _parse_bloodwork_tables(
                     digital_pages, row_audit=row_audit, review_notes=lab_review_notes,
                     exclusions=parse_exclusions)
@@ -2085,7 +2139,10 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "provider_note_status": note_status(note_text, note),
         "printed_names": printed_names,
         **_age_from_dob(dob_sources, latest["date_display"] if latest else None),
-        "other_notes": [*lab_review_notes, *note["other_notes"]],
+        "other_notes": [*lab_review_notes, *note["other_notes"],
+                        *lab_header_checks(layout_info, collected_date, age, sex, dexa_info, occurrences)],
+        "lab_layout": layout.NAME if layout is not None else None,
+        "lab_header": layout_info,
     }
 
     audit_base = Path(audit_root or tempfile.gettempdir()) / "celldeep_extraction_audits"
@@ -2172,6 +2229,12 @@ def _dedupe_extracted_markers(raw_markers: list[dict]) -> tuple[list[dict], list
                     merged[display_field] = other.get(display_field)
         deduped.append(merged)
     return deduped, conflict_notes
+
+
+def _marker_unit(cfg: dict, raw: dict) -> str:
+    """The library unit, except that a current result the lab printed with an empty Units cell shows no unit:
+    a unit is never filled in for the lab (access_medical lists these rows in the staff notes)."""
+    return "" if raw.get("unit_now_printed") == "" else cfg["unit"]
 
 
 def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionReviewNotice]:
@@ -2263,7 +2326,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             # window, regardless of the marker's normal scoring kind - it replaces the default
             # threshold for this one patient/marker only, never the library default itself.
             m = Marker(
-                name=canonical, category=cfg["category"], unit=cfg["unit"], kind="range",
+                name=canonical, category=cfg["category"], unit=_marker_unit(cfg, raw), kind="range",
                 disp_range=f"{lo}\u2013{hi} (provider override)",
                 lo=lo, hi=hi,
                 then=raw.get("then"), now=raw.get("now"),
@@ -2277,7 +2340,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             scoring_log_lines.append(f"OVERRIDE APPLIED: {canonical} range set to {lo}-{hi} per provider note")
         else:
             m = Marker(
-                name=canonical, category=cfg["category"], unit=cfg["unit"], kind=cfg["kind"],
+                name=canonical, category=cfg["category"], unit=_marker_unit(cfg, raw), kind=cfg["kind"],
                 disp_range=cfg["disp_range"],
                 optimal=cfg.get("optimal"), moderate=cfg.get("moderate"), direction=cfg.get("direction"),
                 inclusive=cfg.get("inclusive", True),
@@ -2354,6 +2417,10 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
     notice.dexa_summary = list(extracted.get("dexa_summary", []))
     notice.other_notes.extend(dexa_staleness_notes(record.dexa_history, extracted.get("latest_draw_date")))
     notice.other_notes.extend(dexa_score_notes(record))
+    if record.dexa_history and all(d.vat_fat_mass_lb is None and d.visceral_fat_area_cm2 is None
+                                   for d in record.dexa_history):
+        notice.other_notes.append("DEXA VAT/SAT NOT FOUND: no accepted DEXA page prints visceral fat (VAT/SAT page "
+                                  "missing or excluded); the report shows no visceral-fat line - check the DEXA file")
     exclusions = extracted.get("parse_exclusions", [])
     if exclusions:
         pages = sorted({item["page"] for item in exclusions})
@@ -2441,7 +2508,11 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
     ages = sorted({age for _, age in info.get("accepted", []) if age}, key=float)
     lines = ["STAFF CHECK - confirm before sending this report",
              f"  Patient name (entered): {extracted.get('name') or '(none entered)'}",
-             f"  Bloodwork Collected date (entered): {extracted.get('collected_date') or '(none entered)'}"]
+             f"  Bloodwork Collected date (entered): {extracted.get('collected_date') or '(none entered)'}"
+             + (f"; lab header prints Coll. Date {extracted['lab_header']['collected']}"
+                if (extracted.get("lab_header") or {}).get("collected") else "")]
+    if extracted.get("lab_layout"):
+        lines.append(f"  Lab layout: {extracted['lab_layout']}")
     if record.dexa_history:
         dates = ", ".join(reading.date_display + (" (body fat % computed)" if "body_fat_pct" in reading.computed
                                                   else " (body fat % estimated)" if "body_fat_pct" in reading.estimated
@@ -2563,7 +2634,7 @@ def coverage_gaps(source_rows: list[dict], record: PatientRecord, unrecognized_n
     for row in source_rows:
         names = [occurrence["name"] for occurrence in row["occurrences"] if occurrence["name"] not in scored]
         for unknown in row["unrecognized"]:
-            match = lab_reported.lookup(unknown["raw_name"], lab_reported._heading(unknown))
+            match = unknown.get("show_as") or lab_reported.lookup(unknown["raw_name"], lab_reported._heading(unknown))
             printed = " ".join(unknown["raw_name"].split())
             if printed.casefold() not in unrecognized_names and (match is None or match[0] not in shown):
                 names.append(printed)
@@ -2647,7 +2718,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
 
     print("Step 1/3: parsing source documents...")
     extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client,
-                        collected_date=collected_date, age=age)
+                        collected_date=collected_date, age=age, sex=sex)
     if confirm is not None and extracted["preflight"] and not confirm(list(extracted["preflight"])):
         raise GenerationAborted("stopped by staff at the confirmation step")
     extracted["name"] = patient_name

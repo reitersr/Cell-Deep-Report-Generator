@@ -947,6 +947,9 @@ def render(record: PatientRecord, copy: dict, out_path: str,
                                 else "By your next birthday"))
     by_age_sub = fmt(copy.get("by_age_sub", ""))
     overall_then_display = f"{overall_then}%" if overall_then is not None else fmt(overall_then)
+    # With one draw there is no first visit to improve on, so the "improved" key is left out of the legend.
+    improved_legend = (f" &nbsp;&middot;&nbsp; {CHECK_SM} = improved since your first visit"
+                       if overall_then is not None else "")
     HTML = f'''<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>CellDeep: Patient and Protocol Record</title>
 <style>{CSS}</style></head>
@@ -969,7 +972,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
         {gauge_svg(overall_then, overall_now, gauge_zone)}
       </div>
     </div>
-    <div class="color-legend">Red = flagged &nbsp;&middot;&nbsp; Yellow = moderate &nbsp;&middot;&nbsp; Green = optimal &nbsp;&middot;&nbsp; {CHECK_SM} = improved since your first visit</div>
+    <div class="color-legend">Red = flagged &nbsp;&middot;&nbsp; Yellow = moderate &nbsp;&middot;&nbsp; Green = optimal{improved_legend}</div>
     <div class="journey-row">
     <div class="jstep"><div class="lbl">You were</div><div class="val">{overall_then_display}</div><div class="sub">{fmt_date(first_draw)}</div></div>
       <div class="jstep"><div class="lbl">You are</div><div class="val">{overall_now}%</div><div class="sub">{fmt_date(latest_draw)}</div></div>

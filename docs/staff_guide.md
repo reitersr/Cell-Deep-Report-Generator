@@ -6,7 +6,9 @@ and listed in the staff notes. You check those items and decide whether the repo
 
 ## 1. What to upload
 
-- **Bloodwork Lab PDF**: the whole lab report (Quest or Cleveland HeartLab), scanned or digital, as received.
+- **Bloodwork Lab PDF**: the whole lab report (Quest, Cleveland HeartLab or Access Medical Laboratories), scanned or
+  digital, as received. For Access Medical the patient, age and Collected date are read from the report header;
+  the STAFF CHECK says when they differ from what you entered.
 - **DEXA Scan PDF(s)**: the patient's DEXA file(s), as received. Pages with the name redacted are fine.
 - **Provider's Consultation Note**: the structured note from the template on the upload page. It must use the
   `## ` headings (`## Consultation Note`, `## Treatment Status`, `## Patient Concerns`, `## Protocol`,

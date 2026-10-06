@@ -29,6 +29,8 @@ These override any other instruction, convenience or test shortcut.
 |---|---|
 | `celldeep-tool/app.py` | Flask upload form (`templates/index.html`) and background report jobs. |
 | `celldeep-tool/pipeline.py` | Orchestrator: deterministic bloodwork table parsing, scan routing, reconciliation, scoring hand-off, review notes, CLI (`python pipeline.py --help`). |
+| `celldeep-tool/lab_layouts.py` | Registry of deterministic digital lab layouts; `select()` picks one, else the Quest/CHL table parser. |
+| `celldeep-tool/access_medical.py` | Access Medical Laboratories layout: header block, four-column table, summary cross-check. |
 | `celldeep-tool/scan_bloodwork.py` | Image-only bloodwork pages: two independent vision reads per page and the deterministic gates that keep or exclude each row. |
 | `celldeep-tool/markers_reference.py` | Marker library: canonical names, exact aliases, CellDeep scoring thresholds. |
 | `celldeep-tool/lab_reported.py` | Lab-reported, not-scored tests (CBC, chemistry, urinalysis, ...): exact aliases, section-scoped; shown with printed range and the lab's H/L flag, never a CellDeep score. |
@@ -87,7 +89,11 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    listed. The generating page lists them and staff continue or stop (`/generate/decision/<id>`,
    `GenerationAborted`).
 2. **Bloodwork** (`pipeline.extract`):
-   - Pages with a text layer: `_parse_bloodwork_tables` reads rows by printed column position
+   - Pages with a text layer: `lab_layouts.select` picks a registered layout (today `access_medical`: header
+     block for patient, DOB, age, two-digit-year Coll. Date and Fasting; rows only under a section title in the
+     Test Name | Results | Reference Range | Units pattern; the OUT OF RANGE SUMMARY only cross-checks; word results
+     and assays that differ from the CellDeep range basis are lab-reported; units are never filled in). Otherwise
+     `_parse_bloodwork_tables` reads rows by printed column position
      under each page's own Current/Historical or In Range/Out of Range header. Names match
      the marker library by exact alias only; anything else becomes an unrecognized-marker
      review item.

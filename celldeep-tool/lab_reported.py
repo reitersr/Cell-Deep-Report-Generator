@@ -39,16 +39,19 @@ LAB_REPORTED_LIBRARY = {
         ("RDW", ["rdw", "red cell distribution width"]),
         ("Platelet Count", ["platelet count", "platelets", "plt"]),
         ("MPV", ["mpv", "mean platelet volume"]),
-        ("Absolute Neutrophils", ["absolute neutrophils", "neutrophils, absolute", "neutrophils (absolute)"]),
-        ("Absolute Lymphocytes", ["absolute lymphocytes", "lymphocytes, absolute", "lymphs (absolute)"]),
-        ("Absolute Monocytes", ["absolute monocytes", "monocytes, absolute", "monocytes (absolute)"]),
-        ("Absolute Eosinophils", ["absolute eosinophils", "eosinophils, absolute", "eos (absolute)"]),
-        ("Absolute Basophils", ["absolute basophils", "basophils, absolute", "baso (absolute)"]),
-        ("Neutrophils %", ["neutrophils", "neutrophils %", "neutrophils, percent", "neutrophils (%)"]),
-        ("Lymphocytes %", ["lymphocytes", "lymphocytes %", "lymphocytes, percent", "lymphs"]),
-        ("Monocytes %", ["monocytes", "monocytes %", "monocytes, percent"]),
-        ("Eosinophils %", ["eosinophils", "eosinophils %", "eosinophils, percent", "eos"]),
-        ("Basophils %", ["basophils", "basophils %", "basophils, percent", "basos"]),
+        ("Absolute Neutrophils", ["absolute neutrophils", "neutrophils, absolute", "neutrophils (absolute)",
+                                  "neutrophil #"]),
+        ("Absolute Lymphocytes", ["absolute lymphocytes", "lymphocytes, absolute", "lymphs (absolute)",
+                                  "lymphocyte #"]),
+        ("Absolute Monocytes", ["absolute monocytes", "monocytes, absolute", "monocytes (absolute)", "monocyte #"]),
+        ("Absolute Eosinophils", ["absolute eosinophils", "eosinophils, absolute", "eos (absolute)", "eosinophil #"]),
+        ("Absolute Basophils", ["absolute basophils", "basophils, absolute", "baso (absolute)", "basophil #"]),
+        ("Neutrophils %", ["neutrophils", "neutrophils %", "neutrophils, percent", "neutrophils (%)",
+                           "neutrophil %"]),
+        ("Lymphocytes %", ["lymphocytes", "lymphocytes %", "lymphocytes, percent", "lymphs", "lymphocyte %"]),
+        ("Monocytes %", ["monocytes", "monocytes %", "monocytes, percent", "monocyte %"]),
+        ("Eosinophils %", ["eosinophils", "eosinophils %", "eosinophils, percent", "eos", "eosinophil %"]),
+        ("Basophils %", ["basophils", "basophils %", "basophils, percent", "basos", "basophil %"]),
     ]),
     **_entries("Chemistry", [
         ("Sodium", ["sodium"]),
@@ -59,13 +62,13 @@ LAB_REPORTED_LIBRARY = {
         ("Anion Gap", ["anion gap"]),
         ("Urea Nitrogen (BUN)", ["urea nitrogen (bun)", "urea nitrogen", "bun", "blood urea nitrogen",
                                  "bun (blood urea nitrogen)"]),
-        ("BUN/Creatinine Ratio", ["bun/creatinine ratio"]),
+        ("BUN/Creatinine Ratio", ["bun/creatinine ratio", "bun/creat ratio"]),
         ("Calcium", ["calcium", "calcium, total"]),
         ("Protein, Total", ["protein, total", "total protein"]),
         ("Albumin", ["albumin"]),
         ("Globulin", ["globulin", "globulin, total"]),
         ("Albumin/Globulin Ratio", ["albumin/globulin ratio", "a/g ratio"]),
-        ("Bilirubin, Total", ["bilirubin, total", "total bilirubin"]),
+        ("Bilirubin, Total", ["bilirubin, total", "total bilirubin", "bili", "bili total"]),
         ("Bilirubin, Direct", ["bilirubin, direct", "direct bilirubin"]),
         ("Alkaline Phosphatase", ["alkaline phosphatase", "alk phos", "alp (alkaline phosphatase)"]),
         ("AST", ["ast", "ast (sgot)", "sgot", "ast (aspartate amino transferase)"]),
@@ -116,8 +119,8 @@ LAB_REPORTED_LIBRARY = {
     **{f"{URINALYSIS} — {name}": dict(group=URINALYSIS, aliases=aliases) for name, aliases in [
         ("Color", ["color"]), ("Appearance", ["appearance"]), ("Specific Gravity", ["specific gravity"]),
         ("pH", ["ph"]), ("Glucose", ["glucose"]), ("Bilirubin", ["bilirubin"]), ("Ketones", ["ketones"]),
-        ("Protein", ["protein"]), ("Nitrite", ["nitrite"]), ("Leukocyte Esterase", ["leukocyte esterase"]),
-        ("Urobilinogen", ["urobilinogen"]), ("WBC", ["wbc"]), ("RBC", ["rbc"]),
+        ("Protein", ["protein"]), ("Nitrite", ["nitrite"]), ("Leukocyte Esterase", ["leukocyte esterase", "leukocytes"]),
+        ("Urobilinogen", ["urobilinogen"]), ("Blood", ["blood", "occult blood"]), ("WBC", ["wbc"]), ("RBC", ["rbc"]),
         ("Squamous Epithelial Cells", ["squamous epithelial cells"]), ("Bacteria", ["bacteria"]),
         ("Hyaline Cast", ["hyaline cast", "hyaline casts"]), ("Yeast", ["yeast"]),
         ("Reflexive Urine Culture", ["reflexive urine culture"]),
@@ -176,7 +179,10 @@ def build(unrecognized):
     items, remaining, notes = {}, [], []
     for unknown in unrecognized:
         results = _results(unknown)
-        match = lookup(unknown["raw_name"], _heading(unknown)) if results else None
+        # show_as: a recognized test the layout parser decided must be shown as lab-reported, not scored
+        # (e.g. an assay that differs from the CellDeep range basis); it carries its own (name, group).
+        match = (tuple(unknown["show_as"]) if unknown.get("show_as") else lookup(unknown["raw_name"], _heading(unknown))
+                 ) if results else None
         if match is None:
             remaining.append(unknown)
             if not any(result["lab_flag"] for result in results):

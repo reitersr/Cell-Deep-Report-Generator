@@ -155,6 +155,7 @@ supplies thresholds.
 | Urinalysis — Nitrite | Urinalysis | Not scored - clinic input needed |
 | Urinalysis — Leukocyte Esterase | Urinalysis | Not scored - clinic input needed |
 | Urinalysis — Urobilinogen | Urinalysis | Not scored - clinic input needed |
+| Urinalysis — Blood | Urinalysis | Not scored - clinic input needed |
 | Urinalysis — WBC | Urinalysis | Not scored - clinic input needed |
 | Urinalysis — RBC | Urinalysis | Not scored - clinic input needed |
 | Urinalysis — Squamous Epithelial Cells | Urinalysis | Not scored - clinic input needed |
