@@ -62,11 +62,14 @@ Disagreeing DOBs give a staff notice and no age in the report.
 
 Every DEXA page is read twice (`scan_dexa.py`). A measurement is kept only when both reads agree
 after normalization; a field printed in one read only or read differently is excluded and listed
-with page and reason; a scan date the reads disagree on excludes that whole scan. A page is used only
-when both reads print a name matching the staff-entered patient: a page printing another name, or
-no readable name, is excluded whole (history, current values and summary) and listed under
+with page and reason; a scan date the reads disagree on excludes that whole scan. A page printing
+another patient's name is excluded whole (history, current values and summary) and listed under
 "INCOMPLETE - pages excluded" at the top of the staff notes with its page number and the printed
-name. Scans are merged
+name. A page with no printed name (e.g. redacted) is accepted for the staff-entered patient with a
+"STAFF REVIEW - DEXA name not printed" notice, unless the age printed on it is more than one year
+from the patient's (ages on name-matched pages, else the staff-entered age, else the other unnamed
+pages, which must then agree). A staff-entered name matches a printed one in any order and case, or as
+first name plus last-name initial ("Pat S" matches "SYNTHETIC, PAT"). Scans are merged
 by date across pages and sorted oldest first, so page order and model output order never change
 the result. Values the scanner marks "(e)" are kept and shown with an "estimated" label.
 

@@ -141,6 +141,32 @@ def name_key(name):
     return tuple(sorted(re.findall(r"[a-z]+", name.casefold())))
 
 
+def _words(text):
+    return re.findall(r"[a-z]+", text.casefold())
+
+
+def names_match(staff_name, printed_name):
+    """True when a printed name is the staff-entered patient: the same words in any order and case, or
+    the staff entry is the first name plus the last-name initial ("Pat S" for "SYNTHETIC, PAT" or
+    "Pat Synthetic"), in either order. Nothing else matches; no fuzzy or partial matching."""
+    if not staff_name or not printed_name or not name_key(printed_name):
+        return False
+    if name_key(staff_name) == name_key(printed_name):
+        return True
+    staff = _words(staff_name)
+    if "," in printed_name:
+        last, rest = printed_name.split(",", 1)
+        last_words, first_words = _words(last), _words(rest)
+    else:
+        words = _words(printed_name)
+        last_words, first_words = words[-1:], words[:-1]
+    if len(staff) != 2 or not last_words or not first_words:
+        return False
+    first, last_initial = first_words[0], last_words[0][0]
+    return any(full == first and initial == last_initial
+               for full, initial in (staff, staff[::-1]) if len(initial) == 1)
+
+
 def digital_patient_names(pages, group_lines, page_words):
     names = set()
     for page in pages:
@@ -277,7 +303,7 @@ def gate_staff_identified_reads(reads, collected, result_re, patient_name, failu
 
     mismatched = sorted({page["page"] for pair in [*reads, *(partial for _, partial, _ in failures)]
                          for page in pair if page["patient_name"]
-                         and name_key(page["patient_name"]) != name_key(patient_name)})
+                         and not names_match(patient_name, page["patient_name"])})
     for number in mismatched:
         note(f"STAFF REVIEW - PATIENT NAME MISMATCH: source=scan page {number} prints a patient name "
              "that differs from the staff-entered name; rows were not rejected for this - confirm the "

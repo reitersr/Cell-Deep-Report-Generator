@@ -58,3 +58,25 @@ def test_a_flagged_result_from_a_middle_draw_is_shown(tmp_path):
     assert "Also on file: 17.9 (lab flag High) on November 20, 2025" in text
     crp = next(m for m in record.markers if m.name == "hs-CRP")
     assert crp.full_history == [{"date_display": "11/20/2025", "value": 4.0, "disp_value": "4.0", "lab_flag": "H"}]
+
+
+ALIAS_PANEL = [  # invented values; names as one lab prints them
+    ("TSH", "1.90", None, "0.40-4.50"),
+    ("BUN (Blood Urea Nitrogen)", "15", None, "7-25"), ("CO2 (Carbon Dioxide, Bicarbonate)", "25", None, "20-32"),
+    ("ALP (Alkaline Phosphatase)", "66", None, "36-130"), ("ALT (Alanine Amino Transferase)", None, "52 H", "9-46"),
+    ("AST (Aspartate Amino Transferase)", "22", None, "10-40"), ("Prolactin", "9.4", None, "2.0-18.0"),
+    ("TG/HDL-C", "1.4", None, ""), ("Apo A1", "150", None, "94-176"), ("Omega-3 total", "5.1", None, ""),
+]
+
+
+def test_spelled_out_chemistry_names_and_prolactin_are_shown_not_scored(tmp_path):
+    extracted, record, notice, text, _ = _render(tmp_path, [layouts._quest_page("03/02/2026", ALIAS_PANEL, "SYN-ALIAS")])
+    shown = {item.name: item.results[-1]["disp_value"] for item in record.lab_reported}
+    assert shown == {"Urea Nitrogen (BUN)": "15", "Carbon Dioxide": "25", "Alkaline Phosphatase": "66", "ALT": "52",
+                     "AST": "22", "Prolactin": "9.4"}
+    assert {m.name for m in record.markers} == {"TSH"}  # none of them is scored
+    # Names awaiting a clinic decision (docs/open_decisions.md #13) stay staff-only and unscored.
+    unrecognized = {item["raw_name"] for item in extracted["unrecognized_markers"]}
+    assert {"TG/HDL-C", "Apo A1", "Omega-3 total"} <= unrecognized
+    assert "Apo A1" not in text and "Omega-3 total" not in text
+    assert not any("COVERAGE GAP" in note for note in notice.other_notes)

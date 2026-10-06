@@ -22,9 +22,9 @@ def scan(date, total=None, fat=None, lean=None, body_fat=None, vat=None, area=No
             "body_fat_pct": body_fat, "vat_mass": vat, "vat_area": area}
 
 
-def read(scans, patient_name=PATIENT, illegible=False, date_of_birth=None):
-    return {"page": 0, "patient_name": patient_name, "date_of_birth": date_of_birth, "illegible": illegible,
-            "scans": copy.deepcopy(scans)}
+def read(scans, patient_name=PATIENT, illegible=False, date_of_birth=None, age=None):
+    return {"page": 0, "patient_name": patient_name, "date_of_birth": date_of_birth, "age": age,
+            "illegible": illegible, "scans": copy.deepcopy(scans)}
 
 
 BASELINE = scan("05/12/2025", "172.0", "58.0", "108.9", "33.7 %", "1.06", "84.0")

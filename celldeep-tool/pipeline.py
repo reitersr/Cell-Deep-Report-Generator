@@ -1561,7 +1561,8 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
 
 def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], patient_name: str | None,
                               dob_sink: list | None = None, name_sink: list | None = None,
-                              excluded_sink: list | None = None, confirmed_sink: list | None = None):
+                              excluded_sink: list | None = None, confirmed_sink: list | None = None,
+                              staff_age: int | None = None):
     """Read every DEXA page twice and keep only measurements both reads agree on (scan_dexa.gate).
     Returns (dexa_history, staff_notes, summary_lines)."""
     import scan_bloodwork
@@ -1591,7 +1592,7 @@ def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], pa
             if len(printed) == 1 and all(read["patient_name"] for read in reads):
                 name_sink.append(("DEXA", f"file {key[0]} page {key[1]}", printed.pop()))
     excluded = [] if excluded_sink is None else excluded_sink
-    result = scan_dexa.gate(pages, patient_name, failures, dob_sink, excluded)
+    result = scan_dexa.gate(pages, patient_name, failures, dob_sink, excluded, staff_age)
     if confirmed_sink is not None:  # pages read twice whose printed name matched the staff-entered patient
         confirmed_sink.extend(sorted({key for key, _ in pages} - {key for key, _ in excluded}))
     return result
@@ -1947,7 +1948,7 @@ def parse_provider_note(note_text: str | None) -> dict:
 
 def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             patient_name: str | None = None, audit_root: str | None = None,
-            client: Anthropic | None = None, collected_date: str | None = None) -> dict:
+            client: Anthropic | None = None, collected_date: str | None = None, age: int | None = None) -> dict:
     """Parse readable labs and notes deterministically; gate scan transcription; extract DEXA via Claude."""
     collected_date = scan_collected_date(collected_date) if collected_date else None
     occurrences, unrecognized, lab_review_notes = [], [], []
@@ -1987,7 +1988,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     dexa_exclusions = []  # DEXA pages not attributed to this patient: listed under INCOMPLETE
     dexa_confirmed = []  # (file, page) keys confirmed as this patient's
     dexa_history, dexa_notes, dexa_summary = (_extract_dexa_with_claude(client, dexa_pdfs, patient_name, dob_sources,
-                                                                        printed_names, dexa_exclusions, dexa_confirmed)
+                                                                        printed_names, dexa_exclusions, dexa_confirmed,
+                                                                        age)
                                               if dexa_pdfs else ([], [], []))
     note = parse_provider_note(note_text)
     for match in re.finditer(r"^\s*Patient(?: Name)?\s*:\s*(.+?)\s*$", note["accepted_text"] or "", re.I | re.M):
@@ -2310,7 +2312,6 @@ def name_header(staff_name: str | None, printed: list) -> list[str]:
     import scan_bloodwork
 
     lines = [f"This report is for {staff_name or '(no name entered)'} (staff-entered)"]
-    expected = scan_bloodwork.name_key(staff_name) if staff_name else None
     sources = ("lab PDF text pages", "scanned lab page", "DEXA", "provider note")
     for source in sources:
         entries = [(where, name) for kind, where, name in printed if kind == source]
@@ -2323,7 +2324,7 @@ def name_header(staff_name: str | None, printed: list) -> list[str]:
         for name, places in by_name.items():
             where = [str(place) for place in places if place is not None]
             location = f" ({', '.join(where)})" if where else ""
-            verdict = ("matches" if expected and scan_bloodwork.name_key(name) == expected
+            verdict = ("matches" if scan_bloodwork.names_match(staff_name, name)
                        else "NAME MISMATCH - confirm this source belongs to the patient")
             lines.append(f"  {source}{location}: {name} - {verdict}")
     return lines
@@ -2378,7 +2379,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
 
     print("Step 1/3: parsing source documents...")
     extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client,
-                        collected_date=collected_date)
+                        collected_date=collected_date, age=age)
     extracted["name"] = patient_name
     extracted["age"] = resolve_age(extracted, age)
     extracted["sex"] = sex
