@@ -125,7 +125,7 @@ def test_invalid_collected_date_is_rejected_before_job_starts(staff_client, tmp_
     with patch.object(app.pipeline, "run") as run:
         response = staff_client.post(
             "/generate", data={"patient_name": "Test Patient", "collected_date": "2026-02-30"})
-    assert response.status_code == 302
+    assert response.status_code == 422 and "is not a calendar date" in response.get_data(as_text=True)
     run.assert_not_called()
     assert not (tmp_path / "jobs").exists()
 
@@ -153,8 +153,8 @@ def test_scanned_lab_pdf_requires_collected_date_before_job_starts(staff_client,
             "patient_name": "Test Patient",
             "labs_pdf": (io.BytesIO(_lab_pdf_bytes(scanned=True)), "scanned-labs.pdf"),
         })
-        assert response.status_code == 302
-        assert "contains scanned pages" in client.get("/").get_data(as_text=True)
+        assert response.status_code == 422
+        assert "no Bloodwork Collected Date was received" in response.get_data(as_text=True)
     run.assert_not_called()
     assert not list((tmp_path / "jobs").glob("*"))  # the saved upload was removed with its job folder
 

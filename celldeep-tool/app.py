@@ -135,7 +135,29 @@ VITALITY_FIELDS = (
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html")
+    return render_template("index.html", form={})
+
+
+@app.after_request
+def never_cache_pages(response):
+    """Pages hold patient entries and per-upload messages: the browser must never show a stored copy
+    (Back/Forward or cache), which could pair an old message with newly entered fields."""
+    if response.mimetype == "text/html":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+SCANNED_WITHOUT_DATE = ("This bloodwork PDF contains scanned pages, and no Bloodwork Collected Date was received "
+                        "with this upload. Enter the Bloodwork Collected Date and attach the PDF files again.")
+
+
+def _form_rejected(message: str, clear_date: bool = False):
+    """Show the upload form again with the message and everything staff entered (files cannot be kept)."""
+    form = request.form.to_dict()
+    if clear_date:
+        form["collected_date"] = ""
+    flash(message)
+    return render_template("index.html", form=form), 422
 
 
 NOTE_TEMPLATE = Path(__file__).resolve().parent / "templates" / "provider_notes_template.md"
@@ -276,16 +298,14 @@ def generate():
         }
 
         if not patient_name:
-            flash("Patient name is required.")
-            return redirect(url_for("index"))
+            return _form_rejected("Patient name is required.")
 
         age = int(age) if age else None
         if collected_date:
             try:
                 collected_date = pipeline.scan_collected_date(collected_date)
             except ValueError as error:
-                flash(str(error))
-                return redirect(url_for("index"))
+                return _form_rejected(str(error), clear_date=True)
 
         job_id = uuid.uuid4().hex
         job_directory = _job_directory(job_id)
@@ -299,9 +319,11 @@ def generate():
             labs_file.save(labs_path)
             if not collected_date and pipeline.has_scanned_pages(labs_path):
                 shutil.rmtree(job_directory, ignore_errors=True)
-                flash("This bloodwork PDF contains scanned pages. Enter the Bloodwork Collected Date "
-                      "so the scanned pages can be identified.")
-                return redirect(url_for("index"))
+                # Field and file-input names only (no values, no file names): shows what the server received.
+                files = sorted({key for key, upload in request.files.items(multi=True) if upload.filename})
+                print(f"upload rejected: scanned lab pages and no collected_date received; "
+                      f"form_fields={sorted(request.form)} file_fields={files} content_length={request.content_length}")
+                return _form_rejected(SCANNED_WITHOUT_DATE)
 
         dexa_paths = []
         for index, dexa_file in enumerate(request.files.getlist("dexa_pdfs")):

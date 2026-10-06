@@ -57,37 +57,37 @@
 
   <form action="/generate" method="post" enctype="multipart/form-data">
     <label>Patient Name</label>
-    <input type="text" name="patient_name" required>
+    <input type="text" name="patient_name" value="{{ form.patient_name or '' }}" required>
 
     <div class="row">
       <div>
         <label>Age</label>
-        <input type="number" name="age">
+        <input type="number" name="age" value="{{ form.age or '' }}">
       </div>
       <div>
         <label>Sex</label>
         <select name="sex">
           <option value="">Not specified</option>
-          <option value="female">Female</option>
-          <option value="male">Male</option>
+          <option value="female"{% if form.sex == "female" %} selected{% endif %}>Female</option>
+          <option value="male"{% if form.sex == "male" %} selected{% endif %}>Male</option>
         </select>
       </div>
     </div>
 
+    <label for="collected_date">Bloodwork Collected Date</label>
+    <input type="date" id="collected_date" name="collected_date" value="{{ form.collected_date or '' }}">
+    <div class="hint">Required if the lab PDF includes scanned (image-only) pages; the upload is rejected without it. Identifies every scanned page as this patient's draw on this date.</div>
+
     <label>Bloodwork Lab PDF</label>
     <input type="file" name="labs_pdf" accept="application/pdf">
     <div class="hint">The raw lab report, exactly as received. Leave blank if no bloodwork this round.</div>
-
-    <label>Bloodwork Collected Date</label>
-    <input type="date" name="collected_date">
-    <div class="hint">Required if the lab PDF includes scanned (image-only) pages; the upload is rejected without it. Identifies every scanned page as this patient's draw on this date.</div>
 
     <label>DEXA Scan PDF(s)</label>
     <input type="file" name="dexa_pdfs" accept="application/pdf" multiple>
     <div class="hint">Upload one or more. Leave blank if no DEXA this round.</div>
 
     <label>Provider's Consultation Note</label>
-    <textarea id="note_text" name="note_text" placeholder="Paste the structured provider note."></textarea>
+    <textarea id="note_text" name="note_text" placeholder="Paste the structured provider note.">{{ form.note_text or '' }}</textarea>
     <div class="hint">Use the structured template: <a href="{{ url_for('provider_note_template') }}">download a blank provider note template</a>. Only lines that follow the template are read; any other line is listed for you and in the QA file, never guessed at.</div>
     <button type="button" class="secondary" id="check-note">Check note format</button>
     <div id="note-check" class="note-check" hidden></div>
@@ -107,10 +107,9 @@
           <div>
             <label for="vitality_{{ field }}">{{ label }}</label>
             <select id="vitality_{{ field }}" name="vitality_{{ field }}" required>
-              <option selected>Not Assessed</option>
-              <option>No Concern</option>
-              <option>Some Concern</option>
-              <option>Significant Concern</option>
+              {% for choice in ("Not Assessed", "No Concern", "Some Concern", "Significant Concern") %}
+              <option{% if (form["vitality_" ~ field] or "Not Assessed") == choice %} selected{% endif %}>{{ choice }}</option>
+              {% endfor %}
             </select>
           </div>
         {% endfor %}
