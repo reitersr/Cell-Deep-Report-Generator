@@ -2,8 +2,8 @@
 1. Vitality Index answers come only from the upload form or a read provider note; with neither, the section
    shows "Not provided" and feeds no score (never "No Concern"). The form's "Not Assessed" default no longer
    hides the note's answers; a form/note disagreement leaves that domain out.
-2. The lab's own flag is shown under every current result the lab flagged unless CellDeep already calls it
-   Flagged.
+2. The lab's own flag is shown under a current result only where CellDeep calls it Optimal (the clinic's
+   default; Moderate and unscored results get no line unless the setting lists them).
 3. The summary lists the systems whose current results come from a draw earlier than the headline date."""
 
 import re
@@ -11,6 +11,7 @@ import re
 import fitz
 import pytest
 
+import clinic_config
 import pipeline
 import scoring
 import template
@@ -101,15 +102,22 @@ def _marker(tier, flag="H", disp="1193", value=1193.0):
                   lab_range_now={"lo": 250, "hi": 1100, "display": "250-1100"})
 
 
-@pytest.mark.parametrize(("tier", "shown"), [("optimal", True), ("moderate", True), (None, True), ("flag", False)])
-def test_lab_flag_line_unless_celldeep_already_flags_it(tier, shown):
+@pytest.mark.parametrize(("tier", "shown"), [("optimal", True), ("moderate", False), (None, False), ("flag", False)])
+def test_lab_flag_line_by_default_only_where_celldeep_says_optimal(tier, shown):
     line = template._lab_flag_line(_marker(tier))
     assert ("Lab flag: High (lab range 250-1100)" in line) is shown
 
 
-def test_no_line_without_a_lab_flag_or_for_a_censored_result():
-    assert template._lab_flag_line(_marker("moderate", flag=None)) == ""
+def test_the_setting_can_add_moderate_and_unscored_results(monkeypatch):
+    monkeypatch.setattr(clinic_config, "LAB_FLAG_DISAGREES_WITH", ("optimal", "moderate", None))
+    assert "Lab flag: High (lab range 250-1100)" in template._lab_flag_line(_marker("moderate"))
+    assert "Lab flag: High (lab range 250-1100)" in template._lab_flag_line(_marker(None))
+    assert template._lab_flag_line(_marker("flag")) == ""
     assert template._lab_flag_line(_marker(None, disp=">1500", value=None)) == ""  # flag shown next to it
+
+
+def test_no_line_without_a_lab_flag():
+    assert template._lab_flag_line(_marker("optimal", flag=None)) == ""
 
 
 # --- 3. Systems using earlier draws ----------------------------------------------------------------------

@@ -37,11 +37,12 @@ CENSORED_SUMMARY_LABEL = "Reported as a limit"
 # the staff notes list every disagreement either way.
 SHOW_LAB_FLAG_WHEN_IT_DIFFERS = True
 
-# CellDeep statuses for which the lab's printed flag is shown under the current result: every status
-# except "flag" (CellDeep Flagged already says it), i.e. Optimal, Moderate and None (no CellDeep tier: the
-# result is not scored). A result printed as a limit already shows its flag next to the value. Remove a
-# status to stop showing the line for it.
-LAB_FLAG_DISAGREES_WITH = ("optimal", "moderate", None)
+# CellDeep statuses that count as disagreeing with a printed lab H/L flag. Default: only "optimal"
+# (a result the lab calls High or Low that CellDeep calls Optimal). Add "moderate" to also show the
+# line when CellDeep calls the result Moderate, or None for results CellDeep does not score. The clinic
+# deliberately does not show the lab flag on Moderate or unscored results (e.g. testosterone in men); see
+# docs/open_decisions.md item 20. A result printed as a limit shows its flag next to the value either way.
+LAB_FLAG_DISAGREES_WITH = ("optimal",)
 
 # Wording of the line under the value. {flag} is the word from LAB_FLAG_WORDS; {lab_range} is
 # " (lab range <printed range>)" when the lab printed one, otherwise empty.
