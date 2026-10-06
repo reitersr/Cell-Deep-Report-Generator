@@ -52,7 +52,10 @@ local only) or `CELLDEEP_LIVE_VISION=1` skip otherwise.
 
 Staff enter the patient name, age, sex, the lab PDF, DEXA PDF(s), the provider note, the Vitality
 Index and the bloodwork **Collected date**. The Collected date is required when the lab PDF has
-image-only pages; the upload is rejected on screen before any job starts without it.
+image-only pages; the upload is rejected on screen before any job starts without it. A rejected upload
+shows the form again with everything entered except the files, and logs the names (never the values)
+of the fields the server received. The date field sits above the lab PDF so browsers post it first,
+and pages are sent with `Cache-Control: no-store` so Back never shows an old message.
 
 When the lab, scanned or DEXA pages print a date of birth, the report's age is computed from it
 and the collection date (the DOB itself is never stored); "By N" is the age at the next birthday.
