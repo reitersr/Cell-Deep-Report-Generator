@@ -47,7 +47,9 @@ A VAT trend table (rows by scan date with columns such as "VAT Mass (lbs)", "VAT
 vat_area exactly as printed.
 total_mass, fat_mass, lean_mass and body_fat_pct are whole-body values only: copy them from a whole-body
 results/history table or its "Total" row, never from a regional table (arms, legs, trunk, android, gynoid,
-abdomen, VAT/SAT); a regional table's mass or %fat columns are null in its entries.
+abdomen, VAT/SAT); a regional table's mass or %fat columns are null in its entries (an "Android Fat" column is
+not fat_mass). vat_mass comes only from a VAT (visceral) table; a SAT (subcutaneous) table's "Fat Mass" is not
+vat_mass, so SAT rows have every measurement null.
 A measurement that is not printed for that date, or is printed only in other units, is null.
 Never copy a value from one date to another. Copy the patient name, date of birth and the patient's
 age exactly as printed on the page, or null when not printed. When an age is printed for a scan row,
@@ -292,6 +294,39 @@ def measure_or_none(text):
     return found[0] if found else None
 
 
+def _resolve_by_mass_balance(fields, day, notes):
+    """Pages that print different whole-body total, fat or lean mass for one scan: keep the candidate that the scan's
+    other two printed values confirm (total = fat + lean + bone mineral, the remainder above 0 and at most
+    clinic_config.DEXA_BONE_MINERAL_MAX_LB). Used only when the other two are settled and exactly one candidate
+    fits; otherwise nothing changes (the field is then decided, or withheld, by the page rules)."""
+    def settled(name):
+        values = {value for value, _, _ in fields.get(name, {})}
+        return next(iter(values)) if len(values) == 1 else None
+
+    for field in ("total_mass", "fat_mass", "lean_mass"):
+        options = fields.get(field, {})
+        values = {value for value, _, _ in options}
+        total, fat, lean = settled("total_mass"), settled("fat_mass"), settled("lean_mass")
+        if len(values) < 2:
+            continue
+        if field == "total_mass" and None not in (fat, lean):
+            bone = {v: v - fat - lean for v in values}
+        elif field == "fat_mass" and None not in (total, lean):
+            bone = {v: total - lean - v for v in values}
+        elif field == "lean_mass" and None not in (total, fat):
+            bone = {v: total - fat - v for v in values}
+        else:
+            continue
+        fits = [v for v, rest in bone.items() if 0 < rest <= clinic_config.DEXA_BONE_MINERAL_MAX_LB]
+        if len(fits) != 1:
+            continue
+        dropped = ", ".join(sorted(f"{v:g}" for v in values if v != fits[0]))
+        notes.append(f"DEXA scan {_display(day)} {FIELDS[field][1]}: pages print different values; {fits[0]:g} is the "
+                     f"one the scan's other printed masses confirm (total = fat + lean + bone mineral); {dropped} not "
+                     "used")
+        fields[field] = {option: labels for option, labels in options.items() if option[0] == fits[0]}
+
+
 def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, staff_age=None, page_text=None):
     """pages: [((file, page), [read1, read2])]; failures: [((file, page), partial_reads, reason)].
     Returns (history, staff_notes, summary_lines). history is sorted oldest first and is a list of
@@ -378,13 +413,13 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                     contested.add((day, field))
                     page_excluded += 1
                     continue
-                if printed is not None:
-                    # A page with a usable text layer: the text decides. A value no read can match to the page's
-                    # printed numbers is not taken; when the reads differ, the one the page prints stands.
-                    a = a if a is None or a[1] in printed else None
-                    b = b if b is None or b[1] in printed else None
-                    if a is None and b is not None or b is None and a is not None:
-                        a = b = a or b
+                if printed is not None and a is not None and b is not None and a[0] != b[0]:
+                    # A page with a text layer (often OCR, noisy and out of order) breaks a tie between reads: when
+                    # they differ and the page prints exactly one of the two values, that value stands. It never
+                    # overrules reads that agree.
+                    in_text = [one for one in (a, b) if one[1] in printed]
+                    if len(in_text) == 1:
+                        a = b = in_text[0]
                         notes.append(f"{label}: scan {_display(day)} {field_label} {a[1]} - the reads differed; the "
                                      "page's text layer prints this value")
                 if a is None and b is None:
@@ -432,6 +467,7 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
 
     history = []
     for day in sorted(candidates):
+        _resolve_by_mass_balance(candidates[day], day, notes)
         reading = {"date_display": _display(day), "estimated": [], "withheld": []}
         for field, (target, field_label) in FIELDS.items():
             options = candidates[day].get(field, {})

@@ -59,7 +59,8 @@ def test_two_tables_on_one_page_printing_different_values_leave_out_only_that_fi
 
 def test_a_value_confirmed_on_two_pages_wins_over_one_page_that_disagrees(tmp_path):
     whole = fx.scan(SCAN["date"], SCAN["total_mass"], SCAN["fat_mass"], SCAN["lean_mass"])
-    regional = fx.scan(SCAN["date"], fat="9.8", vat=SCAN["vat_mass"])
+    # 53.1 also balances (bone 5.4 lb), so the mass check cannot decide: the page count does.
+    regional = fx.scan(SCAN["date"], fat="53.1", vat=SCAN["vat_mass"])
     pages = {"summary": _same(whole), "segmental": _same(whole), "abdomen": _same(regional)}
     history, notes, _ = _run(tmp_path, ["summary", "segmental", "abdomen"], pages)
     assert _by_date(history)["06/02/2025"]["fat_mass_lb"] == 52.1
@@ -110,14 +111,22 @@ def test_a_page_with_a_text_layer_decides_between_disagreeing_reads(tmp_path):
     assert any("the reads differed; the page's text layer prints this value" in note for note in notes)
 
 
-def test_a_value_both_reads_agree_on_but_the_text_layer_does_not_print_is_not_taken(tmp_path):
-    writer = _text_pdf([(LATER["date"], "184.0", "45.5", "132.0", "25.7"),
+def test_a_text_layer_never_overrules_reads_that_agree(tmp_path):
+    """DEXA text layers are often OCR: noisy, partial and out of order. Agreeing reads stand even when the OCR text
+    misses the number; the text only breaks a tie between reads that differ."""
+    writer = _text_pdf([(LATER["date"], "184.0", "45.S", "132.0", "25.7"),  # OCR misread "45.5" as "45.S"
                         ("04/07/2025", "193.2", "55.0", "131.4", "29.5")])
-    wrong = fx.scan(LATER["date"], LATER["total_mass"], "44.5", LATER["lean_mass"], LATER["body_fat_pct"])
-    history, notes, _ = _run(tmp_path, ["printed"], {"printed": _same(wrong)}, writer=writer)
+    history, _, _ = _run(tmp_path, ["printed"], {"printed": _same(LATER)}, writer=writer)
+    assert _by_date(history)["10/06/2025"]["fat_mass_lb"] == 45.5
+
+
+def test_a_tie_the_text_layer_cannot_break_stays_empty(tmp_path):
+    writer = _text_pdf([(LATER["date"], "184.0", "45.S", "132.0", "25.7"),
+                        ("04/07/2025", "193.2", "55.0", "131.4", "29.5")])
+    misread = dict(LATER, fat_mass="46.5")
+    history, _, _ = _run(tmp_path, ["printed"], {"printed": (fx.read([LATER]), fx.read([misread]))}, writer=writer)
     scan = _by_date(history)["10/06/2025"]
-    assert scan["fat_mass_lb"] is None and scan["total_mass_lb"] == 184.0
-    assert scan["body_fat_pct"] == "25.7%"  # printed %Fat still used
+    assert scan["fat_mass_lb"] is None and scan["body_fat_pct"] == "25.7%"
 
 
 def test_printed_body_fat_wins_and_estimated_is_kept(tmp_path):
@@ -130,4 +139,33 @@ def test_printed_body_fat_wins_and_estimated_is_kept(tmp_path):
 def test_the_prompt_keeps_whole_body_fields_out_of_regional_tables():
     import scan_dexa
     assert "whole-body values only" in scan_dexa.DEXA_PROMPT and "never from a regional table" in scan_dexa.DEXA_PROMPT
+    assert '"Android Fat" column is\nnot fat_mass' in scan_dexa.DEXA_PROMPT and "SAT rows have every measurement null" \
+        in scan_dexa.DEXA_PROMPT
     assert Path(scan_dexa.__file__).read_text().count("_merge_same_date") >= 2
+
+
+def test_pages_tied_on_fat_mass_are_decided_by_the_scans_other_printed_masses(tmp_path):
+    """Two pages print the whole-body fat mass, two others print a regional table's fat (an android column misread as
+    fat mass): a 2-vs-2 tie. Total and lean are settled, so only one candidate leaves a bone-mineral remainder in range
+    (190.4 - 131.9 - 52.1 = 6.4 lb); the other (190.4 - 131.9 - 8.2 = 50.3 lb) is impossible."""
+    whole = fx.scan(SCAN["date"], SCAN["total_mass"], SCAN["fat_mass"], SCAN["lean_mass"])
+    regional = fx.scan(SCAN["date"], SCAN["total_mass"], "8.2", SCAN["lean_mass"])
+    labels = ["summary", "segmental", "abdomen", "android"]
+    pages = {"summary": _same(whole), "segmental": _same(whole), "abdomen": _same(regional),
+             "android": _same(regional)}
+    history, notes, _ = _run(tmp_path, labels, pages)
+    scan = _by_date(history)["06/02/2025"]
+    assert scan["fat_mass_lb"] == 52.1 and scan["body_fat_pct"] == "28.3%" and scan["computed"] == ["body_fat_pct"]
+    assert any("52.1 is the one the scan's other printed masses confirm (total = fat + lean + bone mineral); 8.2 not "
+               "used" in note for note in notes)
+
+
+def test_mass_balance_never_picks_when_both_candidates_fit_or_the_others_are_unsettled(tmp_path):
+    whole = fx.scan(SCAN["date"], SCAN["total_mass"], SCAN["fat_mass"], SCAN["lean_mass"])
+    close = fx.scan(SCAN["date"], SCAN["total_mass"], "53.1", SCAN["lean_mass"])  # both leave 5.4 / 6.4 lb: no pick
+    history, _, _ = _run(tmp_path, ["a", "b"], {"a": _same(whole), "b": _same(close)})
+    assert _by_date(history)["06/02/2025"]["fat_mass_lb"] is None
+    unsettled = fx.scan(SCAN["date"], "199.0", "8.2", SCAN["lean_mass"])  # total also disputed: nothing to check against
+    history, _, _ = _run(tmp_path, ["a", "b"], {"a": _same(whole), "b": _same(unsettled)}, name="second.pdf")
+    scan = _by_date(history)["06/02/2025"]
+    assert scan["fat_mass_lb"] is None and scan["total_mass_lb"] is None

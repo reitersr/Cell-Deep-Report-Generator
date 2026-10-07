@@ -53,7 +53,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/synthetic_fixtures/column_roles.py` | Synthetic pages in a real multi-draw layout's table geometry (`test_column_roles.py`). |
 | `celldeep-tool/synthetic_fixtures/chl_multi_draw.py` | Three-draw Cleveland HeartLab-style lab PDF (`test_chl_round1.py`). |
 | `celldeep-tool/synthetic_fixtures/scenarios.py` | End-to-end synthetic scenarios with a scripted vision model (smoke test, `test_scenarios.py`). |
-| `scripts/regression_check.py` | Runs every fixture (synthetic, and git-ignored `real_fixtures/*.expected.json`) to the report data and diffs it against expected values (`--snapshot`/`--diff` for before/after); CI runs it on the synthetic fixtures (`test_regression_check.py`). |
+| `scripts/regression_check.py` | Runs every fixture (synthetic, and git-ignored `real_fixtures/*.expected.json`) to the report data and diffs it against expected values (`--snapshot`/`--diff` for before/after; `--dexa-reads` replays stored DEXA transcriptions offline); CI runs it on the synthetic fixtures (`test_regression_check.py`). |
 | `scripts/smoke_test.py` | Generates reports from synthetic fixtures and prints PASS/FAIL (no API key, no network, under a minute). |
 | `docs/` | Audits, open clinical decisions (`open_decisions.md`), `staff_guide.md`, `what_the_tool_guarantees.md`. |
 | `.github/workflows/tests.yml` | CI: full suite offline on every pull request. |
@@ -167,10 +167,13 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    measurement is kept only when both reads agree, a scan date the reads disagree on drops the
    whole scan (one date listed in two tables of a page, e.g. composition and VAT trend, is merged field by field;
    only a field the tables print differently is left out). The same measurement printed on several pages is
-   accepted from the value confirmed on the most independent pages (at least two, no tie); with no page's reads
-   agreeing, a value read on two independent pages is accepted; otherwise it stays empty. A page with a usable text
-   layer is verified against it: a value the page does not print is not taken, and when the reads differ the one
-   the page prints stands. Whole-body fields come only from whole-body tables (prompt), and `scan_dexa.attribute_pages` decides which pages are the patient's: a page printing a
+   accepted when the scan's other two settled masses confirm exactly one candidate (total = fat + lean + bone
+   mineral, bone above 0 and at most `clinic_config.DEXA_BONE_MINERAL_MAX_LB`), else from the value confirmed on the
+   most independent pages (at least two, no tie); with no page's reads agreeing, a value read on two independent
+   pages is accepted; otherwise it stays empty. A page's text layer (when it holds enough numbers; DEXA text is often
+   OCR) only breaks a tie: when the two reads differ and the text prints exactly one of them, that one stands; it
+   never overrules agreeing reads. Whole-body fields come only from whole-body tables (prompt: an "Android Fat"
+   column is not fat mass; a SAT table's "Fat Mass" is not VAT), and `scan_dexa.attribute_pages` decides which pages are the patient's: a page printing a
    different name is always dropped; a page printing the patient's name is validated; an unnamed page
    printing an age (header or scan rows, decimals allowed, both reads agreeing) is validated when the age
    is within `clinic_config.DEXA_AGE_TOLERANCE_YEARS` of the median age across the pages (a clear cluster)

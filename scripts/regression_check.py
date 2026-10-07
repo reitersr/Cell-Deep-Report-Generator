@@ -34,6 +34,7 @@ import pipeline  # noqa: E402
 from synthetic_fixtures import scenarios  # noqa: E402
 
 EXPECTED = TOOL / "synthetic_fixtures" / "expected"
+DEXA_READS_OVERRIDE = None  # --dexa-reads
 REAL = TOOL / "real_fixtures"
 TIERS = ("optimal", "moderate", "flag")
 
@@ -101,17 +102,44 @@ def synthetic_rows(name, folder) -> list[str]:
         pipeline.Anthropic, pipeline._review_notes_path, pipeline._diagnostic_path_prefix = saved
 
 
-def real_rows(spec, folder) -> tuple[list[str], list[str]]:
-    """(rows, skipped notes) for one git-ignored real fixture."""
+class ScriptedDexaReads:
+    """Offline stand-in for the vision model on a real DEXA file: answers each page with a stored literal
+    transcription (real_fixtures/<name>.reads.json, git-ignored), the same for both reads of the page."""
+
+    def __init__(self, pages):
+        self.pages, self.messages, self.timeout = pages, self, 240.0
+
+    def create(self, **kwargs):
+        import re
+        from types import SimpleNamespace
+        from synthetic_fixtures.sdk_contract import check_create_kwargs
+        check_create_kwargs(kwargs)
+        number = int(re.search(r"page (\d+)", kwargs["messages"][0]["content"][1]["text"])[1])
+        payload = {"page": number, "patient_name": None, "date_of_birth": None, "age": None, "illegible": False,
+                   "scans": self.pages.get(str(number), [])}
+        return SimpleNamespace(content=[SimpleNamespace(text=json.dumps(payload))], stop_reason="end_turn")
+
+
+def real_rows(spec, folder, reads_file=None) -> tuple[list[str], list[str]]:
+    """(rows, skipped notes) for one git-ignored real fixture. Real DEXA pages are read by the vision model
+    (CELLDEEP_LIVE_VISION=1 and an API key), or offline from the fixture's stored transcription (dexa_reads)."""
     folder.mkdir(parents=True, exist_ok=True)
     skipped = []
     dexa = [str(REAL / name) for name in spec.get("dexa", [])]
     missing = [name for name in spec.get("dexa", []) if not (REAL / name).is_file()]
     live = os.environ.get("CELLDEEP_LIVE_VISION") == "1"
-    if missing or (dexa and not live):
+    reads_file = reads_file or spec.get("dexa_reads")
+    scripted = None
+    if dexa and not missing and not live and reads_file and (REAL / reads_file).is_file():
+        scripted = ScriptedDexaReads(json.loads((REAL / reads_file).read_text())["pages"])
+        skipped.append(f"DEXA read from the stored transcription {reads_file} (not a live vision read)")
+    elif missing or (dexa and not live):
         skipped.append("DEXA rows SKIPPED: " + (f"file(s) not in real_fixtures/: {', '.join(missing)}" if missing
                                                 else "real DEXA pages need CELLDEEP_LIVE_VISION=1 and an API key"))
         dexa = []
+    saved_client = pipeline.Anthropic
+    if scripted is not None:
+        pipeline.Anthropic = lambda **kwargs: scripted
     saved = (pipeline._review_notes_path, pipeline._diagnostic_path_prefix)
     pipeline._review_notes_path = lambda _name: str(folder / "review.txt")
     pipeline._diagnostic_path_prefix = lambda _name: str(folder / "diag")
@@ -121,6 +149,7 @@ def real_rows(spec, folder) -> tuple[list[str], list[str]]:
             str(folder / "report.pdf"), collected_date=spec.get("collected_date"), confirm=lambda items: True))
     finally:
         pipeline._review_notes_path, pipeline._diagnostic_path_prefix = saved
+        pipeline.Anthropic = saved_client
     return rows(record), skipped
 
 
@@ -144,8 +173,9 @@ def current(selected=None) -> dict[str, dict]:
                 results[name] = {"rows": [], "expected": None, "mode": "subset",
                                  "skipped": [f"lab PDF {spec['labs']} not in real_fixtures/"]}
                 continue
-            got, skipped = real_rows(spec, Path(tmp) / spec_file.stem)
-            expected = [row for row in spec["rows"] if not (row.startswith("D |") and skipped)]
+            got, skipped = real_rows(spec, Path(tmp) / spec_file.stem, DEXA_READS_OVERRIDE)
+            dexa_checked = not any(note.startswith("DEXA rows SKIPPED") for note in skipped)
+            expected = [row for row in spec["rows"] if dexa_checked or not row.startswith("D |")]
             results[name] = {"rows": got, "expected": expected, "mode": "subset", "skipped": skipped}
     return results
 
@@ -213,11 +243,14 @@ def main():
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--snapshot", type=Path)
     parser.add_argument("--diff", nargs=2, type=Path)
+    parser.add_argument("--dexa-reads", help="use this stored transcription (in real_fixtures/) for real DEXA files")
     parser.add_argument("fixtures", nargs="*", help="limit to these fixture names")
     args = parser.parse_args()
     if args.diff:
         diff(*args.diff)
         return 0
+    global DEXA_READS_OVERRIDE
+    DEXA_READS_OVERRIDE = args.dexa_reads
     results = current(set(args.fixtures) or None)
     if args.snapshot:
         snapshot(results, args.snapshot)

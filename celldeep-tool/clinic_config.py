@@ -171,3 +171,11 @@ LATEST_LAB_REPORTED_LABEL = "Shown as lab-reported this round"
 
 # Status chip on such a test's scored row (instead of "Not retested").
 LATEST_LAB_REPORTED_CHIP = "See lab-reported"
+
+
+# ---- DEXA mass balance -----------------------------------------------------------------------------
+
+# When DEXA pages print conflicting whole-body total, fat or lean mass for one scan, the candidate that keeps the scan's
+# own balance (total = fat + lean + bone mineral) with a bone-mineral remainder above 0 and at most this many pounds
+# is the one confirmed by the scan's other printed values; any other candidate is a regional value read by mistake.
+DEXA_BONE_MINERAL_MAX_LB = 15.0
