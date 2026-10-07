@@ -92,34 +92,19 @@ def _unrecognized_layout_pdf():
     return pdf_bytes
 
 
-@pytest.mark.parametrize("action", ["stop", "continue"])
-def test_unrecognized_lab_layout_pauses_for_staff_before_generating(staff_client, tmp_path, monkeypatch, action):
-    """A layout the parser cannot read no longer fails the job: the job pauses and lists the page left out.
-    Staff stop (nothing written) or continue (report built, the page listed under INCOMPLETE)."""
+def test_a_lab_pdf_with_nothing_readable_is_blocked_with_a_clear_message(staff_client, tmp_path, monkeypatch, capsys):
+    """Empty-report guard: when no result at all was read, no report is built (never "Stay the course" or a score
+    from nothing); the job stops with a clear message, and the log names no value, date or patient."""
     monkeypatch.setattr(app, "JOBS_DIR", tmp_path / "jobs")
     response = staff_client.post("/generate", data={
         "patient_name": "Pat Synthetic",
         "labs_pdf": (io.BytesIO(_unrecognized_layout_pdf()), "unknown-layout.pdf"),
     })
     job_id = re.search(r'data-job-id="([a-f0-9]+)"', response.get_data(as_text=True)).group(1)
-    _, status = _wait_for_status(staff_client, job_id, "confirm")
-    assert status["items"] == ["Lab PDF page 1 (whole document): Lab PDF produced zero recognized marker rows - "
-                               "layout not recognized"]
-    decision = staff_client.post(f"/generate/decision/{job_id}", data={"action": action})
-    assert decision.status_code == 200
-    if action == "stop":
-        _, status = _wait_for_status(staff_client, job_id, "stopped")
-        assert status["error"] == app.STOPPED_MESSAGE
-        assert not (tmp_path / "jobs" / job_id / "report.pdf").exists()
-    else:
-        deadline = time.monotonic() + 60
-        while (status := staff_client.get(f"/generate/status/{job_id}").get_json())["status"] != "done":
-            assert status["status"] in ("processing", "confirm") and time.monotonic() < deadline
-            time.sleep(0.1)
-        notes = staff_client.get(status["review_notes_url"]).get_data(as_text=True)
-        assert notes.startswith("STAFF CHECK - confirm before sending this report")
-        assert "LAB EXCLUDED page 1 (whole document)" in notes and "INCOMPLETE - pages/sections excluded" in notes
-    assert staff_client.post(f"/generate/decision/{job_id}", data={"action": "continue"}).status_code == 409
+    _, status = _wait_for_status(staff_client, job_id, "stopped")
+    assert status["error"].startswith("No results were read from the uploaded files.")
+    assert not (tmp_path / "jobs" / job_id / "report.pdf").exists()
+    assert "Pat Synthetic" not in capsys.readouterr().out
 
 
 def test_decision_endpoint_requires_login(tmp_path, monkeypatch):

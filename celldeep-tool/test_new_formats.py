@@ -4,6 +4,8 @@ built. Synthetic, invented layouts only."""
 
 import fitz
 
+import pytest
+
 import pipeline
 from synthetic_fixtures import deterministic_fixtures as fx
 from unknown_marker_policy import without_staff_check
@@ -63,10 +65,10 @@ def test_page_order_does_not_change_the_report(tmp_path, monkeypatch):
     assert first == second
 
 
-def test_a_lab_pdf_with_nothing_readable_still_builds_the_rest(tmp_path, monkeypatch):
-    text, review = _report(tmp_path, monkeypatch, [NEW_HEADER], "nothing-readable")
-    assert review.startswith("INCOMPLETE - pages/sections excluded: lab PDF page(s) 1 ")
-    assert "Ferritin" not in text
+def test_a_lab_pdf_with_nothing_readable_is_blocked(tmp_path, monkeypatch):
+    with pytest.raises(pipeline.NoResultsRead, match="^No results were read from the uploaded files"):
+        _report(tmp_path, monkeypatch, [NEW_HEADER], "nothing-readable")
+    assert not (tmp_path / "nothing-readable" / "report.pdf").exists()
 
 
 def test_pasted_medication_list_is_rejected_with_how_to_fix_it():

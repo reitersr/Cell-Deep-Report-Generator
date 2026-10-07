@@ -2226,6 +2226,159 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
     return occurrences, unknown, notes
 
 
+# ---------------------------------------------------------------------------
+# Unknown-layout fallback: AI transcription, verified against the page's own text layer
+# ---------------------------------------------------------------------------
+
+VISION_FALLBACK_ENV = "CELLDEEP_ALLOW_VISION_FALLBACK"
+_FLAG_TOKENS = {"H", "L", "HH", "LL"}
+
+
+def vision_fallback_enabled() -> bool:
+    """The clinic's kill switch: CELLDEEP_ALLOW_VISION_FALLBACK=0 (or false/no/off) turns the fallback off."""
+    return os.environ.get(VISION_FALLBACK_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").split()).casefold()
+
+
+def _printed_on_line(tokens: list[str], value: str, flag: str | None) -> bool:
+    """True when the exact printed value (and the lab's flag, attached or as the next word) is on this line."""
+    wanted = value.split()
+    for start in range(len(tokens) - len(wanted) + 1):
+        window = tokens[start:start + len(wanted)]
+        following = tokens[start + len(wanted)] if start + len(wanted) < len(tokens) else None
+        if window == wanted:
+            if flag and following == flag:
+                return True
+            if not flag and following not in _FLAG_TOKENS:
+                return True
+        if flag and window[:-1] == wanted[:-1] and window[-1] == wanted[-1] + flag:
+            return True
+    return False
+
+
+def verified_on_page(page_lines: list[list[tuple]], name: str, value: str, flag: str | None) -> bool:
+    """A value read by AI is accepted only when the test name and that exact printed value (and flag) are on one
+    text line of the same page."""
+    for words in page_lines:
+        tokens = [w[4] for w in words]
+        if _norm(name) in _norm(" ".join(tokens)) and _printed_on_line(tokens, value, flag):
+            return True
+    return False
+
+
+def _page_collected_dates(page) -> set:
+    return {match.group(1) for match in _COLLECTED_RE.finditer(_page_text(page))}
+
+
+def vision_fallback(digital_pages, client, exclusions, occurrences, unrecognized, row_audit, patient_name,
+                    scan_row_exclusions) -> list[str]:
+    """Pages the deterministic reader left out whole (layout not recognized, or a table header it could not read)
+    are read by the vision model with the scanned-page agreement rule (at least 2 of 3 reads), dated only by the
+    Collected date printed on the page, and every row is then verified against the page's own text layer: kept
+    only when the test name and the exact printed value and flag are on one line of that page (a range is kept
+    only when it is printed there too). Everything else stays excluded with a notice. Staff notes list every value
+    that came through this path. Off when CELLDEEP_ALLOW_VISION_FALLBACK is 0."""
+    page_level = {item["page"] for item in exclusions if item.get("scope") not in ("cell", "row")}
+    by_number = {page.number + 1: page for page in digital_pages if hasattr(page, "number")}
+    candidates = [number for number in sorted(page_level) if number in by_number]
+    if not candidates or not vision_fallback_enabled():
+        return []
+    notes, accepted_total = [], 0
+    read_names = {(o["name"], _normalize_date_for_matching(o["date_display"])) for o in occurrences}
+    read_unknown = {(_norm(u["raw_name"]), _normalize_date_for_matching(c["date_display"]))
+                    for u in unrecognized for c in u.get("cells", []) if c.get("present")}
+    for number in candidates:
+        page = by_number[number]
+        dates = _page_collected_dates(page)
+        if len({_normalize_date_for_matching(date) for date in dates}) != 1:
+            notes.append(f"AI FALLBACK: lab PDF page {number} was not read by AI: it prints "
+                         f"{'no' if not dates else 'more than one'} Collected date, and a date is never taken "
+                         "from the model")
+            continue
+        date = sorted(dates)[0]
+        audit, gate_rows = [], []
+        try:
+            _, _, gate_notes = _extract_scan_bloodwork(
+                [page], digital_pages, client, audit, patient_name or "(not entered)", date,
+                row_exclusions=gate_rows)
+        except Exception as error:  # noqa: BLE001 - any read failure leaves the page excluded, never half-read
+            print(f"source=ai-fallback page={number} read failed: {type(error).__name__}")  # value-free
+            notes.append(f"AI FALLBACK: lab PDF page {number} could not be read by AI ({type(error).__name__}); "
+                         "it stays excluded")
+            continue
+        notes.extend(note for note in gate_notes if note.startswith("STAFF REVIEW"))
+        for row in gate_rows:  # rows the reads did not agree on: listed like scanned rows, marked as AI fallback
+            scan_row_exclusions.append({**row, "reason": f"AI fallback - {row['reason']}"})
+        lines = _group_lines(_page_words(page), _LINE_TOLERANCE_PT)
+        kept = 0
+        for row in audit:
+            for occurrence in row["occurrences"]:
+                if occurrence["value"] is None and not occurrence["disp_value"]:
+                    continue
+                key = (occurrence["name"], _normalize_date_for_matching(occurrence["date_display"]))
+                if key in read_names:
+                    continue  # already read from the table itself on this or another page
+                if not verified_on_page(lines, row["name"], occurrence["disp_value"], occurrence["lab_flag"] or None):
+                    exclusions.append(_fallback_rejection(number, date, row["name"], occurrence["disp_value"],
+                                                          occurrence["lab_flag"]))
+                    continue
+                if occurrence["lab_range_display"] and not verified_on_page(
+                        lines, row["name"], occurrence["lab_range_display"], None):
+                    occurrence.update(lab_range_lo=0, lab_range_hi=0, lab_range_display="")
+                occurrence["source_label"] = f"lab PDF page {number}, read by AI and verified against the page"
+                occurrences.append(occurrence)
+                read_names.add(key)
+                row_audit.append({**row, "occurrences": [occurrence], "unrecognized": []})
+                notes.append(f"READ BY AI, VERIFIED AGAINST THE PAGE: page {number} {row['name']!r} "
+                             f"{occurrence['disp_value']!r}{' ' + occurrence['lab_flag'] if occurrence['lab_flag'] else ''}"
+                             f" (Collected {date}, printed on the page)")
+                kept += 1
+            for item in row["unrecognized"]:
+                cells = [cell for cell in item["cells"] if cell.get("present")]
+                if not cells:
+                    continue
+                cell = cells[0]
+                key = (_norm(item["raw_name"]), _normalize_date_for_matching(cell["date_display"]))
+                if key in read_unknown:
+                    continue
+                if not verified_on_page(lines, row["name"], cell["disp_value"], cell.get("lab_flag")):
+                    exclusions.append(_fallback_rejection(number, date, row["name"], cell["disp_value"],
+                                                          cell.get("lab_flag")))
+                    continue
+                if item.get("raw_range") and not verified_on_page(lines, row["name"], item["raw_range"], None):
+                    item["raw_range"] = ""
+                item["source_context"] = f"lab PDF page {number}, read by AI and verified against the page"
+                unrecognized.append(item)
+                read_unknown.add(key)
+                row_audit.append({**row, "occurrences": [], "unrecognized": [item]})
+                notes.append(f"READ BY AI, VERIFIED AGAINST THE PAGE: page {number} {row['name']!r} "
+                             f"{cell['disp_value']!r}{' ' + cell['lab_flag'] if cell.get('lab_flag') else ''}"
+                             f" (Collected {date}, printed on the page)")
+                kept += 1
+        if kept:
+            # The page is read now: its whole-page exclusion is replaced by the per-value notes above.
+            exclusions[:] = [item for item in exclusions
+                             if not (item["page"] == number and item.get("scope") not in ("cell", "row"))]
+        accepted_total += kept
+        notes.append(f"AI FALLBACK: lab PDF page {number}'s layout was not read by the table reader; {kept} value(s) "
+                     "read by AI were verified against the page's text and kept"
+                     + ("" if kept else "; the page stays excluded"))
+    if candidates:
+        notes.insert(0, f"AI FALLBACK SUMMARY: {accepted_total} value(s) came from AI reads verified against the page "
+                        f"(pages {', '.join(map(str, candidates))}); the model only transcribed printed rows - dates "
+                        "come from the page, and scoring, ranges and units from the deterministic code")
+    return notes
+
+
+def _fallback_rejection(number, date, name, value, flag):
+    return {"page": number, "section": "AI fallback", "scope": "row", "date": date,
+            "reason": f"{name}: value {value!r}{' ' + flag if flag else ''} read by AI is not printed on that test's "
+                      "line of the page's text layer; not used"}
+
+
 def _merge_scan_occurrences(digital, scanned, row_audit):
     provenance = {}
     for row in row_audit:
@@ -2406,8 +2559,20 @@ def parse_provider_note(note_text: str | None) -> dict:
     return result
 
 
-class LatestDrawNotAccepted(RuntimeError):
+class GenerationBlocked(RuntimeError):
+    """No report is built; the message (shown to staff only, never logged) says why."""
+
+
+class LatestDrawNotAccepted(GenerationBlocked):
     """The newest draw has no accepted result: no report is built (an older draw would be shown as "now")."""
+
+
+class NoResultsRead(GenerationBlocked):
+    """Nothing was read, or nothing could be scored: no report is built (never "Stay the course" or a score
+    computed from nothing)."""
+
+
+NO_RESULTS_MESSAGE = "No results were read from the uploaded files"
 
 
 def _occurrence_to_lab_reported(occurrence: dict, show_as: tuple, note: str) -> dict:
@@ -2577,6 +2742,9 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                 occurrences, unrecognized = _parse_bloodwork_tables(
                     digital_pages, row_audit=row_audit, review_notes=lab_review_notes,
                     exclusions=parse_exclusions, draw_info=draw_info)
+            if digital_pages:
+                lab_review_notes.extend(vision_fallback(digital_pages, client, parse_exclusions, occurrences,
+                                                        unrecognized, row_audit, patient_name, scan_row_exclusions))
                 if window := _morning_window(digital_pages):
                     draw_info["morning_window"] = window
             if scans:
@@ -3382,6 +3550,13 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     if extracted.get("blocked"):
         print("generation blocked: the latest bloodwork draw has no accepted result")  # value-free
         raise LatestDrawNotAccepted(extracted["blocked"])
+    accepted = sum(occ["value"] is not None or bool(occ["disp_value"]) for occ in extracted["marker_occurrences"])
+    accepted += sum(len(item["results"]) for item in extracted["lab_reported"])
+    if accepted == 0:
+        print("generation blocked: no results were read")  # value-free
+        raise NoResultsRead(f"{NO_RESULTS_MESSAGE}. No lab result could be read" + (
+            f"; {excluded}" if (excluded := excluded_draw_dates(extracted["parse_exclusions"])) else "")
+            + ". Check that the right lab PDF was uploaded; the staff notes are not written for an empty report.")
     if confirm is not None and extracted["preflight"] and not confirm(list(extracted["preflight"])):
         raise GenerationAborted("stopped by staff at the confirmation step")
     extracted["name"] = patient_name
@@ -3398,6 +3573,11 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
 
     print("Step 2/3: scoring (deterministic, no AI)...")
     record, notice = score_and_build_record(extracted)
+    tiers = ("optimal", "moderate", "flag")
+    if not any(m.now_tier in tiers or m.then_tier in tiers for m in record.markers):
+        print("generation blocked: no marker could be scored")  # value-free
+        raise NoResultsRead(f"{NO_RESULTS_MESSAGE} that CellDeep can score: every result read is lab-reported or "
+                            "has no CellDeep range, so there is no score to show. Check the uploaded files.")
     fields = UnrecognizedMarker.__dataclass_fields__
     notice.unrecognized_markers.extend(UnrecognizedMarker(**{key: value for key, value in raw.items() if key in fields})
                                        for raw in extracted["unrecognized_markers"])

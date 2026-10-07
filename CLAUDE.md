@@ -49,6 +49,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/test_*.py` | Test suite (pytest). |
 | `calibration_baselines/` | Synthetic calibration snapshots. |
 | `celldeep-tool/ranges_audit.py` | Read-only audit of each marker's threshold source; `--write` regenerates `docs/ranges_audit.md` (a test keeps it in sync). |
+| `celldeep-tool/synthetic_fixtures/unknown_layout.py` | A made-up lab layout for the AI fallback (`test_vision_fallback.py`). |
 | `celldeep-tool/synthetic_fixtures/column_roles.py` | Synthetic pages in a real multi-draw layout's table geometry (`test_column_roles.py`). |
 | `celldeep-tool/synthetic_fixtures/chl_multi_draw.py` | Three-draw Cleveland HeartLab-style lab PDF (`test_chl_round1.py`). |
 | `celldeep-tool/synthetic_fixtures/scenarios.py` | End-to-end synthetic scenarios with a scripted vision model (smoke test, `test_scenarios.py`). |
@@ -138,12 +139,23 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      (reads disagree: X / Y / Z)"; every other excluded result row is listed with its check. A row no read
      prints a value for (a section heading) is not a result and is never listed or confirmed. Staff-entered
      name and Collected date identify the pages.
+   - Unknown-layout fallback (`vision_fallback`; kill switch `CELLDEEP_ALLOW_VISION_FALLBACK=0`, default on): a
+     text page the table reader left out whole (layout not recognized, or a header it could not read) is read by
+     the vision model with the scanned-page rule (2 of 3 reads agree), dated only by the Collected date printed on
+     that page (no single printed date: not read), and every value is verified against the page's own text layer:
+     kept only when the test name and the exact printed value and flag are on one line of that page (a range only
+     when printed there too); anything else is excluded with a notice. The model only transcribes rows; scoring,
+     ranges, units and dates stay deterministic. Staff notes list each value as "READ BY AI, VERIFIED AGAINST THE
+     PAGE" and an "AI FALLBACK SUMMARY" count. Tests run with the fallback off (`conftest.py`) unless a test
+     scripts the model (`test_vision_fallback.py`).
    - `_merge_scan_occurrences` combines both sources.
    - A section or page that cannot be parsed is excluded whole and listed under "INCOMPLETE" at the
      top of the staff notes; the rest of the report is built (single unreadable cells are listed under
      "INCOMPLETE - results excluded" and the rest of their page is kept). `latest_draw_block`: when some bloodwork
      was accepted but the staff-entered Collected date, or the latest Collected date printed in the lab PDF, has
-     no accepted result, `run` raises `LatestDrawNotAccepted` and no report is built (the app shows the message,
+     no accepted result, `run` raises `LatestDrawNotAccepted` and no report is built; with no lab result read at all,
+     or no marker scored, `run` raises `NoResultsRead` ("No results were read from the uploaded files") and no report
+     is built (never "Stay the course" or a score from nothing) (the app shows the message,
      including the draw dates with excluded pages/results; the confirmation screen lists those dates first). A text page with result rows under no
      recognized table header is excluded and the tests it holds are named; an unrecognized document is
      excluded page by page instead of stopping the report. `BloodworkHardStop` (conflicting

@@ -16,3 +16,9 @@ def staff_client(monkeypatch):
     with client.session_transaction() as session:
         session["staff_authenticated"] = True
     return client
+
+
+@pytest.fixture(autouse=True)
+def no_vision_fallback_unless_asked(monkeypatch):
+    """Tests run offline: the unknown-layout AI fallback is off unless a test turns it on with a scripted model."""
+    monkeypatch.setenv("CELLDEEP_ALLOW_VISION_FALLBACK", "0")

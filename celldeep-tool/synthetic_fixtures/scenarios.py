@@ -8,6 +8,7 @@ the number of vision reads made.
 
 import base64
 import copy
+import os
 import json
 import re
 from types import SimpleNamespace
@@ -149,6 +150,9 @@ def run_scenario(name, folder, monkeypatch=None):
                "_review_notes_path": lambda _name: str(folder / "review.txt"),
                "_diagnostic_path_prefix": lambda _name: str(folder / "diag")}
     saved = {key: getattr(pipeline, key) for key in patches}
+    # Scenarios script only the pages they read by vision: the unknown-layout fallback stays off unless asked.
+    saved_env = os.environ.get(pipeline.VISION_FALLBACK_ENV)
+    os.environ[pipeline.VISION_FALLBACK_ENV] = "1" if options.get("vision_fallback") else "0"
     for key, value in patches.items():
         if monkeypatch is not None:
             monkeypatch.setattr(pipeline, key, value)
@@ -166,6 +170,10 @@ def run_scenario(name, folder, monkeypatch=None):
         pipeline.run(labs, dexa, options.get("note"), patient, options.get("age"), "male", str(out),
                      collected_date=options.get("collected_date"), confirm=confirm)
     finally:
+        if saved_env is None:
+            os.environ.pop(pipeline.VISION_FALLBACK_ENV, None)
+        else:
+            os.environ[pipeline.VISION_FALLBACK_ENV] = saved_env
         if monkeypatch is None:
             for key, value in saved.items():
                 setattr(pipeline, key, value)
