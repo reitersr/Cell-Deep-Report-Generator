@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import fitz
 
 import pipeline
-from synthetic_fixtures import access_medical_lab, chl_extensive, clinic_dexa, female_chl
+from synthetic_fixtures import access_medical_lab, chl_extensive, clinic_dexa, female_chl, quest_urinalysis
 from synthetic_fixtures import deterministic_fixtures as fx
 from synthetic_fixtures import dexa as dexa_fx
 from synthetic_fixtures import layouts
@@ -147,13 +147,17 @@ def build(name, folder):
         reads.update({(str(labs), number): [page, page] for number, page in female_chl.scan_reads().items()})
         return str(labs), [str(dexa)], reads, {"age": female_chl.AGE, "patient": female_chl.PATIENT, "sex": "female",
                                                "collected_date": female_chl.LATEST}
+    if name == "quest_scanned_urinalysis":
+        labs = quest_urinalysis.write_labs(folder / "labs.pdf")
+        reads = {(str(labs), number): [page, page] for number, page in quest_urinalysis.scan_reads().items()}
+        return str(labs), [], reads, {"age": 44, "collected_date": quest_urinalysis.COLLECTED}
     raise KeyError(name)
 
 
 ACCESS_SCAN_DATE = "07/20/2026"
 SCENARIOS = ["quest_digital", "chl_digital", "labcorp_digital", "scanned", "mixed", "variant", "scanned_noisy",
              "clinic_dexa", "clinic_dexa_no_age", "access_medical", "access_medical_limited", "chl_extensive",
-             "female_chl_scanned_undated"]
+             "female_chl_scanned_undated", "quest_scanned_urinalysis"]
 
 
 def run_scenario(name, folder, monkeypatch=None):

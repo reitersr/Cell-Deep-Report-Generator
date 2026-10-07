@@ -125,7 +125,7 @@ def _scan(date_display, pct="25.0"):
             "lean_mass_lb": None}
 
 
-def test_the_scan_nearest_the_bloodwork_within_60_days_is_current_and_later_scans_are_left_out():
+def test_the_latest_scan_within_60_days_is_current_and_later_scans_are_left_out():
     history = [_scan("06/12/2025"), _scan("04/20/2026"), _scan("07/25/2026"), _scan("08/30/2026")]
     kept, pairing = pipeline.pair_dexa_with_bloodwork(history, "05/12/2026")
     assert [r["date_display"] for r in kept] == ["06/12/2025", "04/20/2026"]
@@ -134,15 +134,28 @@ def test_the_scan_nearest_the_bloodwork_within_60_days_is_current_and_later_scan
         pairing["line"]
 
 
+def test_the_latest_scan_inside_the_window_wins_over_a_nearer_earlier_one():
+    # 11 days before and 34 days after the draw, both inside the window: the later scan is current, the earlier one
+    # is history (the clinic's rule: latest scan within 60 days either side, not the nearest).
+    history = [_scan("11/09/2025"), _scan("03/05/2026"), _scan("04/19/2026")]
+    kept, pairing = pipeline.pair_dexa_with_bloodwork(history, "03/16/2026")
+    assert pairing["current"] == "04/19/2026" and kept == history and pairing["excluded"] == []
+    assert "current scan 04/19/2026 (34 days after the latest bloodwork, 03/16/2026" in pairing["line"]
+    assert "history: 11/09/2025, 03/05/2026" in pairing["line"]
+
+
 def test_no_scan_within_60_days_keeps_todays_behaviour_and_a_scan_after_the_draw_can_be_current():
     history = [_scan("01/02/2026"), _scan("09/30/2026")]
     assert pipeline.pair_dexa_with_bloodwork(history, "05/12/2026") == (history, None)
-    after = [_scan("04/01/2026"), _scan("05/30/2026")]  # 41 days before / 18 days after: the nearer one
+    after = [_scan("04/01/2026"), _scan("05/30/2026")]  # 41 days before / 18 days after: the later one
     kept, pairing = pipeline.pair_dexa_with_bloodwork(after, "05/12/2026")
     assert pairing["current"] == "05/30/2026" and kept == after and pairing["excluded"] == []
-    tie = [_scan("05/02/2026"), _scan("05/22/2026")]  # 10 days either side: the earlier scan
-    kept, pairing = pipeline.pair_dexa_with_bloodwork(tie, "05/12/2026")
-    assert pairing["current"] == "05/02/2026" and pairing["excluded"] == ["05/22/2026"]
+    both = [_scan("05/02/2026"), _scan("05/22/2026"), _scan("07/20/2026")]  # 10 before, 10 after, 69 after
+    kept, pairing = pipeline.pair_dexa_with_bloodwork(both, "05/12/2026")
+    assert pairing["current"] == "05/22/2026" and pairing["excluded"] == ["07/20/2026"]
+    edge = [_scan("03/13/2026"), _scan("07/11/2026")]  # exactly 60 days before and 60 days after: both inside
+    kept, pairing = pipeline.pair_dexa_with_bloodwork(edge, "05/12/2026")
+    assert pairing["current"] == "07/11/2026" and pairing["excluded"] == []
 
 
 def test_excluded_scans_reach_nothing_in_the_report(female):

@@ -59,7 +59,7 @@ REAL_CASES = {
                    "layout": "Cleveland HeartLab digital report + undated scanned earlier draw + Lunar DEXA"},
     "limited_male": {"type": "Male, limited panel", "locked": True,
                      "layout": "Access Medical Laboratories digital report + Lunar DEXA"},
-    "chl_quest_male": {"type": "Male, CHL panels plus a scanned Quest draw", "locked": False,
+    "chl_quest_male": {"type": "Male, CHL panels plus a scanned Quest draw", "locked": True,
                        "layout": "Cleveland HeartLab digital report + scanned Quest pages + Lunar DEXA"},
 }
 

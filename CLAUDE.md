@@ -116,7 +116,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      historical columns hold results; thresholds such as ">123" never are. A header date under no Historical
      column leaves out only that table, with a notice. Lab progress/trend summary pages (and their continuation
      pages with dates on the "Test Name" line) restate other reports and are not read ("TREND PAGES NOT READ"
-     staff note). The Symbol font's mis-mapped "!"/"∀" glyphs read as "≥"/"≤" (`_SYMBOL_FONT_GLYPHS`). Names match
+     staff note). The Symbol font's mis-mapped "!"/"∀" glyphs read as "≥"/"≤" (`_SYMBOL_FONT_GLYPHS`). A heading that names urinalysis anywhere (Quest's "URINALYSIS, COMPLETE
+     W/REFLEX TO CULTURE") makes its rows urinalysis rows (`lab_reported.is_urinalysis`): urine GLUCOSE is never blood
+     glucose, OCCULT BLOOD is the lab-reported "Urinalysis — Blood". Names match
      the marker library by exact alias only (`markers_reference.name_key`: case, whitespace and line breaks never
      matter; scanned-page names only are also folded for I/l/1 and O/0 when exactly one alias then matches, with a
      "name matched after OCR folding" staff note; `drop_duplicate_lab_reported` never shows one test twice for one
@@ -207,9 +209,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    label appear in the history, "When you came in", "Where you are now" (the latest accepted scan with body
    composition, `scoring.has_body_composition`), the summary line, the headline and the score; with nothing to
    score, the "% optimized" figure is left out (never "—%") and the staff notes say why (`dexa_score_notes`).
-   The current scan is the body-composition scan nearest the latest bloodwork within `DEXA_PAIRING_WINDOW_DAYS`
-   either side (`pair_dexa_with_bloodwork`); scans dated after it are left out (STAFF CHECK "DEXA PAIRING"); with none
-   inside the window the latest scan is used. Staff notes warn when "Where you are now" is older than the latest
+   The current scan is the latest body-composition scan dated within `DEXA_PAIRING_WINDOW_DAYS` either side of the
+   latest bloodwork (`pair_dexa_with_bloodwork`); earlier scans are history; scans dated after it are left out (STAFF
+   CHECK "DEXA PAIRING"); with none inside the window the latest scan is used. Staff notes warn when "Where you are now" is older than the latest
    bloodwork by more than `DEXA_STALE_DAYS`. Kept scans are merged by date and
    sorted oldest first. Outcomes open the staff notes (DEXA block). Names everywhere compare with
    `scan_bloodwork.names_match` (any order and case, or first name plus last initial).

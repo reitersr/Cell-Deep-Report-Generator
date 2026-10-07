@@ -208,7 +208,8 @@ CYCLE_PHASE_HORMONES = ("Estradiol", "FSH", "LH", "Progesterone")
 # Lab-reported note shown with a cycle-phase hormone's value.
 CYCLE_PHASE_NOTE = "reference range depends on cycle phase (not recorded)"
 
-# The DEXA scan paired with the latest bloodwork ("Where you are now") is the scan with body composition nearest the
-# latest Collected date within this many days either side; scans dated after it are left out (staff note), never
-# blended. With no scan inside the window the latest accepted scan is used as before. Owner decision.
+# The DEXA scan paired with the latest bloodwork ("Where you are now") is the LATEST scan with body composition dated
+# within this many days either side of the latest Collected date; earlier scans are history; scans dated after it are
+# left out (staff note), never blended. With no scan inside the window the latest accepted scan is used as before.
+# Owner decision (latest within the window, not the nearest).
 DEXA_PAIRING_WINDOW_DAYS = 60
