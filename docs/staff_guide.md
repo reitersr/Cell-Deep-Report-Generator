@@ -79,3 +79,17 @@ Download the staff notes with the report and read the STAFF CHECK block first. C
 
 Every report needs a named staff member to review it before it is released. The tool does not interpret
 results; it only copies, checks and scores them.
+
+## 7. Values read by AI from a page in an unknown layout
+
+When a lab page's layout is not recognized, the tool may read it with AI and then checks every value against the
+page's own text: a value is kept only when the test name and that exact value (and H/L flag) are printed on the
+same line. The staff notes list each such value as "READ BY AI, VERIFIED AGAINST THE PAGE" with a count at the top
+("AI FALLBACK SUMMARY"). Check a few against the PDF. Values that could not be matched are listed as excluded.
+The clinic can turn this off by setting CELLDEEP_ALLOW_VISION_FALLBACK=0 on the server.
+
+## 8. "No results were read from the uploaded files"
+
+The tool does not build a report when no lab result could be read, or none could be scored: there would be
+nothing to show but an empty summary. Check that the right lab PDF was uploaded.
+

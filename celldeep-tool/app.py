@@ -302,10 +302,10 @@ def _run_report(job_directory: Path, job_data: dict, run) -> None:
     except pipeline.GenerationAborted:
         _write_job_status(job_directory, "stopped", error=STOPPED_MESSAGE)
         print(f"generation stopped at confirmation job_id={job_directory.name}")
-    except pipeline.LatestDrawNotAccepted as blocked:
+    except pipeline.GenerationBlocked as blocked:
         # The message names draw dates: it goes to the staff page only, never to the log.
         _write_job_status(job_directory, "stopped", error=str(blocked))
-        print(f"generation blocked: latest draw has no accepted result job_id={job_directory.name}")
+        print(f"generation blocked job_id={job_directory.name}")
     except Exception:
         job_id = job_directory.name
         # Log first, then publish the status: whoever sees "error" can already find the traceback.
