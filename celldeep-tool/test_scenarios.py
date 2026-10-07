@@ -23,6 +23,7 @@ EXPECTED_CONFIRMATIONS = {
     "access_medical_limited": 0,  # the summary above the column header is ignored silently
     "chl_extensive": 3,       # one unreadable Historical cell, the draw date it belongs to, unknown test names
     "female_chl_scanned_undated": 0,  # every scanned row agrees and is dated by the Historical-column match
+    "quest_scanned_urinalysis": 0,    # urine rows under Quest's full urinalysis heading are known urinalysis tests
 }
 
 

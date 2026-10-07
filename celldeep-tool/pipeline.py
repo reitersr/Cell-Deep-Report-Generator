@@ -1230,7 +1230,10 @@ def _match_row_name(name: str, heading: str | None):
 
     query = name_key(name)
     namespaces = {canonical.split(" \u2014 ")[0] for canonical in MARKER_LIBRARY if " \u2014 " in canonical}
-    namespace = next((item for item in namespaces if item.casefold() == (heading or "").casefold()), None)
+    # A section whose heading names a namespace is that namespace: "URINALYSIS, COMPLETE W/REFLEX TO CULTURE" is a
+    # urinalysis section, so its GLUCOSE is urine glucose, never blood glucose.
+    heading_words = re.findall(r"[a-z]+", (heading or "").casefold())
+    namespace = next((item for item in namespaces if item.casefold() in heading_words), None)
     candidates = {}
     for canonical, config in MARKER_LIBRARY.items():
         if namespace and canonical.split(" \u2014 ", 1)[0] != namespace:
@@ -3749,11 +3752,11 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
 
 
 def pair_dexa_with_bloodwork(dexa_history: list, latest_draw: str | None) -> tuple[list, dict | None]:
-    """The scan paired with the latest bloodwork: of the scans with body composition, the one nearest the latest
-    bloodwork Collected date within clinic_config.DEXA_PAIRING_WINDOW_DAYS either side (a tie goes to the earlier
-    scan) is the current scan; earlier scans are history; scans dated after it (more than the window after the
-    bloodwork, or later than the chosen scan) are left out of the report, never blended, with a staff note.
-    With no scan inside the window nothing changes. Returns (history, pairing or None)."""
+    """The scan paired with the latest bloodwork: of the scans with body composition, the LATEST one dated within
+    clinic_config.DEXA_PAIRING_WINDOW_DAYS either side of the latest bloodwork Collected date (the window's ends
+    included) is the current scan; earlier scans are history; scans dated after it (more than the window after the
+    bloodwork) are left out of the report, never blended, with a staff note. With no scan inside the window nothing
+    changes. Returns (history, pairing or None)."""
     draw_day = _normalize_date_for_matching(latest_draw or "")
     if not dexa_history or not isinstance(draw_day, tuple):
         return dexa_history, None
@@ -3767,11 +3770,11 @@ def pair_dexa_with_bloodwork(dexa_history: list, latest_draw: str | None) -> tup
             reading.get("total_mass_lb"), reading.get("fat_mass_lb"), reading.get("lean_mass_lb"))
 
     window = clinic_config.DEXA_PAIRING_WINDOW_DAYS
-    candidates = [(abs(days), days, reading) for reading in dexa_history
+    candidates = [(days, reading) for reading in dexa_history
                   if composition(reading) and (days := offset(reading)) is not None and abs(days) <= window]
     if not candidates:
         return dexa_history, None
-    _, current_days, current = min(candidates, key=lambda item: (item[0], item[1]))
+    current_days, current = max(candidates, key=lambda item: item[0])
     kept, excluded = [], []
     for reading in dexa_history:
         days = offset(reading)

@@ -14,6 +14,7 @@ Any other printed result that the lab flagged H or L is also shown, under its pr
 no lab-flagged result is missing from the patient report.
 """
 
+import re
 
 from schema import normalize_date_for_matching
 
@@ -165,7 +166,9 @@ def _key(text):
 
 
 def is_urinalysis(heading):
-    return _key(heading).startswith("urinalysis")
+    """A urinalysis section: its heading names urinalysis anywhere ("URINALYSIS", "Urinalysis Gross Examination",
+    Quest's "URINALYSIS, COMPLETE W/REFLEX TO CULTURE")."""
+    return "urinalysis" in re.findall(r"[a-z]+", _key(heading))
 
 
 def lookup(raw_name, heading):

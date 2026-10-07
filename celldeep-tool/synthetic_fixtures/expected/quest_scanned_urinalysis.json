@@ -1,0 +1,18 @@
+{
+ "rows": [
+  "L | Chemistry | Sodium | 03/18/2026 | 140 |  | 135-146 mmol/L",
+  "L | Urinalysis | Urinalysis — Blood | 03/18/2026 | NEGATIVE |  | NEGATIVE",
+  "L | Urinalysis | Urinalysis — Color | 03/18/2026 | YELLOW |  | YELLOW",
+  "L | Urinalysis | Urinalysis — Glucose | 03/18/2026 | NEGATIVE |  | NEGATIVE",
+  "L | Urinalysis | Urinalysis — Ketones | 03/18/2026 | 1+ |  | NEGATIVE",
+  "L | Urinalysis | Urinalysis — Protein | 03/18/2026 | NEGATIVE |  | NEGATIVE",
+  "L | Urinalysis | Urinalysis — Specific Gravity | 03/18/2026 | 1.015 |  | 1.001-1.035",
+  "L | Urinalysis | Urinalysis — pH | 03/18/2026 | 6.0 |  | 5.0-8.0",
+  "M | Creatinine | 03/18/2026 | 0.88 |  | optimal",
+  "M | Glucose (fasting) | 03/18/2026 | 88 |  | optimal",
+  "M | TSH | 03/18/2026 | 1.72 |  | optimal",
+  "O | overall now 65 | first visit ",
+  "S | Fuel | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal",
+  "S | Pace | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal"
+ ]
+}

@@ -12,8 +12,8 @@ expected values live only in the git-ignored `celldeep-tool/real_fixtures/`; not
 | `limited_male` | Male, limited panel | Access Medical Laboratories digital report + Lunar DEXA | yes |
 | `chl_quest_male` | Male, CHL panels plus a scanned Quest draw | Cleveland HeartLab digital report + scanned Quest pages + Lunar DEXA | no |
 
-`chl_quest_male` is held: the current tool's output differs from its verified report (see the pull request that
-added this file), so it waits for the owner's decision before it is locked.
+`chl_quest_male` is held: it now runs to completion (its scanned Quest urinalysis heading is read as urinalysis), and
+its expected differences from the verified report are with the owner for hand-verification before it is locked.
 
 ## Running the checks
 
