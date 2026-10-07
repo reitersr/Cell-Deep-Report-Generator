@@ -146,14 +146,24 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      `FEMALE_RANGES_STAFF_CHECK_LINE` and the patient PDF carries `FEMALE_DRAFT_MARK` (`PatientRecord.draft_label`).
    - Image-only pages: `_extract_scan_bloodwork` renders each page and reads it twice with the vision model
      (no sampling settings: anthropic 1.x accepts no temperature/top_p/top_k and has no seed); when the two
-     reads disagree on any result row, a third read is made (`scan_bloodwork.SCAN_MAX_READS`). Transport
+     reads disagree on any result row, a third read is made (`scan_bloodwork.SCAN_MAX_READS`). A row some reads print
+     and others leave out entirely ("not read / 1214 H / not read") is a missing read, not a disagreement: the page is
+     read again, each further read naming the missing rows (`rows_missing_from_reads`), until two reads print the row
+     identically or `SCAN_TARGETED_MAX_READS` (5) reads were made; a single read is never accepted, and two values
+     printed equally often are no agreement. Transport
      retries only. `scan_bloodwork.gate_staff_identified_reads` keeps a row only when at least two reads print
      exactly the same value, flag and range (both, when only two reads exist) and it passes the value-format
      and flag-vs-range checks (on risk-category pages a flag or Non-Optimal pill is consistent when the value sits in
      the band it points to, e.g. "3.4 H" against ">3.0"; `scan_bloodwork._in_flagged_band`; whole-number count ranges
      such as "0-5" are text results, `is_text_result`). A row no two reads agree on is listed as "INCOMPLETE - row excluded: <marker>
      (reads disagree: X / Y / Z)"; every other excluded result row is listed with its check. A row no read
-     prints a value for (a section heading) is not a result and is never listed or confirmed. Staff-entered
+     prints a value for (a section heading) is not a result and is never listed or confirmed. Section carry-over
+     (`scan_bloodwork.carry_sections`): rows printed before the first heading of a scanned page belong to the section the
+     previous page ended in; a page whose reads agree it prints the urine-analysis note ("This urine was analyzed for
+     the presence of ...", schema field `urine_note_printed`) starts in "URINALYSIS"; a carried urinalysis section covers
+     only urine tests and ends at the first row that is not one (a staff note names each carry). Unrecognized rows that
+     print no result (a heading, a "Comments" label, "TNP") are not unrecognized tests (`pipeline.split_no_result_rows`;
+     one "PRINTED WITH NO RESULT" staff note). Staff-entered
      name and Collected date identify the pages. Undated scanned draw (`date_undated_scan_draw`): scanned pages that
      print no Collected date, uploaded with a digital report whose own date staff entered, are an earlier draw dated
      only when at least `clinic_config.UNDATED_SCAN_MIN_MATCHES` plain numeric results exactly match that report's

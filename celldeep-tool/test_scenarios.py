@@ -24,6 +24,8 @@ EXPECTED_CONFIRMATIONS = {
     "chl_extensive": 3,       # one unreadable Historical cell, the draw date it belongs to, unknown test names
     "female_chl_scanned_undated": 0,  # every scanned row agrees and is dated by the Historical-column match
     "quest_scanned_urinalysis": 0,    # urine rows under Quest's full urinalysis heading are known urinalysis tests
+    "quest_scanned_urinalysis_continued": 0,  # urine rows with no heading on their page continue page 1's section
+    "scanned_mixed_reads": 0,         # rows missing from some reads are read again until two reads agree
 }
 
 
