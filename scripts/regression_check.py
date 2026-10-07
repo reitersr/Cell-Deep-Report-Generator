@@ -6,6 +6,7 @@ result with its expected-values file, so a fix for one report cannot silently ch
     python scripts/regression_check.py --snapshot DIR  write every fixture's current rows to DIR (before/after diffs)
     python scripts/regression_check.py --diff A B      diff two snapshot directories
     python scripts/regression_check.py --record-real real:NAME   lock a hand-verified real report (local only)
+    python scripts/regression_check.py --real          check only the locked real reports (local, one command)
 
 Fixtures:
 - every synthetic scenario (synthetic_fixtures/scenarios.py, scripted vision reads, no network); expected rows in
@@ -47,6 +48,20 @@ TIERS = ("optimal", "moderate", "flag")
 # cases answer "Not Assessed" for every domain, and a real fixture's spec stores the answers its verified report used
 # ("vitality_index"; --record-real writes it). A change to the form therefore never shows up as a regression.
 VITALITY_NOT_ASSESSED = {label: "Not Assessed" for label in pipeline.scoring.VITALITY_LABELS}
+# The verified real patient types, by case name only: their PDFs, transcriptions and expected values stay in the
+# git-ignored real_fixtures/ (<case>.expected.json once locked). docs/regression_status.md lists the same cases
+# (test_regression_check keeps the two in sync). A locked case whose files are not present is never passed silently:
+# the run prints "real fixtures not present: N cases not checked".
+REAL_CASES = {
+    "extensive_male": {"type": "Male, extensive panel", "locked": True,
+                       "layout": "Cleveland HeartLab digital report (multi-draw, Historical column) + Lunar DEXA"},
+    "female_chl": {"type": "Female", "locked": True,
+                   "layout": "Cleveland HeartLab digital report + undated scanned earlier draw + Lunar DEXA"},
+    "limited_male": {"type": "Male, limited panel", "locked": True,
+                     "layout": "Access Medical Laboratories digital report + Lunar DEXA"},
+    "chl_quest_male": {"type": "Male, CHL panels plus a scanned Quest draw", "locked": False,
+                       "layout": "Cleveland HeartLab digital report + scanned Quest pages + Lunar DEXA"},
+}
 
 
 def _num(value):
@@ -256,7 +271,16 @@ def current(selected=None) -> dict[str, dict]:
 
 def _uses_dexa(row) -> bool:
     return row.startswith(("D |", "O |", "S | Structure"))
-    return results
+
+
+def real_missing() -> list[str]:
+    """The locked real cases whose expected-values file is not in real_fixtures/ (always all of them in CI)."""
+    return [name for name, case in REAL_CASES.items()
+            if case["locked"] and not (REAL / f"{name}.expected.json").is_file()]
+
+
+def missing_note(missing) -> str:
+    return f"real fixtures not present: {len(missing)} cases not checked ({', '.join(missing)})"
 
 
 def _matches(expected, actual) -> bool:
@@ -326,6 +350,7 @@ def main():
                         help="write every current row into the selected real_fixtures/*.expected.json files (after "
                              "the report has been verified by hand); needs the DEXA read (stored transcription or "
                              "CELLDEEP_LIVE_VISION=1)")
+    parser.add_argument("--real", action="store_true", help="check only the real fixtures in real_fixtures/")
     parser.add_argument("--dexa-reads", help="use this stored transcription (in real_fixtures/) for real DEXA files")
     parser.add_argument("fixtures", nargs="*", help="limit to these fixture names")
     args = parser.parse_args()
@@ -334,7 +359,11 @@ def main():
         return 0
     global DEXA_READS_OVERRIDE
     DEXA_READS_OVERRIDE = args.dexa_reads
-    results = current(set(args.fixtures) or None)
+    selected = set(args.fixtures) or None
+    if args.real:
+        selected = {"real:" + spec.name.removesuffix(".expected.json") for spec in REAL.glob("*.expected.json")} \
+            if REAL.is_dir() else set()
+    results = current(selected) if selected != set() else {}
     if args.snapshot:
         snapshot(results, args.snapshot)
         print(f"snapshot of {len(results)} fixture(s) written to {args.snapshot}")
@@ -362,6 +391,9 @@ def main():
             print(f"{name}: recorded {len(result['rows'])} rows")
         return 0 if recorded else 1
     failures = compare(results)
+    if missing := real_missing():
+        # Loud, never a silent pass: in GitHub Actions also as a warning annotation on the run.
+        print(("::warning::" if os.environ.get("GITHUB_ACTIONS") == "true" else "") + missing_note(missing))
     print("PASS" if not failures else f"FAIL - {failures} fixture(s) differ")
     return 1 if failures else 0
 
