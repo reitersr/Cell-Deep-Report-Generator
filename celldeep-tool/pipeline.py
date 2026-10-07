@@ -796,13 +796,40 @@ def _page_words(page) -> list[tuple]:
     """(x0, y0, x1, y1, text) for every word on a page; accepts a fitz.Page or a prepared word list."""
     if hasattr(page, "get_text"):
         raw = page.get_text("words")
+        symbols = _symbol_glyph_boxes(page)
         # Reading a scanned page's text layer decodes its full-resolution image into MuPDF's cache;
         # empty the cache so those images never accumulate (it is a cache only: output is unchanged).
         fitz.TOOLS.store_shrink(100)
     else:
-        raw = page
-    return [(float(w[0]), float(w[1]), float(w[2]), float(w[3]), str(w[4]))
-            for w in raw if str(w[4]).strip()]
+        raw, symbols = page, []
+    words = []
+    for w in raw:
+        text = str(w[4])
+        if not text.strip():
+            continue
+        for x0, y0, glyph in symbols:
+            if text[:1] == glyph and abs(float(w[0]) - x0) < 0.5 and abs(float(w[1]) - y0) < 3:
+                text = _SYMBOL_FONT_GLYPHS[glyph] + text[1:]
+                break
+        words.append((float(w[0]), float(w[1]), float(w[2]), float(w[3]), text))
+    return words
+
+
+# The Symbol font in some lab PDFs carries a wrong text mapping for two glyphs: the printed "≥" reads as "!" and the
+# printed "≤" as "∀" (checked against the rendered page). Only those glyphs, only in that font, are decoded.
+_SYMBOL_FONT_GLYPHS = {"!": "≥", "∀": "≤"}
+
+
+def _symbol_glyph_boxes(page) -> list[tuple[float, float, str]]:
+    """(x0, y0, glyph) of each mis-mapped Symbol-font glyph on the page."""
+    boxes = []
+    for block in page.get_text("dict").get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                glyph = span["text"].strip()[:1]
+                if span.get("font", "").startswith("Symbol") and glyph in _SYMBOL_FONT_GLYPHS:
+                    boxes.append((span["bbox"][0], span["bbox"][1], glyph))
+    return boxes
 
 
 def _group_lines(words: list[tuple], tolerance: float) -> list[list[tuple]]:
@@ -888,13 +915,15 @@ _BOUNDED_RANGE_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?")
 _DATE_COLUMN_PAD_PT = 6.0
 _ORDER_ID_RE = re.compile(r"\border\s*(?:id|#|number)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]*)", re.IGNORECASE)
 _COLLECTED_RE = re.compile(r"\bcollected\s*:?\s*(" + _PRINTED_DATE_RE.pattern + r")", re.IGNORECASE)
-_COLLECTED_TIME_RE = re.compile(r"^\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\b")
+_COLLECTED_TIME_RE = re.compile(r"^\s*,?\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)")
 # "Fasting: Y" / "Fasting: N" / "Fasting: Unknown" / "Fasting:" (blank) printed in a draw's header block.
-_FASTING_RE = re.compile(r"\bfasting\s*:\s*([A-Za-z]*)", re.IGNORECASE)
+_FASTING_RE = re.compile(r"\bfasting\s*:\s*([A-Za-z-]*)", re.IGNORECASE)
 # Quest's own multi-draw restatements of values printed elsewhere - never a source of truth.
 _TREND_TABLE_TITLES = ("progress summary", "trend summary", "cumulative summary")
 # A document section title ("... Report"); a different exact title ends any table above it.
 _SECTION_TITLE_RE = re.compile(r"[A-Za-z][A-Za-z&/-]*(?:\s+[A-Za-z][A-Za-z&/-]*){0,7}\s+Report", re.IGNORECASE)
+# A row rule starts at most this far (pt) from the "Test Name" label's left edge (labels are printed indented).
+_RULE_LEFT_TOLERANCE_PT = 12.0
 # Words further apart than this on one baseline are separate printed phrases (e.g. title vs. page number).
 _PHRASE_GAP_PT = 12.0
 _BLOODWORK_NAME_LABELS = {"test", "tests", "analyte"}
@@ -906,6 +935,7 @@ _BLOODWORK_HEADER_LABELS = [
     ("historical", ("historical",)), ("historical", ("historical", "result")),
     ("range", ("reference", "range")), ("range", ("reference", "interval")), ("range", ("range",)),
     ("units", ("units",)), ("units", ("unit",)), ("lab", ("lab",)), ("flag", ("flag",)),
+    ("comment", ("comments",)), ("comment", ("comment",)),
 ]
 # Words a repeated column-header line inside a table is made of (never a result row).
 _COLUMN_HEADER_WORDS = {"test", "name", "tests", "analyte", "current", "historical", "result", "results", "relative",
@@ -979,7 +1009,8 @@ def _bloodwork_header(words: list[tuple], group_lines: list[list[tuple]] = ()) -
         return None
     tokens = [_header_token(w[4]) for w in words]
     group_tokens = [_header_token(w[4]) for line in group_lines for w in line]
-    has_dated_labels = any(token in ("current", "historical") for token in tokens + group_tokens)
+    has_dated_labels = any(token in ("current", "historical") for token in tokens + group_tokens) or (
+        tokens.count("result") == 1 and "results" not in tokens)  # "Test Name | Result | Comments"
     has_range_labels = any(
         tokens[index:index + len(phrase)] == list(phrase)
         for phrase in (("in", "range"), ("out", "of", "range"))
@@ -1000,6 +1031,28 @@ def _bloodwork_header(words: list[tuple], group_lines: list[list[tuple]] = ()) -
         owners = {kind for kind, x0, x1 in groups if x0 <= column["x1"] and column["x0"] <= x1}
         if len(owners) == 1:
             column["kind"] = owners.pop()
+    inline = []  # dates or "/ /" slots printed on the header line itself, after a non-Historical label
+    for column in columns:
+        if column["kind"] == "historical":
+            dates = [match.group(0) for match in _PRINTED_DATE_RE.finditer(_line_text(column["extra"]))]
+            if len(dates) > 1:
+                raise BloodworkParseError(f"Historical column header prints more than one date: {dates}")
+            column["date"] = dates[0] if dates else None
+        elif slots := _header_slots(column["extra"]):
+            # "Test Name  Current  11/04/2025  07/08/2025  / /": each printed date or slot is its own Historical column.
+            column["x1"] = max([column["x0"]] + [w[2] for w in column["extra"] if w[0] < slots[0][0]] +
+                               [w[2] for w in words if column["x0"] <= w[0] < slots[0][0]])
+            inline += [{"kind": "historical", "x0": x0, "x1": x1, "extra": [], "date": date} for x0, x1, date in slots]
+    header = _finalize_header(columns + inline)
+    header["inline_dates"] = bool(inline)
+    return header
+
+
+def _finalize_header(columns: list[dict]) -> dict:
+    """Column roles -> logical value columns. Every Current sub-column (Optimal / Non-Optimal, In Range / Out of
+    Range) is the one Current value; each Historical column is its own value with its own printed date. Every other
+    role (name, reference range, risk thresholds, units, lab code, flag) is never a result."""
+    columns = sorted(columns, key=lambda column: column["x0"])
     logical, value_columns = [], []
     current_index = None
     for column in columns:
@@ -1009,15 +1062,97 @@ def _bloodwork_header(words: list[tuple], group_lines: list[list[tuple]] = ()) -
                 value_columns.append({"kind": "current", "date": None})
             logical.append(current_index)
         elif column["kind"] == "historical":
-            dates = [match.group(0) for match in _PRINTED_DATE_RE.finditer(_line_text(column["extra"]))]
-            if len(dates) > 1:
-                raise BloodworkParseError(f"Historical column header prints more than one date: {dates}")
             logical.append(len(value_columns))
-            value_columns.append({"kind": "historical", "date": dates[0] if dates else None})
+            value_columns.append({"kind": "historical", "date": column.get("date")})
         else:
             logical.append(None)
     return {"columns": columns, "bounds": _column_bounds(columns), "logical": logical,
             "value_columns": value_columns}
+
+
+# Words printed on the header lines under a table's "Test Name" line (sub-labels, risk tiers, units, dates).
+_TIER_WORDS = {"optimal", "moderate", "high", "low", "borderline"}
+_CURRENT_SUBLABELS = (("non-optimal",), ("in", "range"), ("out", "of", "range"))
+
+
+def _header_slots(words: list[tuple]) -> list[tuple[float, float, str | None]]:
+    """Printed dates and empty date slots ("/ /") on a header line, left to right: (x0, x1, date or None)."""
+    slots = []
+    for word in words:
+        text = word[4].strip()
+        if _PRINTED_DATE_RE.fullmatch(text):
+            slots.append([word[0], word[2], text])
+        elif text and set(text) <= set("/"):
+            if slots and slots[-1][2] is None and word[0] - slots[-1][1] < _PHRASE_GAP_PT:
+                slots[-1][1] = word[2]
+            else:
+                slots.append([word[0], word[2], None])
+    return [tuple(slot) for slot in slots]
+
+
+def _refine_header(words: list[tuple], header: dict) -> dict | None:
+    """Read one header line printed under the "Test Name" line and return the header with its column roles refined,
+    or None when the line is not a header line (the first result row). By x-position only:
+    - risk-tier labels printed together ("Optimal Moderate High") are threshold columns: never results;
+    - "Units" / "Lab" / "Flag" / "Reference Range" labels are their own columns;
+    - Current sub-labels (Optimal / Non-Optimal, In Range / Out of Range) widen the Current column;
+    - printed dates and empty "/ /" slots under a Historical column give each slot its own Historical column with
+      its own date (an empty slot has no date: nothing in it is ever a result).
+    Raises BloodworkParseError when the slots cannot be matched to Historical columns (roles ambiguous)."""
+    tokens = [w[4].strip() for w in words if w[4].strip()]
+    if not tokens or not all(_header_token(t) in _COLUMN_HEADER_WORDS | _TIER_WORDS | {"borderline", "results"}
+                             or set(t) <= set("/&") or _PRINTED_DATE_RE.fullmatch(t) for t in tokens):
+        return None
+    columns = [dict(column) for column in header["columns"]]
+    current = [column for column in columns if column["kind"] == "current"]
+    lowered = [_header_token(w[4]) for w in words]
+    tiers = sum(token in ("moderate", "high", "borderline") for token in lowered)
+    index = 0
+    while index < len(words):
+        word, token = words[index], lowered[index]
+        phrase = next((p for p in _CURRENT_SUBLABELS if tuple(lowered[index:index + len(p)]) == p), None)
+        if phrase is None and token == "optimal" and not tiers:
+            phrase = ("optimal",)
+        if phrase is not None and current:
+            span = words[index:index + len(phrase)]
+            nearest = min(current, key=lambda c: abs((c["x0"] + c["x1"]) / 2 - (span[0][0] + span[-1][2]) / 2))
+            x0, x1 = min(nearest["x0"], span[0][0]), max(nearest["x1"], span[-1][2])
+            # A sub-label widens the Current column only where no other column's label is printed.
+            if not any(other is not nearest and other["x0"] < x1 and x0 < other["x1"] for other in columns):
+                nearest["x0"], nearest["x1"] = x0, x1
+            index += len(phrase)
+            continue
+        if token in _TIER_WORDS and tiers:
+            columns.append({"kind": "threshold", "x0": word[0], "x1": word[2], "extra": [], "label": word[4]})
+        elif token in ("units", "unit"):
+            columns.append({"kind": "units", "x0": word[0], "x1": word[2], "extra": []})
+        elif token == "lab":
+            columns.append({"kind": "lab", "x0": word[0], "x1": word[2], "extra": []})
+        elif token == "flag":
+            columns.append({"kind": "flag", "x0": word[0], "x1": word[2], "extra": []})
+        index += 1
+    slots = _header_slots(words)
+    owners: dict[int, list] = {}  # index in header["columns"] (same order as the first entries of columns) -> slots
+    for slot in slots:
+        at = _column_at((slot[0] + slot[1]) / 2, header["bounds"])
+        if at is None or header["columns"][at]["kind"] != "historical":
+            if slot[2] is None:
+                continue  # an empty "/ /" slot outside a Historical column holds nothing
+            raise BloodworkParseError(f"the header date {slot[2]} sits under no Historical column; the table's "
+                                      "columns cannot be told apart")
+        owners.setdefault(at, []).append(slot)
+    for at, found in owners.items():
+        column = columns[at]
+        if column.get("date") and (len(found) > 1 or found[0][2] not in (None, column["date"])):
+            raise BloodworkParseError("a Historical column prints a date in its label and different dates below it; "
+                                      "the table's columns cannot be told apart")
+        if len(found) == 1:
+            column["date"] = column.get("date") or found[0][2]
+        else:
+            column["split"] = [{"kind": "historical", "x0": slot[0], "x1": slot[1], "extra": [], "date": slot[2]}
+                               for slot in found]
+    columns = [part for column in columns for part in (column.pop("split", None) or [column])]
+    return _finalize_header(columns)
 
 
 def _attach_header_dates(words: list[tuple], header: dict) -> bool:
@@ -1277,7 +1412,7 @@ def _table_row_groups(page, lines: list[list[tuple]], header: dict):
                 if item[0] != "l":
                     continue
                 start, end = sorted(item[1:3], key=lambda point: point.x)
-                if abs(start.y - end.y) < 0.5 and abs(start.x - left) < 8 \
+                if abs(start.y - end.y) < 0.5 and abs(start.x - left) < _RULE_LEFT_TOLERANCE_PT \
                         and header["columns"][0]["x1"] < end.x:
                     rules.append((start.y, end.x))
     name_rules = [x for _, x in rules if x < first_value]
@@ -1376,7 +1511,7 @@ def _parse_table_row(page, words, header, section, occurrences, unrecognized, ro
         return
     cells = []
     lab_codes = set(printed_lab_codes)
-    row_lab_codes, unit_words = [], []
+    row_lab_codes, unit_words, tiers = [], [], []
     assigned = {index: [] for index in range(len(header["columns"]))}
     for span in _printed_cells(other_words):
         center = (span[0][0] + span[-1][2]) / 2
@@ -1401,6 +1536,10 @@ def _parse_table_row(page, words, header, section, occurrences, unrecognized, ro
             lab_codes.update(w[4] for w in column_words)
         if column["kind"] == "lab":
             row_lab_codes.extend(w[4] for w in column_words)
+        if column["kind"] == "threshold":
+            printed = " ".join(w[4] for w in column_words)
+            if printed and printed.upper() != "N/A":
+                tiers.append((column.get("label", "").strip(), printed))
         if column["kind"] == "units":
             # The printed unit; legend thresholds that spill into the column are never a unit.
             unit_words.extend(w[4] for w in column_words if not _is_cell_token(w[4]) and not _is_threshold_token(w[4]))
@@ -1444,6 +1583,11 @@ def _parse_table_row(page, words, header, section, occurrences, unrecognized, ro
             occurrence["printed_unit"] = " ".join(unit_words)
     for item in unrecognized[unknown_start:]:
         item["raw_unit"] = " ".join(unit_words)
+        if not item["raw_range"] and tiers:
+            # No reference-range column: the lab's printed risk categories are its range ("Optimal <0.77; ...").
+            # One printed value under the risk columns is a plain range printed across them: shown as printed.
+            item["raw_range"] = tiers[0][1] if len(tiers) == 1 else "; ".join(f"{label} {text}".strip()
+                                                                            for label, text in tiers)
         # A test printed inside another panel under its own lab code (testosterone panel ALBUMIN/GLOB) is a
         # separate result from the chemistry test of the same name.
         if scoped := lab_reported.panel_scoped(name, row_lab_codes):
@@ -1485,7 +1629,9 @@ def _section_title(words: list[tuple]) -> str | None:
 
 def _normalize_fasting(values: set) -> str:
     """One draw's printed fasting status: 'Y', 'N', or what was printed otherwise ('UNKNOWN', 'BLANK', 'CONFLICT')."""
-    statuses = {"Y" if value in ("Y", "YES") else "N" if value in ("N", "NO") else value for value in values}
+    # "Fasting: Fasting" (Cleveland HeartLab) is a confirmed fasting draw; "Non-Fasting" is not.
+    statuses = {"Y" if value in ("Y", "YES", "FASTING") else "N" if value in ("N", "NO", "NON-FASTING", "NONFASTING")
+                else value for value in values}
     return statuses.pop() if len(statuses) == 1 else "CONFLICT"
 
 
@@ -1522,6 +1668,10 @@ def _dedupe_bloodwork_rows(occurrences, audit, review_notes=None, exclusions=Non
     for key, items in groups.items():
         full = [(occ, page) for occ, page in items if occ.get("column", "current") == "current"]
         historical = [(occ, page) for occ, page in items if occ.get("column", "current") != "current"]
+        # A blank Historical cell prints nothing for that date: it never contradicts a printed result.
+        if any(occ["status"] != "not_performed" for occ, _ in full + historical):
+            historical = [(occ, page) for occ, page in historical if occ["status"] != "not_performed"]
+            full = [(occ, page) for occ, page in full if occ["status"] != "not_performed"] or full
         chosen = full or historical
         first, first_page = chosen[0]
         for occurrence, page in chosen[1:]:
@@ -1550,6 +1700,15 @@ def _dedupe_bloodwork_rows(occurrences, audit, review_notes=None, exclusions=Non
                             f"historical column (page {page}) prints "
                             f"{occurrence['disp_value'] or occurrence['status']!r}. The full report's value is used.")
             merged = dict(first)
+            # The same result printed in two tables of one report (e.g. a summary table without the lab's range and a
+            # panel table with it): the printed range and flag are taken from the copy that prints them.
+            for occurrence, _ in chosen[1:]:
+                if not merged.get("lab_flag") and occurrence.get("lab_flag"):
+                    merged["lab_flag"] = occurrence["lab_flag"]
+                if not merged.get("lab_range_display") and occurrence.get("lab_range_display"):
+                    merged.update({key: occurrence[key] for key in ("lab_range_lo", "lab_range_hi", "lab_range_display")})
+                if not merged.get("printed_unit") and occurrence.get("printed_unit"):
+                    merged["printed_unit"] = occurrence["printed_unit"]
             source_pages = list(dict.fromkeys(page for _, page in chosen))
             if len(source_pages) > 1:
                 merged["source_label"] += "; pages " + ", ".join(map(str, source_pages))
@@ -1621,6 +1780,7 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
                 section["dates"].append(date)
 
     excluded = exclusions if exclusions is not None else []
+    trend_pages: set[int] = set()
 
     def rollback(marks):
         del occurrences[marks[0]:], unrecognized[marks[1]:], audit[marks[2]:]
@@ -1656,7 +1816,8 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
             if title is not None:
                 if title != state["title"]:
                     flush(page)
-                    state.update(title=title, header=None, excluded=False, await_dates=False, recent_lines=[])
+                    state.update(title=title, header=None, excluded=False, await_dates=False, recent_lines=[],
+                                 trend=False)
                 if not (order or collected):
                     continue
             if order:
@@ -1706,12 +1867,21 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
             section = state["section"]
             if any(title in text.lower() for title in _TREND_TABLE_TITLES):
                 flush(page)
-                state.update(excluded=True, header=None, page_had_table=True)  # trend tables are skipped on purpose
+                # Trend tables restate results printed in each draw's own report: skipped on purpose, and so are
+                # their continuation pages (the same dates-on-the-header-line table with no new title).
+                state.update(excluded=True, header=None, page_had_table=True, trend=True)
+                trend_pages.add(page_number)
                 continue
             if state["excluded"]:
                 continue
             header = _bloodwork_header(words, state["recent_lines"][-3:])
+            if header and state.get("trend") and header.get("inline_dates"):
+                flush(page)
+                state.update(excluded=True, header=None, page_had_table=True)
+                trend_pages.add(page_number)
+                continue
             if header:
+                state["trend"] = False
                 state["page_had_table"] = True
                 flush(page)
                 state.update(header=header, await_dates=True, pending_dates=[], recent_lines=[])
@@ -1721,8 +1891,23 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
             if state["header"] is None:
                 continue
             # Historical dates may sit a few header lines below the labels; read them until the first row.
-            if state["await_dates"] and _attach_header_dates(words, state["header"]):
-                continue
+            # Header lines printed under "Test Name" (risk tiers, units, sub-labels, Historical dates / "/ /"
+            # slots) refine the column roles; the first other line is the first result row.
+            if state["await_dates"]:
+                try:
+                    refined = _refine_header(words, state["header"])
+                except BloodworkHardStop:
+                    raise
+                except BloodworkParseError as error:
+                    # Ambiguous column roles: only this table is left out (until the next header), with a notice.
+                    excluded.append({"page": page_number, "section": _section_label(section),
+                                     "reason": f"table not read: {error}", "date": _section_date(section)})
+                    state.update(header=None, await_dates=False, rows=[])
+                    continue
+                if refined is not None:
+                    state["header"] = refined
+                    continue
+                state["await_dates"] = False
             state["rows"].append(words)
         flush(page)
 
@@ -1756,6 +1941,10 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
         print(f"WARNING: {warning}")
         if review_notes is not None:
             review_notes.append(warning)
+    if trend_pages and review_notes is not None:
+        review_notes.append(f"TREND PAGES NOT READ: lab PDF page(s) {', '.join(map(str, sorted(trend_pages)))} hold the "
+                            "lab's progress/trend summary, which restates results printed in each draw's own report; "
+                            "those reports are read instead")
     if draw_info is not None:
         draw_info.update(_draw_info(sections))
     occurrences = _dedupe_bloodwork_rows(occurrences, audit, review_notes, excluded)
@@ -2579,10 +2768,14 @@ def _morning_window(pages) -> tuple | None:
     return windows.pop() if len(windows) == 1 else None
 
 
+def _is_placeholder_time(time: str | None) -> bool:
+    """00:01 (with or without AM/PM) and the like: a placeholder, not a collection time."""
+    clock = re.match(r"\s*(\d{1,2}:\d{2})", time or "")
+    return clock is not None and clock[1] in clinic_config.PLACEHOLDER_COLLECTION_TIMES
+
+
 def _draw_time_text(time: str | None) -> str:
-    if time is None:
-        return clinic_config.COLLECTION_TIME_NOT_RECORDED
-    if time.strip() in clinic_config.PLACEHOLDER_COLLECTION_TIMES:
+    if time is None or _is_placeholder_time(time):
         return clinic_config.COLLECTION_TIME_NOT_RECORDED
     return f"collected {time}"
 
@@ -2611,7 +2804,7 @@ def label_cortisol_draws(markers: list, draw_info: dict) -> list[str]:
         for date in dates:
             key = _normalize_date_for_matching(date)
             time = next((value for printed, value in times.items() if _normalize_date_for_matching(printed) == key), None)
-            real = time is not None and time.strip() not in clinic_config.PLACEHOLDER_COLLECTION_TIMES
+            real = time is not None and not _is_placeholder_time(time)
             minutes = _clock_minutes(time) if real else None
             inside = minutes is not None and window is not None and window[0] * 60 <= minutes <= window[1] * 60
             inside_all = inside_all and inside
