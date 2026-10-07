@@ -12,7 +12,7 @@ Fixtures:
   synthetic_fixtures/expected/<scenario>.json, compared exactly. CI runs this through test_regression_check.py.
 - every real_fixtures/<name>.expected.json (git-ignored, never committed: it holds a real report's values). It names
   its lab PDF and DEXA PDF(s) in real_fixtures/ and the staff entries ("labs", "dexa", "patient", "age", "sex",
-  "collected_date", optional "dexa_reads"), and lists the report's rows: "mode": "exact" (written by --record-real)
+  "collected_date", "vitality_index", optional "dexa_reads"), and lists the report's rows: "mode": "exact" (written by --record-real)
   compares every row; without it the list is a subset that may leave fields open with "*". Real DEXA pages are read by the vision model (CELLDEEP_LIVE_VISION=1 and an API
   key) or replayed from a stored transcription ("dexa_reads"); without either, the DEXA rows and the scores that use
   them are reported as SKIPPED (never silently passed). --record-real fills "rows" from the current output once the
@@ -43,6 +43,10 @@ EXPECTED = TOOL / "synthetic_fixtures" / "expected"
 DEXA_READS_OVERRIDE = None  # --dexa-reads
 REAL = TOOL / "real_fixtures"
 TIERS = ("optimal", "moderate", "flag")
+# The Vitality Index is a fixed input of every checked case, never the upload form's current defaults: synthetic
+# cases answer "Not Assessed" for every domain, and a real fixture's spec stores the answers its verified report used
+# ("vitality_index"; --record-real writes it). A change to the form therefore never shows up as a regression.
+VITALITY_NOT_ASSESSED = {label: "Not Assessed" for label in pipeline.scoring.VITALITY_LABELS}
 
 
 def _num(value):
@@ -126,6 +130,7 @@ def synthetic_rows(name, folder) -> list[str]:
         patient = options.get("patient") or (scenarios.clinic_dexa.PATIENT if dexa else scenarios.layouts.PATIENT)
         return rows(*_capture(lambda: pipeline.run(
             labs, dexa, options.get("note"), patient, options.get("age"), "male", str(folder / "report.pdf"),
+            vitality_index=dict(options.get("vitality_index") or VITALITY_NOT_ASSESSED),
             collected_date=options.get("collected_date"), confirm=lambda items: True)))
     finally:
         pipeline.Anthropic, pipeline._review_notes_path, pipeline._diagnostic_path_prefix = saved
@@ -175,11 +180,24 @@ def real_rows(spec, folder, reads_file=None) -> tuple[list[str], list[str]]:
     try:
         record, copy = _capture(lambda: pipeline.run(
             str(REAL / spec["labs"]), dexa, None, spec.get("patient"), spec.get("age"), spec.get("sex", "male"),
-            str(folder / "report.pdf"), collected_date=spec.get("collected_date"), confirm=lambda items: True))
+            str(folder / "report.pdf"), vitality_index=dict(spec_vitality(spec)),
+            collected_date=spec.get("collected_date"), confirm=lambda items: True))
     finally:
         pipeline._review_notes_path, pipeline._diagnostic_path_prefix = saved
         pipeline.Anthropic = saved_client
     return rows(record, copy), skipped
+
+
+def spec_vitality(spec) -> dict:
+    """The fixed Vitality Index answers of a real fixture: every domain, as stored in its spec ("Not Assessed" for a
+    domain the verified report had no answer for). An unknown domain or answer is an error, never ignored."""
+    given = spec.get("vitality_index") or {}
+    unknown = sorted(set(given) - set(VITALITY_NOT_ASSESSED))
+    bad = sorted(label for label, value in given.items()
+                 if value != "Not Assessed" and pipeline.scoring.VITALITY_VALUE_SCORES.get(value) is None)
+    if unknown or bad:
+        raise ValueError(f"vitality_index in the spec has unknown domains {unknown} or answers for {bad}")
+    return {**VITALITY_NOT_ASSESSED, **given}
 
 
 def current(selected=None) -> dict[str, dict]:
@@ -315,7 +333,7 @@ def main():
                 print(f"{name}: NOT recorded - its DEXA was not read ({'; '.join(result['skipped'])})")
                 continue
             spec = json.loads(result["spec_file"].read_text())
-            spec.update(rows=result["rows"], mode="exact")
+            spec.update(rows=result["rows"], mode="exact", vitality_index=spec_vitality(spec))
             result["spec_file"].write_text(json.dumps(spec, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
             recorded += 1
             print(f"{name}: recorded {len(result['rows'])} rows")
