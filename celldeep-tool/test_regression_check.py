@@ -52,3 +52,22 @@ def test_a_real_fixture_without_its_dexa_read_skips_only_the_rows_that_use_it(ch
     assert check._uses_dexa("O | overall now 70 | first visit ") and check._uses_dexa("S | Structure | score 50 | moderate")
     assert not check._uses_dexa("S | Flow | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 90 | optimal")
     assert not check._uses_dexa("M | TSH | 03/02/2026 | 1.9 |  | optimal")
+
+
+def test_the_vitality_index_is_a_fixed_input_of_every_checked_case(check, monkeypatch):
+    # Synthetic cases always answer "Not Assessed" for every domain, whatever the upload form's defaults become.
+    assert set(check.VITALITY_NOT_ASSESSED) == set(check.pipeline.scoring.VITALITY_LABELS)
+    assert set(check.VITALITY_NOT_ASSESSED.values()) == {"Not Assessed"}
+    seen = []
+    monkeypatch.setattr(check, "_capture", lambda run: (run(), (None, None))[1])
+    monkeypatch.setattr(check.pipeline, "run", lambda *args, **kwargs: seen.append(kwargs["vitality_index"]))
+    monkeypatch.setattr(check, "rows", lambda *args: [])
+    check.synthetic_rows("quest_digital", Path(check.tempfile.mkdtemp()))
+    assert seen == [check.VITALITY_NOT_ASSESSED]
+    # A real fixture's spec stores the verified report's answers; unstored domains are "Not Assessed".
+    fixed = check.spec_vitality({"vitality_index": {"Energy": "Some Concern"}})
+    assert fixed["Energy"] == "Some Concern" and fixed["Sleep"] == "Not Assessed" and len(fixed) == len(seen[0])
+    with pytest.raises(ValueError):
+        check.spec_vitality({"vitality_index": {"Energy": "Fine"}})
+    with pytest.raises(ValueError):
+        check.spec_vitality({"vitality_index": {"Stamina": "No Concern"}})

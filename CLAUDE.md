@@ -260,6 +260,9 @@ Standing instruction from the owner for every PR Claude opens:
   again and `--diff` them: only the lines the change intends may differ. Re-record synthetic expected files
   (`--record`) only for intended differences; never weaken a safeguard to make a diff go away.
 
+- A new patient type or lab layout is supported only after a generated report has been hand-verified against its
+  source PDFs and locked with `scripts/regression_check.py --record-real` (checklist in
+  `docs/supported_layouts.md`). Each locked case fixes its Vitality Index answers in its spec.
 - Every production failure becomes a synthetic fixture and a failing test before it is fixed.
 - Keep exclusions explicit: when data cannot be trusted, drop it and say why in staff notes.
 - Log lines are value-free and name-free. File paths that reach logs never contain the patient's
