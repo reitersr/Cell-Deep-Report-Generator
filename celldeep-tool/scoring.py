@@ -144,7 +144,11 @@ def is_censored(disp, value) -> bool:
     return value is None and bool(re.match(r"\s*(?:<=?|>=?|≤|≥)\s*\d", disp or ""))
 
 
-def score_bounded(value: float, direction: str, optimal: float, moderate: float, inclusive: bool = True):
+def score_bounded(value: float, direction: str, optimal: float, moderate: float, inclusive: bool = True,
+                  moderate_inclusive: bool = True):
+    """A one-sided threshold. inclusive: a value equal to the optimal cutoff is optimal ("<=", ">=") or not ("<",
+    ">"); moderate_inclusive: a value equal to the moderate cutoff is moderate or, when the lab prints the next band
+    as ">=" / "<=" that cutoff, flagged."""
     if optimal is None or moderate is None:
         return None, "unscored"  # data error: reference library config is incomplete
     if value is None:
@@ -154,7 +158,7 @@ def score_bounded(value: float, direction: str, optimal: float, moderate: float,
             frac = 0 if optimal == 0 else value / optimal
             pct = 100 - frac * 12
             return max(88, round(pct)), "optimal"
-        elif value <= moderate:
+        elif value < moderate or (moderate_inclusive and value == moderate):
             span = moderate - optimal if moderate != optimal else 1
             frac = (value - optimal) / span
             pct = 88 - frac * 38
@@ -167,7 +171,7 @@ def score_bounded(value: float, direction: str, optimal: float, moderate: float,
         if value > optimal or (inclusive and value == optimal):
             pct = 88 + min(12, (value - optimal) / max(optimal, 1) * 12)
             return round(pct), "optimal"
-        elif value >= moderate:
+        elif value > moderate or (moderate_inclusive and value == moderate):
             span = optimal - moderate if optimal != moderate else 1
             frac = (value - moderate) / span
             pct = 50 + frac * 38
@@ -229,8 +233,10 @@ def attach_scores(m: Marker, sex: str | None = None, on_trt: bool | None = None)
     already reflect the patient's sex by the time they reach this function, per
     markers_reference.resolve_marker_config."""
     if m.kind == "bounded":
-        now_pct, now_tier = score_bounded(m.now, m.direction, m.optimal, m.moderate, m.inclusive)
-        then_pct, then_tier = (score_bounded(m.then, m.direction, m.optimal, m.moderate, m.inclusive)
+        now_pct, now_tier = score_bounded(m.now, m.direction, m.optimal, m.moderate, m.inclusive,
+                                           m.moderate_inclusive)
+        then_pct, then_tier = (score_bounded(m.then, m.direction, m.optimal, m.moderate, m.inclusive,
+                                                 m.moderate_inclusive)
                                 if m.then is not None and now_tier != "unscored" else (None, None))
     elif m.kind == "range":
         scorer = score_lab_range if m.range_source == "lab" else score_range

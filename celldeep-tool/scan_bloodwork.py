@@ -89,6 +89,19 @@ Copy the patient's date of birth exactly as printed into date_of_birth, or null.
 Absent metadata is null. Illegible fields are null with illegible=true, never guessed.
 Do not infer specimen ids, dates, patient names, section headings, or flags from other pages."""
 
+_COUNT_RANGE_RE = re.compile(r"\d{1,3}\s*-\s*\d{1,3}")  # "0-5", "6-10": a microscopy count range (per HPF/LPF)
+
+
+def is_text_result(text, reference_range=None) -> bool:
+    """A printed result that is words or a count, not a number: a status ("Negative", "Trace", "None Seen"), a
+    dipstick grade ("1+") or a whole-number count range ("0-5", "6-10", as microscopy prints it; never the row's own
+    reference range copied into the result)."""
+    folded = " ".join((text or "").split())
+    if folded.casefold() in _STATUSES or re.fullmatch(r"[1-4]\+", folded):
+        return True
+    return bool(_COUNT_RANGE_RE.fullmatch(folded)) and _canonical_range(folded) != _canonical_range(reference_range)
+
+
 _STATUSES = {
     "negative", "positive", "none seen", "yellow", "clear", "no culture indicated",
     "see note: not reported", "not applicable", "test not performed", "not performed", "tnp",
@@ -294,7 +307,24 @@ def _numeric_flag(row, result_re):
         expected = "L" if value < low or (value == low and not low_inclusive) else (
             "H" if value > high or (value == high and not high_inclusive) else None)
         determinate = True
+    if determinate and row["flag"] != expected and not comparator and _in_flagged_band(row, single, value, expected):
+        return True
     return row["flag"] == expected if determinate else row["flag"] is None
+
+
+def _in_flagged_band(row, single, value, expected):
+    """Risk-category pages (Optimal / Moderate / High columns) print bands, not one normal range; the transcribed
+    reference_range may be any one band. A result is consistent with the band its flag or pill points to: an H
+    whose value sits inside a printed high band (">3.0", ">=200"), an L inside a printed low band ("<29.2"), or a
+    result in the printed Non-Optimal (out-of-range) column with no letter flag whose value lies outside the
+    printed optimal band. Every other mismatch (a flag pointing the other way, an in-range result outside its
+    range) is still a contradiction."""
+    flag = row["flag"]
+    if flag in ("H", "L") and single:
+        op, bound = single.group(1), float(single.group(2))
+        inside = {">": value > bound, ">=": value >= bound, "<": value < bound, "<=": value <= bound}[op]
+        return inside and ((flag == "H" and op.startswith(">")) or (flag == "L" and op.startswith("<")))
+    return flag is None and expected is not None and row.get("column") == "out_of_range"
 
 
 def _printed_date(text, date_re, normalize_date):
@@ -423,8 +453,7 @@ def gate_staff_identified_reads(reads, collected, result_re, patient_name, failu
         if any(row["illegible"] for row in chosen) or not first["name"] or not first["result_text"]:
             return "legibility gate: null or illegible row", first
         numeric = result_re.fullmatch(first["result_text"])
-        if numeric is None and first["result_text"].casefold() not in _STATUSES and \
-                re.fullmatch(r"[1-4]\+", first["result_text"]) is None:
+        if numeric is None and not is_text_result(first["result_text"], first["reference_range"]):
             return "grammar gate: unsupported printed result", first
         if numeric and numeric["flag"]:
             return "grammar gate: result_text includes a flag instead of a separate flag field", first
@@ -626,8 +655,7 @@ def gate_reads(reads, digital_names, result_re, date_re, normalize_date, failure
                     elif not row["section"]:
                         reason = "section gate: no printed section identity"
                     elif result_re.fullmatch(row["result_text"]) is None and \
-                            row["result_text"].casefold() not in _STATUSES and \
-                            re.fullmatch(r"[1-4]\+", row["result_text"]) is None:
+                            not is_text_result(row["result_text"], row["reference_range"]):
                         reason = "grammar gate: unsupported printed result"
                     elif (numeric := result_re.fullmatch(row["result_text"])) and numeric["flag"]:
                         reason = "grammar gate: result_text includes a flag instead of a separate flag field"

@@ -57,7 +57,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/synthetic_fixtures/female_chl.py` | Synthetic female Cleveland HeartLab type: undated scanned draw dated by the Historical column, four DEXA scans (two after the pairing window), cycle-phase hormones (`female_chl_scanned_undated`, `test_female_chl.py`). |
 | `celldeep-tool/synthetic_fixtures/chl_extensive.py` | Synthetic stand-in for the verified Cleveland HeartLab extensive male (thresholds, Historical dates, "/ /", "60L", unknown fasting, changed assay, trend page, three DEXA scans); with `quest_digital` and `access_medical_limited` it covers the three verified patient types (`test_layout_fixtures.py`). |
 | `scripts/smoke_test.py` | Generates reports from synthetic fixtures and prints PASS/FAIL (no API key, no network, under a minute). |
-| `docs/` | Audits, open clinical decisions (`open_decisions.md`, current decisions first), `supported_layouts.md` (layout matrix, AI fallback status, how to add a layout), `staff_guide.md`, `what_the_tool_guarantees.md`. |
+| `docs/` | Audits, open clinical decisions (`open_decisions.md`, current decisions first), `supported_layouts.md` (layout matrix, AI fallback status, how to add a layout), `scored_markers_female.md` (female scored-marker audit), `staff_guide.md`, `what_the_tool_guarantees.md`. |
 | `.github/workflows/tests.yml` | CI: full suite offline on every pull request. |
 
 ## Running tests
@@ -117,7 +117,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      column leaves out only that table, with a notice. Lab progress/trend summary pages (and their continuation
      pages with dates on the "Test Name" line) restate other reports and are not read ("TREND PAGES NOT READ"
      staff note). The Symbol font's mis-mapped "!"/"∀" glyphs read as "≥"/"≤" (`_SYMBOL_FONT_GLYPHS`). Names match
-     the marker library by exact alias only; anything else becomes an unrecognized-marker
+     the marker library by exact alias only (`markers_reference.name_key`: case, whitespace and line breaks never
+     matter; scanned-page names only are also folded for I/l/1 and O/0 when exactly one alias then matches, with a
+     "name matched after OCR folding" staff note; `drop_duplicate_lab_reported` never shows one test twice for one
+     date); anything else becomes an unrecognized-marker
      review item (and, when it prints a value and the lab's unit or range, is also shown lab-reported under the
      lab's own section heading). A cell that cannot be read (digits run together, a range where a scored result
      belongs, no single result in its column) excludes only that cell, listed with its draw date; repeated
@@ -144,7 +147,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      reads disagree on any result row, a third read is made (`scan_bloodwork.SCAN_MAX_READS`). Transport
      retries only. `scan_bloodwork.gate_staff_identified_reads` keeps a row only when at least two reads print
      exactly the same value, flag and range (both, when only two reads exist) and it passes the value-format
-     and flag-vs-range checks. A row no two reads agree on is listed as "INCOMPLETE - row excluded: <marker>
+     and flag-vs-range checks (on risk-category pages a flag or Non-Optimal pill is consistent when the value sits in
+     the band it points to, e.g. "3.4 H" against ">3.0"; `scan_bloodwork._in_flagged_band`; whole-number count ranges
+     such as "0-5" are text results, `is_text_result`). A row no two reads agree on is listed as "INCOMPLETE - row excluded: <marker>
      (reads disagree: X / Y / Z)"; every other excluded result row is listed with its check. A row no read
      prints a value for (a section heading) is not a result and is never listed or confirmed. Staff-entered
      name and Collected date identify the pages. Undated scanned draw (`date_undated_scan_draw`): scanned pages that
@@ -196,7 +201,8 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    `clinic_config.DEXA_ESTIMATED_LABEL`; a value printed identically with "(e)" on only some reads/pages is kept
    as estimated); it is computed as fat / (fat + lean) when never printed (labelled
    `clinic_config.DEXA_COMPUTED_LABEL`), and also when printed but contested ("withheld": reads or pages disagree)
-   as long as both reads agree on fat and lean mass; otherwise it stays empty. The VAT trend table's rows are read
+   as long as both reads agree on fat and lean mass, unless exactly one printed candidate equals that fat / (fat +
+   lean), which is then kept as printed (`_body_fat_confirmed_by_masses`); otherwise it stays empty. The VAT trend table's rows are read
    too, so the latest scan keeps its VAT area. The same value and
    label appear in the history, "When you came in", "Where you are now" (the latest accepted scan with body
    composition, `scoring.has_body_composition`), the summary line, the headline and the score; with nothing to
@@ -217,7 +223,8 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    (`_age_from_dob`; DOB never stored, disagreeing DOBs give no age); `name_header` lists the name
    each source printed at the top of the staff notes.
 5. **Scoring** (`score_and_build_record`): reconciles occurrences into `Marker`s, scores with
-   `markers_reference.py` thresholds, collects staff notices. Unrecognized rows that match
+   `markers_reference.py` thresholds ("<" / ">" exclusive, "≤" / "≥" inclusive: `inclusive`, `moderate_inclusive`,
+   checked against each printed sign by `test_strict_bounds.py`), collects staff notices. Unrecognized rows that match
    `lab_reported.py`, and any other row the lab flagged H/L, become `record.lab_reported`
    (shown, never scored). `coverage_gaps` checks that every printed row reached the report or
    the staff notes and raises a `COVERAGE GAP` note otherwise. `verify_extraction_completeness` warns "FOUND IN

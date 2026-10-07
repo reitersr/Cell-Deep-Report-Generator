@@ -170,11 +170,13 @@ def is_urinalysis(heading):
 
 def lookup(raw_name, heading):
     """Exact printed-name match, scoped by section. Returns (canonical, group) or None."""
-    query = _key(raw_name)
+    from markers_reference import name_key
+
+    query = name_key(raw_name)
     urine = is_urinalysis(heading)
     matches = {canonical: config["group"] for canonical, config in LAB_REPORTED_LIBRARY.items()
                if (config["group"] == URINALYSIS) == urine
-               and query in {_key(alias) for alias in [canonical.split(" — ")[-1], *config["aliases"]]}}
+               and query in {name_key(alias) for alias in [canonical.split(" — ")[-1], *config["aliases"]]}}
     if len(matches) != 1:
         return None
     return next(iter(matches.items()))

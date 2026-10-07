@@ -327,6 +327,27 @@ def _resolve_by_mass_balance(fields, day, notes):
         fields[field] = {option: labels for option, labels in options.items() if option[0] == fits[0]}
 
 
+def _body_fat_confirmed_by_masses(field, reading, options, singles, day, notes):
+    """A printed body fat % that pages or reads disagree on: when exactly one printed candidate equals the scan's
+    own fat / (fat + lean) x 100 from its kept fat and lean mass (to the printed one decimal), that printed value
+    is kept, as printed, instead of being withheld and computed. Returns its options, or None."""
+    if field != "body_fat_pct" or reading.get("fat_mass_lb") is None or reading.get("lean_mass_lb") is None:
+        return None
+    fat, lean = float(reading["fat_mass_lb"]), float(reading["lean_mass_lb"])
+    if fat < 0 or lean < 0 or fat + lean == 0:
+        return None
+    computed = round(fat / (fat + lean) * 100, 1)
+    every = {**options, **{option: sorted(labels) for option, labels in singles.items()}}
+    fits = {option: labels for option, labels in every.items() if round(option[0], 1) == computed}
+    if len({option[0] for option in fits}) != 1:
+        return None
+    printed = next(iter(fits))[1]
+    others = sorted({option[1] for option in every} - {printed})
+    notes.append(f"DEXA scan {_display(day)} body fat %: pages or reads print different values; {printed} is the one "
+                 f"the scan's printed fat and lean mass confirm (fat / (fat + lean)); {', '.join(others)} not used")
+    return fits
+
+
 def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, staff_age=None, page_text=None):
     """pages: [((file, page), [read1, read2])]; failures: [((file, page), partial_reads, reason)].
     Returns (history, staff_notes, summary_lines). history is sorted oldest first and is a list of
@@ -485,6 +506,8 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                     notes.append(f"DEXA scan {_display(day)} {field_label}: pages {', '.join(pages_listed)} print "
                                  f"different values; {winner:g} is confirmed on {len(ranked[0][1])} pages and is used")
                     options = {option: labels for option, labels in options.items() if option[0] == winner}
+                elif (confirmed := _body_fat_confirmed_by_masses(field, reading, options, {}, day, notes)):
+                    options = confirmed
                 else:
                     notes.append(f"DEXA scan {_display(day)} {field_label} excluded - pages {', '.join(pages_listed)} "
                                  "print different values")
@@ -505,6 +528,9 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                     notes.append(f"DEXA scan {_display(day)} {field_label} {text}: no page's two reads agreed, but "
                                  f"{len(labels)} independent pages read this value; it is used")
                     options = {(value, text, estimated): sorted(labels)}
+                elif (day, field) in contested and (confirmed := _body_fat_confirmed_by_masses(
+                        field, reading, {}, singles, day, notes)):
+                    options = confirmed
                 else:
                     reading[target] = None
                     if (day, field) in contested:
