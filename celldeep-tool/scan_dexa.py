@@ -42,6 +42,9 @@ date of a summary page) return one entry in scans with the date exactly as print
 measurements exactly as printed for that date, including any "(e)" estimate marker:
 total_mass, fat_mass and lean_mass in pounds (lb); body_fat_pct (percent body fat, total body);
 vat_mass (visceral adipose tissue mass in lb); vat_area (visceral adipose tissue area in cm2).
+A VAT trend table (rows by scan date with columns such as "VAT Mass (lbs)", "VAT Volume", "VAT Area (cm²)" or
+"Est. VAT Area") is a results table too: return one entry per row with its date and that row's vat_mass and
+vat_area exactly as printed.
 A measurement that is not printed for that date, or is printed only in other units, is null.
 Never copy a value from one date to another. Copy the patient name, date of birth and the patient's
 age exactly as printed on the page, or null when not printed. When an age is printed for a scan row,

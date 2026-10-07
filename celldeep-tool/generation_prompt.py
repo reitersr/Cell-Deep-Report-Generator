@@ -67,6 +67,12 @@ def marker_sentence(marker) -> str:
             sentence = f"{marker.name} measured {now_text}{now_when}."
         tier = _TIER_WORDS.get(marker.now_tier)
         return f"{sentence} That result is {tier}." if tier else sentence
+    if getattr(marker, "latest_lab_reported_date", None):
+        earlier = f"{marker.name} was {then_text} on {marker.then_date_display}; " if then_text and \
+            marker.then_date_display else ""
+        return (f"{earlier}its {marker.latest_lab_reported_date} result is shown as lab-reported, not scored."
+                if earlier else f"{marker.name}'s {marker.latest_lab_reported_date} result is shown as lab-reported, "
+                "not scored.")
     if then_text and marker.then_date_display:
         return (f"{marker.name} was {then_text} on {marker.then_date_display} "
                 "and was not retested this round.")
@@ -112,7 +118,12 @@ def select_priority_marker(markers):
 
 
 def _not_retested_markers(markers) -> list:
-    return [m for m in markers if not is_retested(m) and (m.then is not None or m.disp_then)]
+    return [m for m in markers if not is_retested(m) and (m.then is not None or m.disp_then)
+            and not getattr(m, "latest_lab_reported_date", None)]
+
+
+def _latest_lab_reported_markers(markers) -> list:
+    return [m for m in markers if not is_retested(m) and getattr(m, "latest_lab_reported_date", None)]
 
 
 def earlier_draw_systems(record) -> list[tuple[str, list]]:
@@ -262,6 +273,8 @@ def build_copy(record) -> dict:
         bullets.append(f"<b>What to focus on next:</b> {marker_sentence(priority)}")
     if not_retested:
         bullets.append(f"<b>Not retested this round:</b> {', '.join(m.name for m in not_retested)}.")
+    if moved := _latest_lab_reported_markers(markers):
+        bullets.append(f"<b>{clinic_config.LATEST_LAB_REPORTED_LABEL}:</b> {', '.join(m.name for m in moved)}.")
     earlier = earlier_draw_systems(record)
     if earlier:
         listed = "; ".join(f"{system}: " + ", ".join(f"{m.name} ({m.now_date_display})" for m in markers)
@@ -290,7 +303,8 @@ def build_copy(record) -> dict:
             next_30_sub = f"{next_30_sub} on {priority.now_date_display}"
     else:
         next_30_label = priority.name
-        next_30_sub = (f"Not retested since {priority.then_date_display}" if priority.then_date_display
+        next_30_sub = (f"{clinic_config.LATEST_LAB_REPORTED_LABEL}" if getattr(priority, "latest_lab_reported_date", None)
+                       else f"Not retested since {priority.then_date_display}" if priority.then_date_display
                        else "Not retested this round")
     if attention:
         next_90_label = "Retest and reassess"

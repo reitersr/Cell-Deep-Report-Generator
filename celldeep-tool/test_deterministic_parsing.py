@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent / "synthetic_fixtures"))
 import deterministic_fixtures as fx  # noqa: E402
 
+import lab_reported  # noqa: E402
 import pipeline  # noqa: E402
 from extraction_prompt import EXTRACTION_OUTPUT_SCHEMA  # noqa: E402
 from generation_prompt import build_copy, select_priority_marker  # noqa: E402
@@ -26,13 +27,14 @@ def _parse(tmp_path, pages, name="labs.pdf"):
 
 
 def _excluded_reasons(tmp_path, pages):
-    """Parse a PDF whose only table cannot be read: that table is excluded with its reason; with nothing
-    else parsed no bloodwork is kept and the report goes on without it (listed under INCOMPLETE)."""
+    """Parse a PDF with an unreadable cell: only that cell is excluded, with its reason, and never shown (not even
+    as "not performed"); every other readable cell is kept (listed under INCOMPLETE)."""
     path = fx.write_lab_pdf(tmp_path / "excluded.pdf", pages)
     exclusions = []
     with fitz.open(path) as document:
         occurrences, _ = pipeline._parse_bloodwork_tables(list(document), exclusions=exclusions)
-    assert occurrences == []
+    excluded = {(item["reason"].split(" (")[0], item["date"]) for item in exclusions if item.get("scope") == "cell"}
+    assert not any((o["name"], o["date_display"]) in excluded for o in occurrences)
     return [item["reason"] for item in exclusions]
 
 
@@ -82,10 +84,11 @@ def test_ordinary_unflagged_rows_with_range_between_columns_parse_cleanly(tmp_pa
 
     assert [(o["name"], o["date_display"], o["value"], o["disp_value"], o["lab_range_lo"], o["lab_range_hi"])
             for o in occurrences] == [
-        ("SDMA", "04/14/2026", 88.0, "88", 73.0, 135.0), ("SDMA", "02/03/2026", 70.0, "70", 73.0, 135.0),
+        # The printed range belongs to the current result; a historical column prints none of its own.
+        ("SDMA", "04/14/2026", 88.0, "88", 73.0, 135.0), ("SDMA", "02/03/2026", 70.0, "70", 0, 0),
         ("Glucose (fasting)", "04/14/2026", 92.0, "92", 65.0, 99.0),
-        ("Glucose (fasting)", "02/03/2026", 88.0, "88", 65.0, 99.0),
-        ("TSH", "04/14/2026", 1.9, "1.9", 0.40, 4.50), ("TSH", "02/03/2026", 2.4, "2.4", 0.40, 4.50)]
+        ("Glucose (fasting)", "02/03/2026", 88.0, "88", 0, 0),
+        ("TSH", "04/14/2026", 1.9, "1.9", 0.40, 4.50), ("TSH", "02/03/2026", 2.4, "2.4", 0, 0)]
 
 
 # (2) directly-appended H/L flag -----------------------------------------------------------------
@@ -160,7 +163,8 @@ def test_one_rule_handles_zero_one_and_several_historical_columns(tmp_path):
     standalone = (fx.section_preamble("SYN301", "04/14/2026")
                   + fx.header_line(100)
                   + fx.row(130, "PSA Total", "2.10", units="ng/mL", lab_range="0.0-4.0")
-                  + fx.row(144, "Occult Blood", "Negative"))
+                  + [(40, 144, "URINALYSIS")]
+                  + fx.row(158, "Occult Blood", "Negative"))
     one_historical = ([(40, 40, "Collected: 02/03/2026"), (40, 54, "Order ID: SYN302")]
                       + fx.header_line(100, ("10/15/2025",), dates_below=False)
                       + fx.row(130, "TMAO", "6.5", "7.0", units="uM"))
@@ -170,12 +174,13 @@ def test_one_rule_handles_zero_one_and_several_historical_columns(tmp_path):
                (410, 111, "07/01/2025"), (480, 100, "Units"),
                (40, 130, "hs-CRP"), (295, 130, "4.2"), (340, 130, "3.9"), (410, 130, "2.8"), (480, 130, "mg/L"),
                (40, 144, "LDL Cholesterol"), (200, 144, "88"), (340, 144, "91"), (480, 144, "mg/dL")])
-    occurrences, _ = _parse(tmp_path, [standalone, one_historical, tiered])
+    occurrences, unknown = _parse(tmp_path, [standalone, one_historical, tiered])
     found = _by_key(occurrences)
 
     assert found[("PSA Total", "04/14/2026")]["value"] == 2.10
-    occult = found[("Urinalysis \u2014 Occult Blood", "04/14/2026")]
-    assert (occult["value"], occult["disp_value"], occult["is_good"]) == (None, "Negative", True)
+    # Urinalysis "Occult Blood" is the lab-reported urine Blood test (shown as printed, never scored).
+    items = {item["name"]: item for item in lab_reported.build(unknown)[0]}
+    assert items["Urinalysis \u2014 Blood"]["results"][0]["disp_value"] == "Negative"
     assert found[("TMAO", "02/03/2026")]["value"] == 6.5
     assert found[("TMAO", "10/15/2025")]["value"] == 7.0
     assert [found[("hs-CRP", d)]["value"] for d in ("01/13/2026", "10/15/2025", "07/01/2025")] == [4.2, 3.9, 2.8]
@@ -404,7 +409,7 @@ def test_parsed_occurrences_keep_the_extraction_schema_shape(tmp_path):
             allowed = spec["type"] if isinstance(spec["type"], list) else [spec["type"]]
             assert isinstance(occurrence[key], tuple(python_types[t] for t in allowed)), (key, occurrence[key])
     record, _ = pipeline.score_and_build_record({"name": "Shape", "marker_occurrences": occurrences})
-    assert {m.name for m in record.markers} == {"hs-CRP", "Urinalysis \u2014 Occult Blood"}
+    assert {m.name for m in record.markers} == {"hs-CRP"}  # "Occult Blood" is lab-reported, never scored
 
 
 def test_row_name_normalization_only_removes_printed_annotations():
@@ -422,7 +427,8 @@ def test_section_namespace_blocks_serum_matches():
     assert pipeline._match_row_name("Glucose", "URINALYSIS") is None
     assert pipeline._match_row_name("Uric Acid Crystals", "URINALYSIS") is None
     assert pipeline._match_row_name("Uric Acid", "URINALYSIS") is None
-    assert pipeline._match_row_name("Occult Blood", "URINALYSIS")[0] == "Urinalysis \u2014 Occult Blood"
+    assert pipeline._match_row_name("Occult Blood", "URINALYSIS") is None  # lab-reported urine Blood
+    assert lab_reported.lookup("Occult Blood", "URINALYSIS")[0] == "Urinalysis \u2014 Blood"
     assert pipeline._match_row_name("Glucose", "ROUTINE PANELS")[0] == "Glucose (fasting)"
 
 

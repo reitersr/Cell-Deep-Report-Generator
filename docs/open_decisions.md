@@ -29,6 +29,7 @@ decision first. Evidence cites the repository as of this branch (`celldeep-tool/
 | 22 | Non-fasting draws ("Fasting: N") still labelled and scored as fasting glucose | Clinic | Glucose label and tier |
 | 23 | Single-draw and single-scan wording | Clinic | Hero and DEXA copy |
 | 24 | Tests this lab prints that the tool does not know (e.g. "PSA, Free") | Clinic | Lab-reported coverage |
+| 25 | Cleveland HeartLab multi-draw round 1: decisions taken and what to confirm | Clinic | Multi-draw reports |
 
 ---
 
@@ -469,4 +470,36 @@ to the marker library with thresholds.
 > "Estradiol (E2)" map to the scored Creatinine and Estradiol; "Bili" is urine bilirubin under urinalysis, total
 > bilirubin under chemistry/liver, and left out with a notice under any other section. Still open: CellDeep
 > thresholds for Free PSA / % Free PSA, if the clinic wants them scored.
+
+## 25. Cleveland HeartLab multi-draw round 1: decisions taken and what to confirm
+
+**Decided by the owner (implemented).** Synthetic fixture: `synthetic_fixtures/chl_multi_draw.py`; tests:
+`test_chl_round1.py`.
+
+- An unreadable cell excludes only that cell (listed with its draw date); repeated column-header lines are ignored.
+- The draw's own full report wins over a later report's Historical column; a difference is a staff warning.
+  Historical copies that disagree with no full report are left out (previously the job stopped).
+- A historical cell carries no reference range of its own (the printed range belongs to the current result).
+- Latest-draw guard (`clinic_config.LATEST_DRAW_GUARD`): no report when the entered Collected date, or the latest
+  printed Collected date, has no accepted result. This replaces the "COLLECTED DATE CHECK" notice for that case.
+- Fasting per draw (#8, #22): when a file prints any Fasting line, glucose and fasting insulin are scored only from
+  "Fasting: Y" draws; "N", "Unknown", blank or none are lab-reported "(non-fasting)" with a note. Files that print
+  no Fasting line at all are unchanged (still scored as fasting) - confirm this default.
+- Cortisol (#1): "(AM)" only when every shown draw's printed time is inside the lab's printed morning window; a
+  placeholder time (`clinic_config.PLACEHOLDER_COLLECTION_TIMES`, 00:01) reads "time not recorded".
+- DEXA (#19): a contested printed body fat % falls back to fat / (fat + lean) when both reads agree on fat and
+  lean mass, labelled computed.
+- Aliases: "SEX HORMONE BINDING GLOB" -> SHBG; "Neutrophil/Lymphocyte/Monocyte/Eosinophil/Basophil Absolute" ->
+  absolute counts; urinalysis "Occult Blood" -> lab-reported urine Blood (#12: the scored "Urinalysis - Occult
+  Blood" no longer matches the printed name, and plain "Occult Blood" outside a urinalysis section is shown
+  under its own section heading when it prints a range or unit, else staff-only).
+- Testosterone-panel ALBUMIN / GLOB under lab code AMD: "Albumin/Globulin (testosterone panel)".
+- Unaliased readable rows (#13): shown lab-reported under the lab's own section heading ("Other Lab Results" when
+  none), with the lab's range and unit, never scored, and still on the staff list.
+- Assay change across draws: each draw keeps its own printed range and the note "assay or range changed - not
+  directly comparable"; a draw not on the CellDeep range basis (`clinic_config.CELLDEEP_RANGE_BASIS`, Free
+  Testosterone 35-155 pg/mL, Quest dialysis) is lab-reported.
+
+**Still to confirm.** The `CELLDEEP_RANGE_BASIS` entry for Free Testosterone (and whether other tests need one);
+the "no Fasting line = fasting" default; whether the lab-reported "Other Lab Results" heading is acceptable.
 

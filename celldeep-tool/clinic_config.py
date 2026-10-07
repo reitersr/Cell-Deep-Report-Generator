@@ -118,3 +118,55 @@ LAB_RANGE_BASIS_RATIO = 5
 # section (the lab's range and flag, never scored against the fasting range), with this one-line note.
 NON_FASTING_GLUCOSE_NOTE = "This sample was drawn without fasting, so it is shown as reported and not scored."
 
+
+# "Fasting: Unknown", a blank "Fasting:" or no printed status for a draw is treated like "Fasting: N": glucose and
+# fasting insulin from that draw are shown lab-reported (the lab's range and flag) with this note, never scored.
+FASTING_NOT_CONFIRMED_NOTE = "Fasting was not confirmed for this sample, so it is shown as reported and not scored."
+
+# Tests scored only from a fasting-confirmed draw, and the name each is shown under otherwise (lab-reported group).
+FASTING_ONLY_MARKERS = {"Glucose (fasting)": ("Glucose (non-fasting)", "Chemistry"),
+                        "Fasting Insulin": ("Insulin (non-fasting)", "Hormones")}
+
+
+# ---- Assay or range change across draws ------------------------------------------------------------
+
+# When a scored test prints a different reference range in different draws (a different assay or a new range),
+# every draw is shown with its own printed range and this note. A draw whose printed range is not the CellDeep
+# range basis below is shown lab-reported and never scored.
+ASSAY_CHANGED_NOTE = "assay or range changed - not directly comparable"
+
+# The printed reference range of the assay each CellDeep range is based on (Quest's dialysis assays). Tests not
+# listed here fall back to LAB_RANGE_BASIS_RATIO.
+CELLDEEP_RANGE_BASIS = {"Free Testosterone": "35-155 pg/mL"}
+
+
+# ---- Cortisol collection time ------------------------------------------------------------------------
+
+# Printed collection times that are placeholders, not a real time: never inside the morning window (no "(AM)").
+PLACEHOLDER_COLLECTION_TIMES = ("00:01",)
+
+# What the report shows next to a cortisol result whose draw printed a placeholder time or none.
+COLLECTION_TIME_NOT_RECORDED = "time not recorded"
+
+
+# ---- Latest draw guard -------------------------------------------------------------------------------
+
+# A report is never built when the staff-entered Collected date, or the latest Collected date printed in the lab
+# PDF, has no accepted result: an older draw would otherwise be shown as "now".
+LATEST_DRAW_GUARD = True
+
+
+# ---- Sparse panels -----------------------------------------------------------------------------------
+
+# Shown on the report near "Your systems".
+SPARSE_PANEL_NOTE = ("Systems shown reflect the markers included in this panel. Systems with no scored markers are "
+                     "not shown.")
+
+
+# ---- A scored test whose newest result is shown lab-reported ----------------------------------------
+
+# Summary bullet label listing scored tests whose newest result is shown lab-reported (not fasting, other assay).
+LATEST_LAB_REPORTED_LABEL = "Shown as lab-reported this round"
+
+# Status chip on such a test's scored row (instead of "Not retested").
+LATEST_LAB_REPORTED_CHIP = "See lab-reported"

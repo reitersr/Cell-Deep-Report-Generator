@@ -49,9 +49,11 @@ def test_variant_layout_still_reports_with_the_right_notices(tmp_path, monkeypat
             ) in lines
     # Nothing from the unread page is guessed into the report.
     assert "Ferritin" not in text and "512" not in text
-    # The renamed test is listed for staff and never scored or shown.
+    # The renamed test is listed for staff and never scored; with a printed value, unit and range it is shown as
+    # lab-reported, exactly as printed (CHL round 1, item 13).
     assert "Thyroid Stimulating Hormone Ultra" in review
-    assert "Thyroid Stimulating Hormone Ultra" not in text
+    assert "Thyroid Stimulating Hormone Ultra 0.40-4.50 — 2.1 uIU/mL" in text
+    assert "lab-reported results, not scored" in text.lower()
     assert "COVERAGE GAP" not in review
 
 

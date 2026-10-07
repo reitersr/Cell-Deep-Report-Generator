@@ -241,11 +241,20 @@ def test_printed_body_fat_is_used_and_never_replaced_by_a_computed_one():
         ("04/20/2026", "15.6%", [])]
 
 
-def test_body_fat_printed_differently_on_two_pages_is_withheld_not_computed():
+def test_body_fat_printed_differently_on_two_pages_falls_back_to_computed():
+    # CHL round 1, item 9: the printed % is dropped (pages disagree), fat and lean agree: fat / (fat + lean),
+    # labelled computed. 25.3 / (25.3 + 138.6) = 15.4%.
     pages = {"a": _same(_scan(*S4), patient_name=None, age="45.4"),
              "b": _same(_scan(S4[0], S4[1], S4[2], S4[3], "15.9 %"), patient_name=None, age="45.4")}
     history, _, _ = _history(list(pages), pages=pages)
     reading = pipeline.scoring.normalize_dexa_body_fat(dict(history[0]))
+    assert reading["body_fat_pct"] == "15.4%" and reading["computed"] == ["body_fat_pct"]
+
+
+def test_contested_body_fat_with_contested_mass_stays_empty():
+    reading = pipeline.scoring.normalize_dexa_body_fat(
+        {"date_display": "04/20/2026", "body_fat_pct": None, "fat_mass_lb": None, "lean_mass_lb": 138.6,
+         "withheld": ["body_fat_pct", "fat_mass_lb"]})
     assert reading["body_fat_pct"] is None and "computed" not in reading
 
 

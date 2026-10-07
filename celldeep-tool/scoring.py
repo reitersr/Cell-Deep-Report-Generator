@@ -102,15 +102,13 @@ def normalize_dexa_body_fat(dexa_data: dict) -> dict:
     """The printed body-fat percentage when one was printed (including one marked "(e)", which stays labelled
     estimated); computed only when none was printed, and then listed in "computed" so it is labelled as such.
     The computation is the scan's own definition, fat / (fat + lean) x 100, from the printed fat and lean mass
-    (never fat / total mass, which also counts bone). A value that was printed but excluded (reads or pages
-    disagree) is "withheld": it stays empty, never replaced by a computed one."""
+    (never fat / total mass, which also counts bone). A value that was printed but excluded because the reads or
+    pages disagree is "withheld": it falls back to the same computation when the fat and lean mass were both kept
+    (both reads agreed on them), labelled "computed"; otherwise it stays empty."""
     _clear_zero_sentinel_partial_scan(dexa_data)
-    withheld = dexa_data.pop("withheld", None) or []
+    dexa_data.pop("withheld", None)
     body_fat = dexa_data.get("body_fat_pct")
     if body_fat not in (None, "", "None"):
-        return dexa_data
-    if "body_fat_pct" in withheld:
-        dexa_data["body_fat_pct"] = None
         return dexa_data
 
     try:

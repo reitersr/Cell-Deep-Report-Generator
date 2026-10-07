@@ -49,6 +49,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/test_*.py` | Test suite (pytest). |
 | `calibration_baselines/` | Synthetic calibration snapshots. |
 | `celldeep-tool/ranges_audit.py` | Read-only audit of each marker's threshold source; `--write` regenerates `docs/ranges_audit.md` (a test keeps it in sync). |
+| `celldeep-tool/synthetic_fixtures/chl_multi_draw.py` | Three-draw Cleveland HeartLab-style lab PDF (`test_chl_round1.py`). |
 | `celldeep-tool/synthetic_fixtures/scenarios.py` | End-to-end synthetic scenarios with a scripted vision model (smoke test, `test_scenarios.py`). |
 | `scripts/smoke_test.py` | Generates reports from synthetic fixtures and prints PASS/FAIL (no API key, no network, under a minute). |
 | `docs/` | Audits, open clinical decisions (`open_decisions.md`), `staff_guide.md`, `what_the_tool_guarantees.md`. |
@@ -94,15 +95,31 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      Test Name | Results | Reference Range | Units pattern; the OUT OF RANGE SUMMARY is found by its heading wherever it
      is printed and ignored silently, except that a summary line matching no table row (or a different value) is a
      staff note (summary-looking rows under no section that repeat a table row are ignored too); "Bili" is resolved by
-     section or left out with a notice; "Fasting: N" shows glucose as lab-reported "Glucose (non-fasting)" with
+     section or left out with a notice; "Fasting: N", "Unknown" or blank shows glucose and fasting insulin as lab-reported "(non-fasting)" with
      `clinic_config.NON_FASTING_GLUCOSE_NOTE`, never scored; cortisol keeps "(AM)" only when the printed Coll. Time
-     is inside the lab's printed morning window (`pipeline.label_cortisol`) and shows the time; lab-reported rows show
+     is inside the lab's printed morning window (`pipeline.label_cortisol`; multi-draw files:
+     `label_cortisol_draws`, every shown draw inside the window, each draw's time shown, a placeholder 00:01 reads
+     "time not recorded") and shows the time; lab-reported rows show
      the printed unit; word results
      and assays that differ from the CellDeep range basis are lab-reported; units are never filled in). Otherwise
      `_parse_bloodwork_tables` reads rows by printed column position
      under each page's own Current/Historical or In Range/Out of Range header. Names match
      the marker library by exact alias only; anything else becomes an unrecognized-marker
-     review item.
+     review item (and, when it prints a value and the lab's unit or range, is also shown lab-reported under the
+     lab's own section heading). A cell that cannot be read (digits run together, a range where a scored result
+     belongs, no single result in its column) excludes only that cell, listed with its draw date; repeated
+     column-header lines ("Optimal Moderate High ... / / / /") are ignored silently. Historical cells read attached
+     flags ("60L"), censored values, count ranges ("0-2") and words ("None seen"); a historical cell carries no
+     range of its own. The draw's own full report (Current column) wins over a later report's Historical column
+     (a different value is a "HISTORICAL VALUE DIFFERS" staff note); historical copies that disagree with no full
+     report are left out. Per draw (`_draw_info`): the printed Fasting status and collection time.
+     `apply_fasting_status`: when the file prints any Fasting line, glucose and fasting insulin are scored only
+     from "Fasting: Y" draws; others ("N", "Unknown", blank, none) are lab-reported "Glucose/Insulin
+     (non-fasting)" with a note. `apply_assay_changes`: a scored test whose printed range differs between draws
+     keeps each draw's own range and `clinic_config.ASSAY_CHANGED_NOTE`; a draw not on the CellDeep range basis
+     (`CELLDEEP_RANGE_BASIS`, else `LAB_RANGE_BASIS_RATIO`) is lab-reported. A scored test whose newer result was
+     moved to lab-reported is never called "not retested". Testosterone-panel ALBUMIN/GLOB under lab code AMD
+     are separate lab-reported results (`lab_reported.PANEL_SCOPED`).
    - Image-only pages: `_extract_scan_bloodwork` renders each page and reads it twice with the vision model
      (no sampling settings: anthropic 1.x accepts no temperature/top_p/top_k and has no seed); when the two
      reads disagree on any result row, a third read is made (`scan_bloodwork.SCAN_MAX_READS`). Transport
@@ -114,7 +131,11 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      name and Collected date identify the pages.
    - `_merge_scan_occurrences` combines both sources.
    - A section or page that cannot be parsed is excluded whole and listed under "INCOMPLETE" at the
-     top of the staff notes; the rest of the report is built. A text page with result rows under no
+     top of the staff notes; the rest of the report is built (single unreadable cells are listed under
+     "INCOMPLETE - results excluded" and the rest of their page is kept). `latest_draw_block`: when some bloodwork
+     was accepted but the staff-entered Collected date, or the latest Collected date printed in the lab PDF, has
+     no accepted result, `run` raises `LatestDrawNotAccepted` and no report is built (the app shows the message,
+     including the draw dates with excluded pages/results; the confirmation screen lists those dates first). A text page with result rows under no
      recognized table header is excluded and the tests it holds are named; an unrecognized document is
      excluded page by page instead of stopping the report. `BloodworkHardStop` (conflicting
      duplicate results, one Order ID with two Collected dates) still stops the job.
@@ -129,8 +150,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    dates and reason, and reaches no history row, current/first-visit value, summary, scan image or score.
    The printed body fat % is used whenever printed, including "(e)" values (labelled
    `clinic_config.DEXA_ESTIMATED_LABEL`; a value printed identically with "(e)" on only some reads/pages is kept
-   as estimated); it is computed as fat / (fat + lean) only when never printed (labelled
-   `clinic_config.DEXA_COMPUTED_LABEL`) and never when printed but contested ("withheld"). The same value and
+   as estimated); it is computed as fat / (fat + lean) when never printed (labelled
+   `clinic_config.DEXA_COMPUTED_LABEL`), and also when printed but contested ("withheld": reads or pages disagree)
+   as long as both reads agree on fat and lean mass; otherwise it stays empty. The VAT trend table's rows are read
+   too, so the latest scan keeps its VAT area. The same value and
    label appear in the history, "When you came in", "Where you are now" (the latest accepted scan with body
    composition, `scoring.has_body_composition`), the summary line, the headline and the score; with nothing to
    score, the "% optimized" figure is left out (never "—%") and the staff notes say why (`dexa_score_notes`).

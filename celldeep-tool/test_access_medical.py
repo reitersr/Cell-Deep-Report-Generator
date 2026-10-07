@@ -238,11 +238,15 @@ def test_header_identity_and_checks(report):
     assert "FOUND IN SOURCE BUT MISSING" not in review.replace("'Magnesium' FOUND", "")  # "mg" units: known item
 
 
-def test_a_staff_date_that_differs_from_the_header_is_a_notice(tmp_path):
-    result = run_scenario("access_medical_other_date", tmp_path / "other")
-    assert ("COLLECTED DATE CHECK: staff entered 08/14/2026, the lab header prints Coll. Date 08/07/2026; the "
-            "results use the printed date - confirm which draw this is") in result["review"]
-    assert "August 7, 2026" in result["text"]
+def test_a_staff_date_that_differs_from_the_header_stops_the_report(tmp_path):
+    # CHL round 1, item 5: an entered Collected date with no accepted result stops the report (it was a notice).
+    with pytest.raises(pipeline.LatestDrawNotAccepted, match="the entered bloodwork Collected date, 08/14/2026, has no "
+                                                             "accepted result"):
+        run_scenario("access_medical_other_date", tmp_path / "other")
+    assert not (tmp_path / "other" / "report.pdf").exists()
+    notes = pipeline.lab_header_checks({"collected": "08/07/2026"}, "08/14/2026", None, None, {}, [])
+    assert notes == ["COLLECTED DATE CHECK: staff entered 08/14/2026, the lab header prints Coll. Date 08/07/2026; "
+                     "the results use the printed date - confirm which draw this is"]
 
 
 def test_age_checks_against_staff_and_dexa():

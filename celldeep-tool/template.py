@@ -710,6 +710,9 @@ def bio_row_tr(m, copy, color_override=None):
     if unscored:
         color = MUTE
         tier_word = clinic_config.NO_RANGE_CHIP_LABEL
+    elif not_retested and getattr(m, "latest_lab_reported_date", None):
+        color = MUTE
+        tier_word = clinic_config.LATEST_LAB_REPORTED_CHIP
     elif not_retested:
         color = MUTE
         tier_word = "Not retested"
@@ -804,18 +807,23 @@ def _also_on_file(results) -> str:
     for result in results:
         flag = result.get("lab_flag")
         flag_text = f" (lab flag {_html(clinic_config.LAB_FLAG_WORDS.get(flag, flag))})" if flag else ""
-        parts.append(f"{_html(result.get('disp_value'))}{flag_text} on {fmt_date(result.get('date_display'))}")
+        note = f" ({_html(result['note'])})" if result.get("note") else ""
+        parts.append(f"{_html(result.get('disp_value'))}{flag_text} on {fmt_date(result.get('date_display'))}{note}")
     return f'<div class="also-on-file">Also on file: {"; ".join(parts)}</div>' if parts else ""
 
 
-def _lab_result_cell(result) -> str:
+def _lab_result_cell(result, own_range=False) -> str:
+    """One lab-reported result; own_range shows the range printed with this draw (the ranges differ between draws)."""
     if result is None:
         return f'<span class="bio-dash">{fmt(None)}</span>'
     flag = result.get("lab_flag")
     flag_html = f' <b class="lab-flag">{flag}</b>' if flag else ""
     date = f'<span class="bio-date">{fmt_date(result["date_display"])}</span>' if result.get("date_display") else ""
     unit = f' <span class="bio-unit">{_html(result["unit"])}</span>' if result.get("unit") else ""
-    return f'<span class="bio-pill lab-pill">{fmt(result["disp_value"])}{flag_html}</span>{unit}{date}'
+    printed_range = (f'<span class="bio-date">range {_html(result.get("lab_range") or clinic_config.NO_RANGE_LABEL)}'
+                     '</span>') if own_range else ""
+    note = f'<span class="bio-date">{_html(result["note"])}</span>' if result.get("note") else ""
+    return f'<span class="bio-pill lab-pill">{fmt(result["disp_value"])}{flag_html}</span>{unit}{date}{printed_range}{note}'
 
 
 def _item_note(item) -> str:
@@ -833,11 +841,13 @@ def lab_reported_section(record: PatientRecord) -> str:
         for item in (item for item in record.lab_reported if item.group == group):
             latest = item.results[-1]
             earlier = item.results[0] if len(item.results) > 1 else None
+            # A range that changed between draws (a different assay) is shown with each draw, never one for all.
+            own_range = len({result.get("lab_range") for result in item.results if result.get("lab_range")}) > 1
             rows.append(f'''<div class="bio-table-row bio-tr lab-tr" style="--c:{MIDGRAY};">
       <div class="td-name"><span class="bio-name">{item.name}</span>{_also_on_file(item.results[1:-1])}{_item_note(item)}</div>
-      <div class="td-range">{_html(latest.get("lab_range") or clinic_config.NO_RANGE_LABEL)}</div>
-      <div class="td-then">{_lab_result_cell(earlier)}</div>
-      <div class="td-now">{_lab_result_cell(latest)}</div>
+      <div class="td-range">{"see each result" if own_range else _html(latest.get("lab_range") or clinic_config.NO_RANGE_LABEL)}</div>
+      <div class="td-then">{_lab_result_cell(earlier, own_range)}</div>
+      <div class="td-now">{_lab_result_cell(latest, own_range)}</div>
     </div>''')
         header = ('<div class="bio-table-row bio-table-header"><div>Test</div><div>Lab Reference Range</div>'
                   '<div>Earlier</div><div>Latest</div></div>')
@@ -905,7 +915,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     protocol_section_html = protocol_html
     systems_heading = "YOUR SIX SYSTEMS, ATTENTION NEEDED FIRST" if len(visible_systems) == 6 else "YOUR SYSTEMS, ATTENTION NEEDED FIRST"
     systems_html = f'''<div class="systems-flow">
-        {f'<div class="sec-title">{systems_heading}</div><div class="grid">{grid_html}</div>' if grid_html else ""}
+        {f'<div class="sec-title">{systems_heading}</div><p class="footer-note systems-note">{_html(clinic_config.SPARSE_PANEL_NOTE)}</p><div class="grid">{grid_html}</div>' if grid_html else ""}
         <div class="grid"><div class="grid-row">{vitality_html}</div></div>
         {protocol_section_html}
         <p class="footer-note">Colors: green indicates optimal, yellow indicates moderate, red indicates flagged. Box position, top to bottom, reflects what needs attention first, not severity of illness. Some markers move as an expected result of your current protocol rather than a concern.</p>

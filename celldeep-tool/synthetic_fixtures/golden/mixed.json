@@ -252,7 +252,8 @@
           "date_display": "03/02/2026",
           "disp_value": "9.8",
           "lab_flag": null,
-          "lab_range": null
+          "lab_range": null,
+          "unit": "umol/L"
         }
       ]
     },

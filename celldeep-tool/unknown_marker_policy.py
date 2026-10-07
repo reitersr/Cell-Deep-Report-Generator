@@ -40,6 +40,7 @@ class UnrecognizedMarker:
     source_context: Optional[str] = None  # a short excerpt for the operator to quickly verify
     cells: list[dict] = field(default_factory=list)
     section_heading: Optional[str] = None   # printed section heading the row sat under, if any
+    shown_as_lab_reported: bool = False     # also shown in the report as lab-reported (as printed, never scored)
 
 
 @dataclass
@@ -93,7 +94,9 @@ def format_review_notice(notice: ExtractionReviewNotice) -> str:
         line = f"  - Unrecognized marker \"{m.raw_name}\" ({m.raw_value}{' ' + m.raw_unit if m.raw_unit else ''})"
         if m.raw_range:
             line += f", reference range on source: {m.raw_range}"
-        line += " — not included in this report. Add to markers_reference.py to include it in future reports."
+        line += (" — shown in the report as lab-reported, as printed and not scored. Add an alias to score it or "
+                 "group it in future reports." if m.shown_as_lab_reported else
+                 " — not included in this report. Add to markers_reference.py to include it in future reports.")
         lines.append(line)
     for note in notice.other_notes:
         lines.append(f"  - {note}")

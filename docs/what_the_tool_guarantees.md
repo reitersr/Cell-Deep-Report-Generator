@@ -23,9 +23,11 @@ patient names or result values.
 
 ## What it excludes, and why
 
-It excludes anything it cannot verify: unreadable or unknown page layouts, scanned values the reads do not
+It excludes anything it cannot verify, at the smallest unit it can: a single unreadable result cell (the rest of
+its row and page is kept), unknown page layouts, scanned values the reads do not
 agree on, DEXA pages it cannot confirm as this patient's, DEXA values the reads disagree on, and test names
-not in the library. A wrong number is worse than a missing one: a missing number is visible to staff, and a
+not in the library (a readable unknown test with the lab's unit or range is shown as printed, never scored). It
+never builds a report whose newest draw has no accepted result. A wrong number is worse than a missing one: a missing number is visible to staff, and a
 wrong one is not.
 
 ## What it cannot do
