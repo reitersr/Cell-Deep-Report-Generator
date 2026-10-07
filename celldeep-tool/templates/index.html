@@ -79,6 +79,10 @@
     <input type="date" id="collected_date" name="collected_date" value="{{ form.collected_date or '' }}">
     <div class="hint">Required if the lab PDF includes scanned (image-only) pages; the upload is rejected without it. Identifies every scanned page as this patient's draw on this date.</div>
 
+    <label for="scan_collected_date">Scanned Pages Collected Date (only if different)</label>
+    <input type="date" id="scan_collected_date" name="scan_collected_date" value="{{ form.scan_collected_date or '' }}">
+    <div class="hint">Leave blank unless the scanned pages are an earlier draw than the digital report and print no date of their own (the tool says so when it cannot tell). Then enter the scanned pages' own Collected date.</div>
+
     <label>Bloodwork Lab PDF</label>
     <input type="file" name="labs_pdf" accept="application/pdf">
     <div class="hint">The raw lab report, exactly as received. Leave blank if no bloodwork this round.</div>

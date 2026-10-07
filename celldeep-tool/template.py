@@ -219,6 +219,8 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .sec-title{{font-size:11px; font-weight:700; letter-spacing:0.1em; color:{INK}; text-transform:uppercase; margin:8px 0 5px; display:flex; align-items:center; gap:8px;}}
 .sec-title::after{{content:""; flex:1; height:2.5px; background:{AQUA};}}
 
+.draft-mark{{border:2px solid #B3261E; color:#B3261E; font-weight:700; font-size:12px; letter-spacing:0.06em; text-align:center; padding:5px 8px; margin:0 0.35in 6px 0.35in; border-radius:6px;}}
+.draft-mark-footer{{position:fixed; bottom:0; left:0; right:0; text-align:center; color:#B3261E; font-weight:700; font-size:8.5px; letter-spacing:0.06em;}}
 .hero{{border:1.5px solid {AQUA}; border-radius:12px; padding:8px 14px; margin-bottom:4px; box-shadow:0 0 0 1px {AQUA}33 inset;}}
 .hero-eyebrow{{font-size:10.5px; font-weight:700; letter-spacing:0.08em; color:{AQUA_DK}; margin-bottom:7px;}}
 .bottomline{{background:{CHARCOAL}; color:#F1EEE7; border-radius:9px; padding:4px 14px; margin-bottom:2px;}}
@@ -973,6 +975,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
 <html><head><meta charset="UTF-8"><title>CellDeep: Patient and Protocol Record</title>
 <style>{CSS}</style></head>
 <body>
+{f'<div class="draft-mark">{_html(record.draft_label)}</div><div class="draft-mark-footer">{_html(record.draft_label)}</div>' if record.draft_label else ""}
 <div class="page">
     <div class="opening-flow">
   <div class="masthead">

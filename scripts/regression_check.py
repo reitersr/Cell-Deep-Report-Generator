@@ -12,7 +12,7 @@ Fixtures:
   synthetic_fixtures/expected/<scenario>.json, compared exactly. CI runs this through test_regression_check.py.
 - every real_fixtures/<name>.expected.json (git-ignored, never committed: it holds a real report's values). It names
   its lab PDF and DEXA PDF(s) in real_fixtures/ and the staff entries ("labs", "dexa", "patient", "age", "sex",
-  "collected_date", "vitality_index", optional "dexa_reads"), and lists the report's rows: "mode": "exact" (written by --record-real)
+  "collected_date", "vitality_index", optional "scan_collected_date", "dexa_reads", "lab_scan_reads"), and lists the report's rows: "mode": "exact" (written by --record-real)
   compares every row; without it the list is a subset that may leave fields open with "*". Real DEXA pages are read by the vision model (CELLDEEP_LIVE_VISION=1 and an API
   key) or replayed from a stored transcription ("dexa_reads"); without either, the DEXA rows and the scores that use
   them are reported as SKIPPED (never silently passed). --record-real fills "rows" from the current output once the
@@ -129,50 +129,72 @@ def synthetic_rows(name, folder) -> list[str]:
     try:
         patient = options.get("patient") or (scenarios.clinic_dexa.PATIENT if dexa else scenarios.layouts.PATIENT)
         return rows(*_capture(lambda: pipeline.run(
-            labs, dexa, options.get("note"), patient, options.get("age"), "male", str(folder / "report.pdf"),
+            labs, dexa, options.get("note"), patient, options.get("age"), options.get("sex", "male"),
+            str(folder / "report.pdf"),
             vitality_index=dict(options.get("vitality_index") or VITALITY_NOT_ASSESSED),
             collected_date=options.get("collected_date"), confirm=lambda items: True)))
     finally:
         pipeline.Anthropic, pipeline._review_notes_path, pipeline._diagnostic_path_prefix = saved
 
 
-class ScriptedDexaReads:
-    """Offline stand-in for the vision model on a real DEXA file: answers each page with a stored literal
-    transcription (real_fixtures/<name>.reads.json, git-ignored), the same for both reads of the page."""
+class ScriptedReads:
+    """Offline stand-in for the vision model on a real fixture: answers each page with a stored literal
+    transcription (git-ignored, in real_fixtures/), the same for every read of the page. dexa_pages: {page: scans
+    list, or {"age": printed age, "scans": [...]}} (spec "dexa_reads"); lab_pages: {page: one scanned-lab page
+    transcription in the scan schema} (spec "lab_scan_reads"). Scanned lab requests ask to "Transcribe PDF page N"."""
 
-    def __init__(self, pages):
-        self.pages, self.messages, self.timeout = pages, self, 240.0
+    def __init__(self, dexa_pages, lab_pages=None):
+        self.dexa_pages, self.lab_pages = dexa_pages or {}, lab_pages or {}
+        self.messages, self.timeout = self, 240.0
 
     def create(self, **kwargs):
+        import copy
         import re
         from types import SimpleNamespace
         from synthetic_fixtures.sdk_contract import check_create_kwargs
         check_create_kwargs(kwargs)
-        number = int(re.search(r"page (\d+)", kwargs["messages"][0]["content"][1]["text"])[1])
-        payload = {"page": number, "patient_name": None, "date_of_birth": None, "age": None, "illegible": False,
-                   "scans": self.pages.get(str(number), [])}
+        text = kwargs["messages"][0]["content"][1]["text"]
+        number = int(re.search(r"page (\d+)", text)[1])
+        if text.startswith("Transcribe PDF page"):
+            payload = copy.deepcopy(self.lab_pages.get(str(number), {
+                "page": number, "specimen_id": None, "collected": None, "footer": None, "patient_name": None,
+                "date_of_birth": None, "illegible": True, "rows": [], "out_of_range_summary": None}))
+            payload["page"] = number
+            for row in payload["rows"]:
+                row["page"] = number
+        else:
+            entry = self.dexa_pages.get(str(number), [])
+            entry = entry if isinstance(entry, dict) else {"age": None, "scans": entry}
+            payload = {"page": number, "patient_name": None, "date_of_birth": None, "age": entry["age"],
+                       "illegible": False, "scans": entry["scans"]}
         return SimpleNamespace(content=[SimpleNamespace(text=json.dumps(payload))], stop_reason="end_turn")
 
 
 def real_rows(spec, folder, reads_file=None) -> tuple[list[str], list[str]]:
-    """(rows, skipped notes) for one git-ignored real fixture. Real DEXA pages are read by the vision model
-    (CELLDEEP_LIVE_VISION=1 and an API key), or offline from the fixture's stored transcription (dexa_reads)."""
+    """(rows, skipped notes) for one git-ignored real fixture. Real DEXA and scanned lab pages are read by the vision
+    model (CELLDEEP_LIVE_VISION=1 and an API key), or offline from the fixture's stored transcriptions
+    ("dexa_reads", "lab_scan_reads")."""
     folder.mkdir(parents=True, exist_ok=True)
     skipped = []
     dexa = [str(REAL / name) for name in spec.get("dexa", [])]
     missing = [name for name in spec.get("dexa", []) if not (REAL / name).is_file()]
     live = os.environ.get("CELLDEEP_LIVE_VISION") == "1"
     reads_file = reads_file or spec.get("dexa_reads")
-    scripted = None
+    lab_reads = spec.get("lab_scan_reads")
+    dexa_pages = lab_pages = None
     if dexa and not missing and not live and reads_file and (REAL / reads_file).is_file():
-        scripted = ScriptedDexaReads(json.loads((REAL / reads_file).read_text())["pages"])
+        dexa_pages = json.loads((REAL / reads_file).read_text())["pages"]
         skipped.append(f"DEXA read from the stored transcription {reads_file} (not a live vision read)")
     elif missing or (dexa and not live):
         skipped.append("DEXA rows SKIPPED: " + (f"file(s) not in real_fixtures/: {', '.join(missing)}" if missing
                                                 else "real DEXA pages need CELLDEEP_LIVE_VISION=1 and an API key"))
         dexa = []
+    if lab_reads and not live and (REAL / lab_reads).is_file():
+        lab_pages = json.loads((REAL / lab_reads).read_text())["pages"]
+        skipped.append(f"scanned lab pages read from the stored transcription {lab_reads} (not a live vision read)")
     saved_client = pipeline.Anthropic
-    if scripted is not None:
+    if dexa_pages is not None or lab_pages is not None:
+        scripted = ScriptedReads(dexa_pages, lab_pages)
         pipeline.Anthropic = lambda **kwargs: scripted
     saved = (pipeline._review_notes_path, pipeline._diagnostic_path_prefix)
     pipeline._review_notes_path = lambda _name: str(folder / "review.txt")
@@ -181,7 +203,8 @@ def real_rows(spec, folder, reads_file=None) -> tuple[list[str], list[str]]:
         record, copy = _capture(lambda: pipeline.run(
             str(REAL / spec["labs"]), dexa, None, spec.get("patient"), spec.get("age"), spec.get("sex", "male"),
             str(folder / "report.pdf"), vitality_index=dict(spec_vitality(spec)),
-            collected_date=spec.get("collected_date"), confirm=lambda items: True))
+            collected_date=spec.get("collected_date"), confirm=lambda items: True,
+            scan_collected_date=spec.get("scan_collected_date")))
     finally:
         pipeline._review_notes_path, pipeline._diagnostic_path_prefix = saved
         pipeline.Anthropic = saved_client
