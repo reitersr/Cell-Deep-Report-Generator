@@ -21,6 +21,10 @@ SCAN_RENDER_DPI = 200  # changing this changes what the vision model sees; keep 
 # remaining tie-break in the gates (e.g. strip_lab_code) is ordered explicitly.
 SCAN_MAX_READS = 3
 SCAN_AGREEMENT_READS = 2
+# A row that some reads print and others simply leave out ("not read / 1214 H / not read") is a missing read, not a
+# disagreement: the page is read again, each further read asked to look for those rows, until two reads print the row
+# identically or SCAN_TARGETED_MAX_READS reads have been made. A single read is never enough.
+SCAN_TARGETED_MAX_READS = 5
 
 
 def _read_values(rows):
@@ -73,6 +77,7 @@ SCAN_SCHEMA = _object({
     "patient_name": _TEXT, "date_of_birth": _TEXT, "illegible": {"type": "boolean"},
     "rows": {"type": "array", "items": _ROW},
     "out_of_range_summary": _nullable({"type": "array", "items": _SUMMARY_ROW}),
+    "urine_note_printed": {"type": "boolean"},
 })
 SCAN_PROMPT = """Transcribe this lab page literally. Never infer, calculate, correct, or complete text.
 Return only the supplied JSON schema. Copy names, result_text, reference_range, section headings,
@@ -87,7 +92,9 @@ Copy every entry of LIST OF RESULTS PRINTED IN THE OUT OF RANGE COLUMN verbatim 
 out_of_range_summary; null means no such block, [] means a printed empty block.
 Copy the patient's date of birth exactly as printed into date_of_birth, or null.
 Absent metadata is null. Illegible fields are null with illegible=true, never guessed.
-Do not infer specimen ids, dates, patient names, section headings, or flags from other pages."""
+Do not infer specimen ids, dates, patient names, section headings, or flags from other pages.
+Set urine_note_printed to true only when this page prints a note saying the urine was analyzed (such as
+"This urine was analyzed for the presence of ..."); otherwise false."""
 
 _COUNT_RANGE_RE = re.compile(r"\d{1,3}\s*-\s*\d{1,3}")  # "0-5", "6-10": a microscopy count range (per HPF/LPF)
 
@@ -134,9 +141,10 @@ def _validate(value, schema, location="page"):
 
 def read_page(page, client, create_message, model, max_reads=2):
     """Independent reads of one page, all sent the same single render, which is released on return. Two reads
-    always; a third (when max_reads allows it) only when the first two disagree on a result row. A third read
-    that fails its schema or page gate is dropped: the first two still stand, and the rows they disagree on
-    are excluded."""
+    always; a third (when max_reads allows it) only when the first two disagree on a result row. A read after the
+    second that fails its schema or page gate is dropped: the earlier reads still stand, and the rows they disagree
+    on are excluded. With the third read allowed, a row some reads print and others leave out is read again
+    (targeted reads, up to SCAN_TARGETED_MAX_READS in all) until two reads print it identically."""
     image = render_page_png_b64(page)
     reads = []
     try:
@@ -152,18 +160,48 @@ def read_page(page, client, create_message, model, max_reads=2):
             except ScanGateError as error:
                 print(f"source=scan page={page.number + 1} third read failed: {json.dumps(str(error))}; "
                       "rows the first two reads disagree on stay excluded")
+        while max_reads >= 3 and len(reads) >= 3 and len(reads) < SCAN_TARGETED_MAX_READS \
+                and (missing := rows_missing_from_reads(reads)):
+            try:
+                reads.append(_read_transcription(page, image, len(reads) + 1, client, create_message, model,
+                                                 focus=missing))
+            except ScanGateError as error:
+                print(f"source=scan page={page.number + 1} targeted read failed: {json.dumps(str(error))}; "
+                      "rows still missing from the reads stay excluded")
+                break
     finally:
         del image
     return reads
 
 
-def _read_transcription(page, image, reading, client, create_message, model):
+def rows_missing_from_reads(reads):
+    """The result rows (printed names, in reading order) that at least one read prints with a value and at least
+    one read leaves out entirely, and that two reads do not yet print identically. Rows every read prints, however
+    differently, are a disagreement for the gate, not a missing read."""
+    codes = _lab_codes(reads)
+    missing = []
+    for (name, _section), rows in _row_identities(reads, codes).items():
+        if all(is_heading_row(row) for read_rows in rows for row in read_rows):
+            continue
+        valued = [read_rows for read_rows in rows if any(not is_heading_row(row) for row in read_rows)]
+        if valued and any(not read_rows for read_rows in rows) and _agreed(rows, SCAN_AGREEMENT_READS) is None \
+                and name and name not in missing:
+            missing.append(name)
+    return missing
+
+
+def _read_transcription(page, image, reading, client, create_message, model, focus=()):
+    text = f"Transcribe PDF page {page.number + 1} independently."
+    if focus:
+        # Names only, never values: the read must still find and transcribe them on the page itself.
+        text += (" Earlier reads of this page disagree on whether these rows are printed; look for them carefully "
+                 "and transcribe every row of the page as usual: " + "; ".join(focus) + ".")
     response = create_message(
         client, f"bloodwork scan page {page.number + 1} read {reading}",
         model=model, max_tokens=16000, system=SCAN_PROMPT,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
-            {"type": "text", "text": f"Transcribe PDF page {page.number + 1} independently."},
+            {"type": "text", "text": text},
         ]}],
         output_config={"format": {"type": "json_schema", "schema": SCAN_SCHEMA}},
     )
@@ -174,6 +212,10 @@ def _read_transcription(page, image, reading, client, create_message, model):
         data = json.loads(raw)
     except json.JSONDecodeError as error:
         raise ScanGateError(f"schema gate: invalid JSON on page {page.number + 1}") from error
+    # A stored or older transcription without the urine-note field: absent means not printed, so it can never
+    # make a page a urinalysis page.
+    if isinstance(data, dict):
+        data.setdefault("urine_note_printed", False)
     _validate(data, SCAN_SCHEMA)
     if data["page"] != page.number + 1 or any(row["page"] != data["page"] for row in data["rows"]):
         raise ScanGateError(f"page gate: wrong page number on page {page.number + 1}")
@@ -381,7 +423,51 @@ def _agreed(rows_per_read, needed):
         if len(rows) == 1:
             votes.setdefault(_signature(rows[0]), []).append(reading)
     best = max(votes.values(), key=len, default=[])
+    if sum(len(readings) == len(best) for readings in votes.values()) > 1:
+        return None  # two different rows printed equally often: no agreement
     return best if len(best) >= needed else None
+
+
+def urine_note_pages(reads):
+    """Page numbers whose reads agree (two at least) that the page prints a urine-analysis note."""
+    return {page_reads[0]["page"] for page_reads in reads
+            if sum(read.get("urine_note_printed") is True for read in page_reads) >= SCAN_AGREEMENT_READS}
+
+
+def _is_urine_test(name):
+    import lab_reported
+    return bool(name) and lab_reported.lookup(name, "URINALYSIS") is not None
+
+
+def carry_sections(rows, urine_note_pages=()):
+    """Accepted scanned rows (page order, reading order) with the section a page break hides restored: rows printed
+    before the first heading of a page belong to the section the previous page ended in (the previous page number
+    only, never across a gap). A page that prints the urine-analysis note starts in "URINALYSIS" when nothing else
+    is carried. A carried urinalysis section covers only urine tests (lab_reported's urinalysis names) and ends at
+    the first row that is not one, so a blood test printed after the urine block is never read as urine; a printed
+    heading always ends a carried section. Rows given a section carry "section_carried": where it came from."""
+    import lab_reported
+
+    by_page = {}
+    for row in rows:
+        by_page.setdefault(row["page"], []).append(row)
+    ended_in, out = {}, []
+    for number in sorted(by_page):
+        carrying, source = ended_in.get(number - 1), f"continued from page {number - 1}"
+        if number in urine_note_pages and not lab_reported.is_urinalysis(carrying):
+            carrying, source = "URINALYSIS", "the page prints the urine-analysis note"
+        last = None
+        for row in by_page[number]:
+            if row.get("section"):
+                carrying = None
+            elif carrying and lab_reported.is_urinalysis(carrying) and not _is_urine_test(row["name"]):
+                carrying = None
+            elif carrying:
+                row = {**row, "section": carrying, "section_carried": source}
+            out.append(row)
+            last = row.get("section") or last
+        ended_in[number] = last
+    return out
 
 
 def reads_disagree(reads):

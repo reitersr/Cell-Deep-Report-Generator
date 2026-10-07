@@ -2168,6 +2168,29 @@ def scan_collected_date(text: str) -> str:
     return scan.staff_collected_date(text)
 
 
+# Printed labels that are never a test of their own, whatever is printed beside them.
+NON_RESULT_LABELS = {"comment", "comments", "note", "notes"}
+NOT_PERFORMED_TEXTS = {"tnp", "test not performed", "not performed"}
+
+
+def split_no_result_rows(unrecognized):
+    """(rows that print a result, rows that do not) among unrecognized rows. A heading or label with no value ("CBC
+    with Differential", "Automated Differential" printed "TNP", a "Comments" line) is not a result row: it is never
+    listed or confirmed as an unrecognized test."""
+    results, labels = [], []
+    for item in unrecognized:
+        name = " ".join((item.get("raw_name") or "").split()).rstrip(":").strip().casefold()
+        cells = item.get("cells") or []
+        if cells:
+            printed = any(cell.get("present", True) and cell.get("status") != "not_performed" and cell.get("disp_value")
+                          for cell in cells)
+        else:
+            raw = " ".join((item.get("raw_value") or "").split()).casefold()
+            printed = bool(raw) and raw not in NOT_PERFORMED_TEXTS
+        (labels if name in NON_RESULT_LABELS or not printed else results).append(item)
+    return results, labels
+
+
 def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_name=None, collected_date=None,
                             dob_sink=None, name_sink=None, row_exclusions=None, printed_dates=None):
     import scan_bloodwork as scan
@@ -2228,6 +2251,13 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         except scan.ScanGateError as error:
             return [], [], error.notes + [
                 f"source=scan pages {numbers}: {error}; ALL SCAN ROWS REJECTED; manual review required"]
+    # A page break hides the section the first rows of a page belong to (Quest prints a panel's heading on one page
+    # and the rest of its rows on the next): restore it, so urine rows are never read as blood tests.
+    accepted = scan.carry_sections(accepted, scan.urine_note_pages(reads))
+    for number in sorted({row["page"] for row in accepted if row.get("section_carried")}):
+        carried = [row for row in accepted if row["page"] == number and row.get("section_carried")]
+        notes.append(f"source=scan page {number}: {len(carried)} row(s) printed under no heading read as part of "
+                     f"{carried[0]['section']!r} ({carried[0]['section_carried']})")
     occurrences, unknown = [], []
     header = _bloodwork_header([
         (40, 90, 70, 100, "Test"), (220, 90, 260, 100, "Current"),
@@ -3109,6 +3139,12 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             phase_ranges, moved_to_lab_reported, draw_info))
     lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
     lab_review_notes.extend(lab_notes)
+    unrecognized, labels = split_no_result_rows(unrecognized)
+    if labels:
+        lab_review_notes.append("PRINTED WITH NO RESULT (a heading, label or test not performed; not a result, not an "
+                                "unrecognized test): " + ", ".join(dict.fromkeys(
+                                    f"{item['raw_name']}" + (f" ({item['raw_value']})" if item.get("raw_value") else "")
+                                    for item in labels)))
     lab_review_notes.extend(drop_duplicate_lab_reported(lab_items, occurrences))
     dexa_exclusions = []  # DEXA pages not attributed to this patient: listed under INCOMPLETE
     dexa_confirmed = []  # (file, page) keys confirmed as this patient's
