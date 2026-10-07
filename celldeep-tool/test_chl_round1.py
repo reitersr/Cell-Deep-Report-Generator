@@ -376,24 +376,47 @@ def test_urine_microscopy_text_values_show_as_printed(report):
 # --- H15. assay change across draws --------------------------------------------------------------------------
 
 def test_a_draw_on_a_different_assay_is_shown_with_its_range_and_not_scored(extracted, report):
-    assert _occ(extracted, "Free Testosterone", chl.SECOND)["lab_range_display"] == "35-155"  # the basis: scored
+    # The CellDeep basis for Free Testosterone is the 46-224 pg/mL assay (clinic_config.CELLDEEP_RANGE_BASIS); the
+    # newest draw is on the 35-155 pg/mL dialysis assay: lab-reported with its own range and flag, never scored.
+    assert _occ(extracted, "Free Testosterone", chl.SECOND)["lab_range_display"] == "46-224"  # the basis: scored
     assert _occ(extracted, "Free Testosterone", chl.LATEST) is None
     free_t = _items(extracted)["Free Testosterone"]
     assert free_t["results"] == [{"date_display": chl.LATEST, "disp_value": "120", "lab_flag": None,
-                                  "lab_range": "46-224", "note": clinic_config.ASSAY_CHANGED_NOTE}]
+                                  "lab_range": "35-155", "note": clinic_config.ASSAY_CHANGED_NOTE}]
     assert extracted["assay_changed"] == {"Free Testosterone": clinic_config.ASSAY_CHANGED_NOTE}
     text, review = report
     assert "assay or range changed - not directly comparable" in text
     assert ("ASSAY OR RANGE CHANGED: Free Testosterone prints different reference ranges across draws (11/04/2025: "
-            "35-155; 03/10/2026: 46-224)") in review
+            "46-224; 03/10/2026: 35-155)") in review
 
 
-def test_the_same_range_in_every_draw_is_unchanged(tmp_path):
-    pages = [chl.second_page(), chl.latest_page(free_t_range="35-155")]
+def test_the_same_basis_range_in_every_draw_is_unchanged(tmp_path):
+    pages = [chl.second_page(), chl.latest_page(free_t_range="46-224")]
     extracted = pipeline.extract(str(chl.write(tmp_path / "same.pdf", pages)), [], None, patient_name=fx.PATIENT,
                                  audit_root=str(tmp_path), collected_date=chl.LATEST, sex="male")
     assert _occ(extracted, "Free Testosterone", chl.LATEST)["disp_value"] == "120"
     assert extracted["assay_changed"] == {}
+
+
+def test_a_single_draw_on_a_different_assay_is_never_scored(tmp_path):
+    """Even when no draw prints the basis range, a draw on another assay is lab-reported, not scored."""
+    pages = [chl.second_page(free_t_range="35-155"), chl.latest_page(free_t_range="35-155")]
+    extracted = pipeline.extract(str(chl.write(tmp_path / "dialysis.pdf", pages)), [], None, patient_name=fx.PATIENT,
+                                 audit_root=str(tmp_path), collected_date=chl.LATEST, sex="male")
+    assert not any(o["name"] == "Free Testosterone" and o["disp_value"] for o in extracted["marker_occurrences"])
+    assert [r["lab_range"] for r in _items(extracted)["Free Testosterone"]["results"]] == ["35-155", "35-155"]
+
+
+def test_the_assay_note_is_never_shown_on_a_marker_scored_on_its_celldeep_range():
+    extracted = {"name": "Synthetic", "sex": "male", "assay_changed": {"SHBG": clinic_config.ASSAY_CHANGED_NOTE},
+                 "marker_occurrences": [
+                     {"name": "SHBG", "date_display": d, "source_label": "x", "status": "final", "value": v,
+                      "disp_value": str(v), "is_good": None, "lab_range_lo": lo, "lab_range_hi": hi,
+                      "lab_range_display": f"{lo}-{hi}", "lab_flag": ""}
+                     for d, v, lo, hi in ((chl.FIRST, 51.0, 22, 77), (chl.LATEST, 59.7, 19.3, 76.4))]}
+    record, _ = pipeline.score_and_build_record(extracted)
+    shbg = next(m for m in record.markers if m.name == "SHBG")
+    assert shbg.now_tier in ("optimal", "moderate", "flag") and shbg.value_note is None
 
 
 def test_a_scored_test_whose_newest_result_is_lab_reported_is_never_called_not_retested(report):

@@ -1,0 +1,10 @@
+{
+ "rows": [
+  "D | 01/26/2026 | total 168 | fat 33 | lean 128.5 | body fat 20.4% (computed) | VAT lb 0.93 | VAT cm2 101",
+  "D | 03/30/2026 | total 166.2 | fat 30.4 | lean 129.6 | body fat 19.0% (estimated) | VAT lb 0.86 | VAT cm2 96",
+  "D | 09/08/2025 | total 171 | fat 40.2 | lean 124.6 | body fat 24.4% (printed) | VAT lb 1.12 | VAT cm2 118",
+  "D | 11/17/2025 | total 169.4 | fat 36.1 | lean 126.8 | body fat 22.2% (computed) | VAT lb 1.01 | VAT cm2 109",
+  "M | TSH | 06/15/2026 | 1.9 |  | optimal",
+  "M | hs-CRP | 06/15/2026 | 0.4 |  | optimal"
+ ]
+}

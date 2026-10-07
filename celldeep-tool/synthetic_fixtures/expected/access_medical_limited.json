@@ -1,0 +1,22 @@
+{
+ "rows": [
+  "D | 07/20/2026 | total 172 | fat 30.1 | lean 136.4 | body fat 18.1% (printed) | VAT lb  | VAT cm2 ",
+  "L | Chemistry | Bilirubin, Total | 08/07/2026 | 0.7 |  | 0.2 - 1.2",
+  "L | Chemistry | Glucose (non-fasting) | 08/07/2026 | 101 | H | 65 - 99",
+  "L | Complete Blood Count | Hemoglobin | 08/07/2026 | 15.0 |  | 13.2 - 17.1",
+  "L | Complete Blood Count | Red Blood Cell Count | 08/07/2026 | 5.10 |  | 4.20 - 5.80",
+  "L | Complete Blood Count | White Blood Cell Count | 08/07/2026 | 5.4 |  | 3.8 - 10.8",
+  "L | Hormones | Bioavailable Testosterone | 08/07/2026 | 240 |  | 126 - 412",
+  "L | Hormones | Free Testosterone | 08/07/2026 | 9.8 |  | 5.7 - 17.9",
+  "L | Tumor Markers | % Free PSA | 08/07/2026 | 31 |  | > 25",
+  "L | Tumor Markers | Free PSA | 08/07/2026 | 0.25 |  | ",
+  "L | Urinalysis | Urinalysis — Bilirubin | 08/07/2026 | Negative |  | Negative",
+  "L | Urinalysis | Urinalysis — Blood | 08/07/2026 | Negative |  | Negative",
+  "M | Cortisol, Total | 08/07/2026 | 12.0 |  | not scored",
+  "M | Creatinine | 08/07/2026 | 0.98 |  | moderate",
+  "M | Estradiol | 08/07/2026 | 41 | H | optimal",
+  "M | PSA Total | 08/07/2026 | 0.8 |  | optimal",
+  "M | Testosterone, Total | 08/07/2026 | 540 |  | moderate",
+  "M | eGFR | 08/07/2026 | 104 |  | optimal"
+ ]
+}

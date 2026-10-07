@@ -104,7 +104,7 @@ EARLIER_DRAW_SUMMARY_LABEL = "Results from earlier draws"
 # Tests a given lab measures with a different assay from the one the CellDeep range is based on. At that lab
 # the result is shown as lab-reported (the lab's own range and flag) and never scored against the CellDeep
 # range; the staff notes say "ASSAY DIFFERS FROM CELLDEEP RANGE BASIS". Access Medical Laboratories: free and
-# bioavailable testosterone (the CellDeep ranges are based on Quest's dialysis assays).
+# bioavailable testosterone.
 LAB_ASSAY_DIFFERS = {"access_medical": ("Free Testosterone", "Bioavailable Testosterone")}
 
 # The same safeguard for any other scored test: when the lab's printed range is more than this many times above
@@ -135,9 +135,10 @@ FASTING_ONLY_MARKERS = {"Glucose (fasting)": ("Glucose (non-fasting)", "Chemistr
 # range basis below is shown lab-reported and never scored.
 ASSAY_CHANGED_NOTE = "assay or range changed - not directly comparable"
 
-# The printed reference range of the assay each CellDeep range is based on (Quest's dialysis assays). Tests not
-# listed here fall back to LAB_RANGE_BASIS_RATIO.
-CELLDEEP_RANGE_BASIS = {"Free Testosterone": "35-155 pg/mL"}
+# The printed reference range of the assay each CellDeep range is based on. Tests not listed here fall back to
+# LAB_RANGE_BASIS_RATIO. Free Testosterone: the 46-224 pg/mL assay; a draw on another assay (e.g. the 35-155 pg/mL
+# dialysis assay) is shown lab-reported with its own range and flag and never enters a score (owner decision).
+CELLDEEP_RANGE_BASIS = {"Free Testosterone": "46-224 pg/mL"}
 
 
 # ---- Cortisol collection time ------------------------------------------------------------------------
@@ -170,3 +171,11 @@ LATEST_LAB_REPORTED_LABEL = "Shown as lab-reported this round"
 
 # Status chip on such a test's scored row (instead of "Not retested").
 LATEST_LAB_REPORTED_CHIP = "See lab-reported"
+
+
+# ---- DEXA mass balance -----------------------------------------------------------------------------
+
+# When DEXA pages print conflicting whole-body total, fat or lean mass for one scan, the candidate that keeps the scan's
+# own balance (total = fat + lean + bone mineral) with a bone-mineral remainder above 0 and at most this many pounds
+# is the one confirmed by the scan's other printed values; any other candidate is a regional value read by mistake.
+DEXA_BONE_MINERAL_MAX_LB = 15.0

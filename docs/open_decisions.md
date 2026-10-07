@@ -500,6 +500,10 @@ to the marker library with thresholds.
   directly comparable"; a draw not on the CellDeep range basis (`clinic_config.CELLDEEP_RANGE_BASIS`, Free
   Testosterone 35-155 pg/mL, Quest dialysis) is lab-reported.
 
-**Still to confirm.** The `CELLDEEP_RANGE_BASIS` entry for Free Testosterone (and whether other tests need one);
+**Decided later (owner):** the Free Testosterone basis is the 46-224 pg/mL assay; a draw on the 35-155 pg/mL dialysis
+assay is lab-reported with its own range and flag and never scored; the "assay or range changed" note appears only on
+results not scored on a CellDeep range (not on SHBG).
+
+**Still to confirm.** Whether other tests need a `CELLDEEP_RANGE_BASIS` entry;
 the "no Fasting line = fasting" default; whether the lab-reported "Other Lab Results" heading is acceptable.
 

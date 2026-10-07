@@ -447,6 +447,9 @@ def test_mocked_merge_and_staff_only_provenance(mixed_pdf, tmp_path):
                 "Glucose (fasting)": "82", "Cortisol, Total (AM)": "13.1",
                 "Estradiol": "34", "Creatinine": "0.91"}
     values = {(item["name"], item["date_display"]): item for item in extracted["marker_occurrences"]}
+    # Free Testosterone printed with the dialysis range is lab-reported (clinic_config.CELLDEEP_RANGE_BASIS).
+    values.update({(item["name"], result["date_display"]): result for item in extracted["lab_reported"]
+                   for result in item["results"] if item["name"] == "Free Testosterone"})
     for name, value in expected.items():
         assert values[name, "04/14/2026"]["disp_value"] == value
     assert all("source" not in item and "scan" not in item["source_label"]

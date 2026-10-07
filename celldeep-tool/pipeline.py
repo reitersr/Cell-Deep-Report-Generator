@@ -1970,6 +1970,10 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
 # DEXA extraction (unchanged Claude path from before the deterministic bloodwork change)
 # ---------------------------------------------------------------------------
 
+# A DEXA page with at least this many printed numbers in its text layer is verified against that text.
+_DEXA_TEXT_LAYER_MIN_NUMBERS = 6
+
+
 def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], patient_name: str | None,
                               dob_sink: list | None = None, name_sink: list | None = None,
                               excluded_sink: list | None = None, confirmed_sink: list | None = None,
@@ -1986,11 +1990,15 @@ def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], pa
             return [], [note], [f"DEXA - {note}"]
         client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"],
                            timeout=ANTHROPIC_CALL_TIMEOUT_SECONDS, max_retries=ANTHROPIC_MAX_RETRIES)
-    pages, failures = [], []
+    pages, failures, page_text = [], [], {}
     for file_number, path in enumerate(dexa_pdfs, start=1):
         with fitz.open(path) as document:
             for page in document:
                 key = (file_number, page.number + 1)
+                words = _page_words(page)
+                if sum(any(ch.isdigit() for ch in w[4]) for w in words) >= _DEXA_TEXT_LAYER_MIN_NUMBERS:
+                    # A usable text layer: the gate checks every read value against the page's printed numbers.
+                    page_text[key] = [[w[4] for w in line] for line in _group_lines(words, _LINE_TOLERANCE_PT)]
                 try:
                     reads = scan_dexa.read_page(page, f"file {key[0]} page {key[1]}", client,
                                                 _create_anthropic_message, MODEL)
@@ -2004,7 +2012,7 @@ def _extract_dexa_with_claude(client: Anthropic | None, dexa_pdfs: list[str], pa
             if len(printed) == 1 and all(read["patient_name"] for read in reads):
                 name_sink.append(("DEXA", f"file {key[0]} page {key[1]}", printed.pop()))
     excluded = [] if excluded_sink is None else excluded_sink
-    result = scan_dexa.gate(pages, patient_name, failures, dob_sink, excluded, staff_age)
+    result = scan_dexa.gate(pages, patient_name, failures, dob_sink, excluded, staff_age, page_text)
     accepted = sorted({key for key, _ in pages} - {key for key, _ in excluded})
     if confirmed_sink is not None:  # pages read twice and attributed to the staff-entered patient
         confirmed_sink.extend(accepted)
@@ -2622,9 +2630,11 @@ def _range_numbers(text: str | None) -> tuple:
 
 def apply_assay_changes(occurrences: list, unrecognized: list, sex: str | None,
                         moved: dict | None = None) -> tuple[list[str], dict]:
-    """A scored test whose printed reference range differs between draws (a different assay or a new range): every
-    draw keeps its own printed range and a note; a draw whose range is not the CellDeep range basis (or that prints no
-    range of its own) is moved to lab-reported, never scored. Returns (staff notes, {marker: note})."""
+    """A scored test whose printed reference range differs between draws (a different assay or a new range), or that
+    prints a range other than its configured CellDeep range basis (clinic_config.CELLDEEP_RANGE_BASIS): every draw
+    keeps its own printed range; a draw whose range is not the CellDeep range basis (or, when ranges differ between
+    draws, prints no range of its own) is moved to lab-reported with its own range and flag, never scored.
+    Returns (staff notes, {marker: note})."""
     import access_medical
 
     notes, changed = [], {}
@@ -2635,13 +2645,18 @@ def apply_assay_changes(occurrences: list, unrecognized: list, sex: str | None,
     moved_items = []
     for name, items in by_marker.items():
         printed = {_range_numbers(item["lab_range_display"]) for item in items if item.get("lab_range_display")}
-        if len(printed) < 2:
+        basis = clinic_config.CELLDEEP_RANGE_BASIS.get(name)
+        off_basis = basis is not None and any(_range_numbers(own) != _range_numbers(basis) for own in
+                                              (item.get("lab_range_display") for item in items) if own)
+        across_draws = len(printed) >= 2
+        if not (across_draws or off_basis):
             continue
         config = resolve_marker_config(name, MARKER_LIBRARY[name], sex)
-        basis = clinic_config.CELLDEEP_RANGE_BASIS.get(name)
         changed[name] = clinic_config.ASSAY_CHANGED_NOTE
         for item in items:
             own = item.get("lab_range_display")
+            if not own and not across_draws:
+                continue  # one printed range in the file: a draw without its own range is not judged
             if not own:
                 why = "prints no range of its own, so its assay cannot be told"
             elif basis is not None:
@@ -2658,10 +2673,11 @@ def apply_assay_changes(occurrences: list, unrecognized: list, sex: str | None,
                 unrecognized.append(_occurrence_to_lab_reported(item, (name, group), clinic_config.ASSAY_CHANGED_NOTE))
                 notes.append(f"ASSAY OR RANGE CHANGED: {name} {item['disp_value']!r} on {item['date_display']} {why}; "
                              "shown lab-reported with the lab's range and flag, not scored")
-        ranges = "; ".join(f"{item['date_display']}: {item.get('lab_range_display') or 'none printed'}"
-                           for item in sorted(items, key=lambda i: _normalize_date_for_matching(i["date_display"])))
-        notes.append(f"ASSAY OR RANGE CHANGED: {name} prints different reference ranges across draws ({ranges}); "
-                     "each draw is shown with its own range - not directly comparable")
+        if across_draws:
+            ranges = "; ".join(f"{item['date_display']}: {item.get('lab_range_display') or 'none printed'}"
+                               for item in sorted(items, key=lambda i: _normalize_date_for_matching(i["date_display"])))
+            notes.append(f"ASSAY OR RANGE CHANGED: {name} prints different reference ranges across draws ({ranges}); "
+                         "each draw is shown with its own range - not directly comparable")
     occurrences[:] = [item for item in occurrences if not any(item is other for other in moved_items)]
     return notes, changed
 
@@ -3186,7 +3202,10 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             _normalize_date_for_matching(d2) for d2 in shown)]
         if newer:
             marker.latest_lab_reported_date = max(newer, key=_normalize_date_for_matching)
-        if note := (extracted.get("assay_changed") or {}).get(marker.name):
+        # The "assay or range changed" note is for results not scored on a CellDeep range (lab range or unscored);
+        # a marker scored on its CellDeep range (SHBG) is comparable across draws on that range: no note.
+        scored_on_celldeep_range = marker.unscored_reason is None and marker.range_source != "lab"
+        if (note := (extracted.get("assay_changed") or {}).get(marker.name)) and not scored_on_celldeep_range:
             marker.value_note = f"{marker.value_note}; {note}" if marker.value_note else note
     censored = [f"{m.name} {disp!r} on {date}" + (f" (lab flag {flag})" if flag else "")
                 for m in markers
@@ -3460,7 +3479,9 @@ def coverage_gaps(source_rows: list[dict], record: PatientRecord, unrecognized_n
     shown = {item.name for item in record.lab_reported}
     gaps = []
     for row in source_rows:
-        names = [occurrence["name"] for occurrence in row["occurrences"] if occurrence["name"] not in scored]
+        # A scored test's result moved to lab-reported (not fasting, a different assay) is shown there.
+        names = [occurrence["name"] for occurrence in row["occurrences"]
+                 if occurrence["name"] not in scored and occurrence["name"] not in shown]
         for unknown in row["unrecognized"]:
             match = unknown.get("show_as") or lab_reported.lookup(unknown["raw_name"], lab_reported._heading(unknown))
             printed = " ".join(unknown["raw_name"].split())
