@@ -35,7 +35,21 @@
       "history": []
     }
   ],
-  "lab_reported": [],
+  "lab_reported": [
+    {
+      "name": "Thyroid Stimulating Hormone Ultra",
+      "group": "Other Lab Results",
+      "results": [
+        {
+          "date_display": "04/14/2026",
+          "disp_value": "2.1",
+          "lab_flag": null,
+          "lab_range": "0.40-4.50",
+          "unit": "uIU/mL"
+        }
+      ]
+    }
+  ],
   "staff_unrecognized": [
     {
       "raw_name": "Thyroid Stimulating Hormone Ultra",

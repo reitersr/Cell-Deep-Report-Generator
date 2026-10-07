@@ -18,16 +18,19 @@ and listed in the staff notes. You check those items and decide whether the repo
 
 - **Patient Name**: as on the lab report. "First name + last initial" also matches ("Evan W" matches
   "WALKER, EVAN").
-- **Bloodwork Collected Date**: the "Collected" date printed on the lab report. It is required when the lab
-  PDF has scanned pages, because it identifies those pages.
+- **Bloodwork Collected Date**: the "Collected" date printed on the lab report (the newest draw when the PDF
+  holds several). It is required when the lab PDF has scanned pages, because it identifies those pages. If this
+  date, or the newest Collected date printed in the PDF, has no readable result, the tool does not build the
+  report and says why (it never shows an older draw as the current one): check the date and the PDF.
 - **Age**: the patient's age. It is also used to check that unnamed DEXA pages belong to this patient.
 - **Sex** and the **Vitality Index** answers. Leave a domain at "Not Assessed" if the patient was not asked; it is
   then taken from the provider note, or shown as not provided. Never copy answers from another patient.
 
 ## 3. The confirmation screen
 
-If anything will be left out, the tool stops before building the report and lists each item:
-a lab page it could not read, a scanned result the reads did not agree on, a test name it does not
+If anything will be left out, the tool stops before building the report and lists each item, starting with the
+draw dates that have excluded lab pages or results: a lab page it could not read, a single result cell it could
+not read (only that cell is left out), a scanned result the reads did not agree on, a test name it does not
 recognize, a DEXA page it could not confirm as this patient's (with its dates and printed age or name),
 or a provider note it could not read.
 

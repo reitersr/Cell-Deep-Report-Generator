@@ -62,7 +62,7 @@ _HEADER_FIELDS = {
     "accession": re.compile(r"Acc#\s*(?P<v>[A-Za-z0-9-]+)"),
     "collected": re.compile(r"Coll\.\s*Date:\s*(?P<v>\d{1,2}/\d{1,2}/\d{2,4})"),
     "printed": re.compile(r"Print\s*Date:\s*(?P<v>\d{1,2}/\d{1,2}/\d{2,4})"),
-    "fasting": re.compile(r"Fasting:\s*(?P<v>[YN])\b"),
+    "fasting": re.compile(r"Fasting:[ \t]*(?P<v>Yes|No|Unknown|Y|N)?(?![A-Za-z])", re.IGNORECASE),
     "collection_time": re.compile(r"Coll\.\s*Time:\s*(?P<v>\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"),
 }
 _GROUP_BY_CATEGORY = {"Hormones": "Hormones", "Thyroid": "Hormones", "Lipids": "Lipids",
@@ -121,7 +121,11 @@ def read_header(lines):
     header = {}
     for field, pattern in _HEADER_FIELDS.items():
         match = pattern.search(text)
-        if match:
+        if match and field == "fasting":
+            # "Unknown" or a blank "Fasting:" is kept as printed and treated like "N" (never fasting).
+            printed = (match["v"] or "").upper()
+            header[field] = {"YES": "Y", "NO": "N"}.get(printed, printed or "BLANK")
+        elif match:
             header[field] = " ".join(match["v"].split()).strip(" ,")
     for field in ("collected", "printed"):
         if field in header:
@@ -315,13 +319,19 @@ def parse(pages, row_audit=None, review_notes=None, exclusions=None, sex=None):
                     exclude(number, section, str(error))
                     continue
             patient_note = None
-            if match is not None and match[0] == "Glucose (fasting)" and header.get("fasting") == "N":
-                # Drawn non-fasting: never labelled or scored as fasting glucose.
-                show_as, patient_note, match = ("Glucose (non-fasting)", "Chemistry"), \
-                    clinic_config.NON_FASTING_GLUCOSE_NOTE, None
-                staff.append(f"NON-FASTING GLUCOSE: the lab header prints 'Fasting: N'; Glucose {display!r} on {date} "
-                             f"(page {number}) is shown as 'Glucose (non-fasting)' with the lab's range "
+            fasting = header.get("fasting")
+            if match is not None and match[0] in clinic_config.FASTING_ONLY_MARKERS and fasting not in (None, "Y"):
+                # Drawn non-fasting (or fasting not confirmed): never labelled or scored as fasting.
+                show_as = clinic_config.FASTING_ONLY_MARKERS[match[0]]
+                patient_note = clinic_config.NON_FASTING_GLUCOSE_NOTE if fasting == "N" else \
+                    clinic_config.FASTING_NOT_CONFIRMED_NOTE
+                printed_status = {"N": "'Fasting: N'", "UNKNOWN": "'Fasting: Unknown'",
+                                  "BLANK": "a blank 'Fasting:'"}.get(fasting, f"'Fasting: {fasting}'")
+                label = "GLUCOSE" if match[0] == "Glucose (fasting)" else "INSULIN"
+                staff.append(f"NON-FASTING {label}: the lab header prints {printed_status}; {name} {display!r} on {date} "
+                             f"(page {number}) is shown as {show_as[0]!r} with the lab's range "
                              f"({printed_range or 'none printed'}) and flag, not scored against the fasting range")
+                match = None
             if match is not None:
                 canonical, config = match
                 resolved = resolve_marker_config(canonical, config, sex)

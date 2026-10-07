@@ -101,7 +101,8 @@ def build(name, folder):
             first = 2 if name == "mixed" else 1
             for page in layouts._scan_pages(first):
                 reads[(str(labs), page["page"])] = [page, page]
-        options = {"collected_date": layouts.SCAN_DATE, "age": 44}
+        # Staff enter the draw's own Collected date: a date with no accepted result stops the report.
+        options = {"collected_date": layouts.COLLECTED.get(name, layouts.SCAN_DATE), "age": 44}
         if name == "variant":  # a pasted medication list instead of the structured note
             options["note"] = "Testosterone cypionate 100 mg weekly\nBPC-157 250 mcg daily\n"
         return str(labs), [], reads, options

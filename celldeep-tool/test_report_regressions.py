@@ -357,7 +357,7 @@ def test_occurrence_reconciliation_uses_only_dated_actual_results():
         {"name": "Urinalysis", "date_display": "04/14/2026", "source_label": "CHL",
          "status": "not_performed", "value": None, "disp_value": "", "is_good": None,
          "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
-        {"name": "Occult Blood", "date_display": "04/14/2026", "source_label": "Quest SYN-SPECIMEN-02",
+        {"name": "Urinalysis \u2014 Occult Blood", "date_display": "04/14/2026", "source_label": "Quest SYN-SPECIMEN-02",
          "status": "reported", "value": None, "disp_value": "Negative", "is_good": True,
          "lab_range_lo": 0, "lab_range_hi": 0, "lab_range_display": ""},
         {"name": "Myeloperoxidase", "date_display": "01/13/2026", "source_label": "CHL",
@@ -674,7 +674,7 @@ def test_dedupe_fills_in_a_result_missing_from_only_one_of_two_same_draw_source_
         "name": "Occult Blood Patient", "sex": "male", "provider_note_raw": "",
         "markers": [
             {"name": "Urinalysis", "now": None, "disp_now": ""},  # primary report: not performed
-            {"name": "occult blood", "now": None, "disp_now": "Negative", "is_good_now": True},
+            {"name": "Urinalysis \u2014 Occult Blood", "now": None, "disp_now": "Negative", "is_good_now": True},
         ],
     })
     assert [m.name for m in record.markers] == ["Urinalysis \u2014 Occult Blood"]

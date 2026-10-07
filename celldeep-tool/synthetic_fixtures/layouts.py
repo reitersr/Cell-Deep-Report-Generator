@@ -204,6 +204,9 @@ def variant(path):
     return fx.write_lab_pdf(path, [no_rows, renamed, new_header, known])
 
 
+# The latest Collected date each fixture prints (staff enter it on the upload form).
+COLLECTED = {"quest_digital": "03/02/2026", "chl_digital": "03/02/2026", "labcorp_digital": "03/02/2026"}
+
 FIXTURES = {
     "quest_digital": (quest_digital, None),
     "chl_digital": (chl_digital, None),

@@ -108,6 +108,9 @@ class Marker:
     # ("collected 07:45"). Neither changes scoring.
     display_name: Optional[str] = None
     value_note: Optional[str] = None
+    # Date of a newer result for this test that is shown lab-reported instead of scored (drawn without confirmed
+    # fasting, or on a different assay); the report never calls such a test "not retested".
+    latest_lab_reported_date: Optional[str] = None
 
     # set by scoring.attach_scores() — declared here (not left dynamic) so dataclasses.asdict()
     # actually serializes them when the record is sent to the generation step.

@@ -33,13 +33,14 @@ def _run(tmp_path, monkeypatch, pages):
 
 def test_unparseable_table_on_one_page_is_excluded_and_the_report_still_builds(tmp_path, monkeypatch):
     text, review = _run(tmp_path, monkeypatch, [GOOD, BROKEN_ROW])
-    assert review[0] == ("INCOMPLETE - pages/sections excluded: lab PDF page(s) 2 could not be parsed "
-                         "deterministically; their results are NOT in this report - review them by hand")
+    assert review[0] == ("INCOMPLETE - results excluded: 2 unreadable cell(s)/row(s) on lab PDF page(s) 2; only those "
+                         "results are left out, every readable result on those pages is in this report - review them "
+                         "by hand")
     assert review[1].startswith("  - page 2 (Order SYN-BAD (collected 04/14/2026)): TMAO")
     assert "runs result digits together" in review[1]
     assert "hs-CRP" in text and "TSH" in text
-    # The whole table is excluded, including its readable HbA1c row: nothing is partially kept or guessed.
-    assert "HbA1c" not in text and "TMAO" not in text and "29.0" not in text
+    # Only the unreadable cells are left out (never guessed, never "not performed"); the readable HbA1c row is kept.
+    assert "HbA1c" in text and "TMAO" not in text and "29.0" not in text and "12.4" not in text
     assert "INCOMPLETE" not in text
 
 
@@ -53,8 +54,9 @@ def test_unknown_layout_page_is_excluded_and_other_pages_report(tmp_path, monkey
 def test_excluded_rows_leave_no_audit_or_coverage_trace(tmp_path):
     labs = fx.write_lab_pdf(tmp_path / "labs.pdf", [GOOD, BROKEN_ROW])
     extracted = pipeline.extract(str(labs), [], None, patient_name=fx.PATIENT, audit_root=str(tmp_path))
-    assert {row["name"] for row in extracted["source_rows"]} == {"hs-CRP", "TSH"}
-    assert [item["page"] for item in extracted["parse_exclusions"]] == [2]
+    assert {row["name"] for row in extracted["source_rows"]} == {"hs-CRP", "TSH", "HbA1c", "TMAO"}
+    assert not any(occ["name"] == "TMAO" for row in extracted["source_rows"] for occ in row["occurrences"])
+    assert [item["page"] for item in extracted["parse_exclusions"]] == [2, 2]
     record, notice = pipeline.score_and_build_record(extracted)
     assert not any("COVERAGE GAP" in note for note in notice.other_notes)
     assert notice.incomplete[0].startswith("INCOMPLETE - ")

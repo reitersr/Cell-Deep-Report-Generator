@@ -873,9 +873,12 @@ _NOT_PERFORMED_CELLS = {"tnp", "test not performed", "not performed"}
 _QUALITATIVE_CELLS = {"negative", "positive", "detected", "not detected", "none detected", "trace",
                       "normal", "abnormal", "reactive", "non-reactive", "nonreactive",
                       # printed urine color/clarity results, read literally
-                      "yellow", "straw", "amber", "colorless", "clear", "hazy", "cloudy", "turbid"}
+                      "yellow", "straw", "amber", "colorless", "clear", "hazy", "cloudy", "turbid",
+                      # printed urine microscopy results, read literally
+                      "none seen"}
 _EXPECTED_QUALITATIVE = {"negative", "not detected", "none detected", "normal", "non-reactive", "nonreactive"}
-_MULTIWORD_CELLS = (("test", "not", "performed"), ("not", "performed"), ("not", "detected"), ("none", "detected"))
+_MULTIWORD_CELLS = (("test", "not", "performed"), ("not", "performed"), ("not", "detected"), ("none", "detected"),
+                    ("none", "seen"))
 _STANDALONE_FLAGS = {"H", "L", "HH", "LL"}
 # Words a separate "Flag" column prints, mapped to the H/L flag they state. Anything else is ignored.
 _FLAG_COLUMN_WORDS = {"H": "H", "L": "L", "HH": "HH", "LL": "LL", "HIGH": "H", "LOW": "L"}
@@ -885,6 +888,9 @@ _BOUNDED_RANGE_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?")
 _DATE_COLUMN_PAD_PT = 6.0
 _ORDER_ID_RE = re.compile(r"\border\s*(?:id|#|number)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]*)", re.IGNORECASE)
 _COLLECTED_RE = re.compile(r"\bcollected\s*:?\s*(" + _PRINTED_DATE_RE.pattern + r")", re.IGNORECASE)
+_COLLECTED_TIME_RE = re.compile(r"^\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\b")
+# "Fasting: Y" / "Fasting: N" / "Fasting: Unknown" / "Fasting:" (blank) printed in a draw's header block.
+_FASTING_RE = re.compile(r"\bfasting\s*:\s*([A-Za-z]*)", re.IGNORECASE)
 # Quest's own multi-draw restatements of values printed elsewhere - never a source of truth.
 _TREND_TABLE_TITLES = ("progress summary", "trend summary", "cumulative summary")
 # A document section title ("... Report"); a different exact title ends any table above it.
@@ -899,8 +905,12 @@ _BLOODWORK_HEADER_LABELS = [
     ("current", ("optimal",)), ("current", ("moderate",)), ("current", ("high",)),
     ("historical", ("historical",)), ("historical", ("historical", "result")),
     ("range", ("reference", "range")), ("range", ("reference", "interval")), ("range", ("range",)),
-    ("ignore", ("units",)), ("ignore", ("unit",)), ("ignore", ("lab",)), ("flag", ("flag",)),
+    ("units", ("units",)), ("units", ("unit",)), ("lab", ("lab",)), ("flag", ("flag",)),
 ]
+# Words a repeated column-header line inside a table is made of (never a result row).
+_COLUMN_HEADER_WORDS = {"test", "name", "tests", "analyte", "current", "historical", "result", "results", "relative",
+                        "risk", "optimal", "moderate", "high", "low", "non-optimal", "nonoptimal", "in", "out", "of",
+                        "range", "reference", "interval", "units", "unit", "flag", "lab"}
 
 
 class _AmbiguousCell(ValueError):
@@ -1031,6 +1041,8 @@ def _cell_result(token: str) -> tuple[str, float | None, str]:
         return "not_performed", None, ""
     if low in _QUALITATIVE_CELLS:
         return "final", None, token
+    if _BOUNDED_RANGE_TOKEN_RE.fullmatch(token):
+        return "final", None, token  # a printed count range ("0-2"), shown exactly as printed
     match = _CELL_VALUE_RE.fullmatch(token)
     if match is None:
         return token, None, token
@@ -1085,8 +1097,13 @@ def _match_row_name(name: str, heading: str | None):
 
 def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
                          occurrences: list[dict], unrecognized: list[dict],
-                         row_name: str | None = None, allow_text: bool = False) -> bool:
-    """Apply the single extraction rule to one table line. Returns True for a recognized marker row."""
+                         row_name: str | None = None, allow_text: bool = False,
+                         cell_exclusions: list | None = None) -> bool:
+    """Apply the single extraction rule to one table line. Returns True for a recognized marker row.
+
+    A cell that cannot be read (digits run together, a range or word where a result belongs, no single result in
+    its column, no governing date) is excluded on its own: with cell_exclusions given, it is listed there and every
+    other readable cell of the row is kept; without it (direct callers) the row raises BloodworkParseError."""
     words = _merge_cell_phrases(words)
     value_centers = [(c["x0"] + c["x1"]) / 2 for c, li in zip(header["columns"], header["logical"])
                      if li is not None]
@@ -1107,8 +1124,13 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
     flags: dict[int, str] = {}  # the lab's own printed H/L flag per value column; never computed
     stray: dict[int, list[str]] = {}
     range_words: list[str] = []
-    problems: list[str] = []
+    bad: dict[int, str] = {}  # value column -> why its cell cannot be read; that cell alone is excluded
+    ambiguous: list = []
     value_columns = header["value_columns"]
+
+    def reject(index, reason):
+        bad.setdefault(index, reason)
+
     for word in words[len(name_words):]:
         column = _column_at(word[5], header["bounds"])
         kind = header["columns"][column]["kind"]
@@ -1130,9 +1152,12 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         try:
             pieces = _split_cell_word(word[4])
         except _AmbiguousCell:
-            raise BloodworkParseError(
-                f"{raw_name} ({_section_label(section)}): {word[4]!r} runs result digits together with no "
-                "flag or inequality between them, so its column boundary cannot be read")
+            # The run-together word may hold a neighbouring column's result too: its own column and every value
+            # column of the row with no result of its own are unreadable. Cells that print their own result are kept.
+            ambiguous.append((header["logical"][column],
+                              f"{word[4]!r} runs result digits together with no flag or inequality between them, so "
+                              "its column boundary cannot be read"))
+            continue
         result_shaped = pieces is not None or _is_threshold_token(word[4]) or (
             word[4].lower() in _NOT_PERFORMED_CELLS or word[4].lower() in _QUALITATIVE_CELLS)
         if pieces is None:
@@ -1146,37 +1171,56 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
             if result_shaped and header["logical"][column] is not None:
                 stray.setdefault(header["logical"][column], []).append(word[4])
             continue
+        # A printed range ("0-2") alone in its cell is the result of a lab-reported count (urine microscopy); for a
+        # scored marker it is never a result.
+        printed_range_result = (match is None and len(pieces) == 1 and start not in cells
+                                and _BOUNDED_RANGE_TOKEN_RE.fullmatch(pieces[0]) is not None)
         if (not result_shaped and not allow_text) or start + len(pieces) > len(value_columns):
-            problems.append(word[4])
+            reject(start if start < len(value_columns) else header["logical"][column],
+                   f"[{word[4]!r}] sits in a dated result column but is not a readable result")
             continue
         for offset, piece in enumerate(pieces):
-            if _BOUNDED_RANGE_TOKEN_RE.fullmatch(piece) or start + offset in cells:
-                problems.append(piece)
+            if (_BOUNDED_RANGE_TOKEN_RE.fullmatch(piece) and not printed_range_result) or start + offset in cells:
+                reject(start + offset, f"[{piece!r}] sits in a dated result column but is not a readable result")
             else:
                 cells[start + offset] = piece
                 printed_flag = _CELL_VALUE_RE.fullmatch(piece)
                 if printed_flag and printed_flag.group("flag"):
                     flags[start + offset] = printed_flag.group("flag")
 
-    if problems:
-        raise BloodworkParseError(
-            f"{raw_name} ({_section_label(section)}): {problems} sits in a dated result column but is not a "
-            "readable result")
-    unresolved = sorted(i for i in stray if i not in cells)
-    if unresolved:
-        raise BloodworkParseError(
-            f"{raw_name} ({_section_label(section)}): no single result in the dated "
-            f"{[value_columns[i]['kind'] for i in unresolved]} column(s); tokens printed outside those columns "
-            f"{[t for i in unresolved for t in stray[i]]} are never read as a result")
+    for own, reason in ambiguous:
+        for index in range(len(value_columns)):
+            if index == own or index not in cells:
+                reject(index, reason)
+    for index in sorted(i for i in stray if i not in cells):
+        reject(index, f"no single result in the dated {value_columns[index]['kind']} column; tokens printed outside "
+                      f"that column {stray[index]} are never read as a result")
+
+    def governing_date(index):
+        column = value_columns[index]
+        return _section_date(section) if column["kind"] == "current" else column["date"]
+
+    for index in sorted(cells):
+        if not governing_date(index):
+            reject(index, f"result {cells[index]!r} is in a {value_columns[index]['kind']} column with no "
+                          "governing date")
+
+    for index, reason in sorted(bad.items()):
+        cells.pop(index, None)
+        flags.pop(index, None)
+        detail = f"{raw_name} ({_section_label(section)}): {reason}"
+        if cell_exclusions is None:
+            raise BloodworkParseError(detail)
+        column = value_columns[index]
+        cell_exclusions.append({"name": raw_name, "column": column["kind"], "date": governing_date(index),
+                                "reason": detail, "section": _section_label(section)})
 
     if match is None:
         parsed_cells = []
         for index, column in enumerate(value_columns):
-            date = _section_date(section) if column["kind"] == "current" else column["date"]
+            date = governing_date(index)
             token = cells.get(index)
-            if token is not None and not date:
-                raise BloodworkParseError(f"{raw_name}: {column['kind']} result has no governing date")
-            if date:
+            if date and index not in bad:
                 status, value, display = _cell_result(token) if token is not None else ("not_performed", None, "")
                 parsed_cells.append({"kind": column["kind"], "date_display": date, "status": status,
                                      "value": value, "disp_value": display, "present": token is not None,
@@ -1191,17 +1235,15 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
     canonical, config = match
     lab_lo, lab_hi, lab_display = _printed_lab_range(range_words)
     for index, column in enumerate(value_columns):
-        date = _section_date(section) if column["kind"] == "current" else column["date"]
+        if index in bad:
+            continue  # excluded and listed; never shown as "not performed"
+        date = governing_date(index)
         token = cells.get(index)
         if token is None:
             status, value, disp_value = ("not_performed", None, "") if date else (None, None, "")
             if status is None:
                 continue
         else:
-            if not date:
-                raise BloodworkParseError(
-                    f"{raw_name} ({_section_label(section)}): result {token!r} is in a {column['kind']} "
-                    "column with no governing date")
             status, value, disp_value = _cell_result(token)
         is_good = None
         if config.get("kind") == "categorical" and value is None and disp_value:
@@ -1214,10 +1256,12 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
             "value": value,
             "disp_value": disp_value,
             "is_good": is_good,
-            "lab_range_lo": lab_lo,
-            "lab_range_hi": lab_hi,
-            "lab_range_display": lab_display,
+            # The printed range belongs to the current result; a historical column prints none of its own.
+            "lab_range_lo": lab_lo if column["kind"] == "current" else 0,
+            "lab_range_hi": lab_hi if column["kind"] == "current" else 0,
+            "lab_range_display": lab_display if column["kind"] == "current" else "",
             "lab_flag": flags.get(index, "") if token is not None else "",
+            "column": column["kind"],
         })
     return True
 
@@ -1283,87 +1327,136 @@ def _printed_cells(words):
     return cells
 
 
+def _is_column_header_row(words) -> bool:
+    """A repeated column-header line inside a table ("Optimal Moderate High Units Optimal Non-Optimal / / / /",
+    "In Range Out of Range / / / /"): only column labels, empty date slots and printed dates. Never a result."""
+    tokens = [w[4].strip() for w in words if w[4].strip()]
+    if len(tokens) < 2:
+        return False
+    return all(_header_token(token) in _COLUMN_HEADER_WORDS or set(token) <= set("/&")
+               or _PRINTED_DATE_RE.fullmatch(token) for token in tokens)
+
+
 def _parse_table_region(page, lines, header, section, occurrences, unrecognized, row_audit=None,
-                        printed_lab_codes=()):
+                        printed_lab_codes=(), cell_exclusions=None):
+    """Read every row of one table. With cell_exclusions given, a row or cell that cannot be read is listed there
+    and only it is left out; the rest of the table is kept. Without it, the first such problem raises."""
     groups, name_right, ruled = _table_row_groups(page, lines, header)
     for words in groups:
-        name_words = [w for w in words if w[2] <= name_right
-                      and not _is_cell_token(w[4]) and not _is_threshold_token(w[4])]
-        other_words = [w for w in words if w not in name_words]
-        name_lines = _group_lines(name_words, 4.0)
-        text = " ".join(_line_text(line) for line in name_lines).strip()
-        band_text = " ".join(_line_text(line) for line in _group_lines(words, 4.0)).strip()
-        if name_words and band_text.isupper() and _is_single_phrase(words) and all(
-                not _is_cell_token(w[4]) and not _is_threshold_token(w[4]) for w in words):
-            section["heading"] = band_text
-            continue
-        if _is_table_prose(words, name_right, header):
-            continue
-        if text and not other_words:
-            section["heading"] = text
-            continue
-        cells = []
-        lab_codes = set(printed_lab_codes)
-        assigned = {index: [] for index in range(len(header["columns"]))}
-        for span in _printed_cells(other_words):
-            center = (span[0][0] + span[-1][2]) / 2
-            index = _column_at(center, header["bounds"])
-            column = header["columns"][index]
-            if column["kind"] in ("current", "historical"):
-                tokens = [w[4] for w in span]
-                popped = []
-                while len(tokens) > 1 and tokens[-1] in _STANDALONE_FLAGS:
-                    popped.append(tokens.pop())
-                token = " ".join(tokens)
-                numeric = _CELL_VALUE_RE.fullmatch(token)
-                if popped in (["H"], ["L"]) and numeric and not numeric.group("flag"):
-                    token += popped[0]  # keep the lab's printed flag with its own result
-                assigned[index].append((span[0][0], min(w[1] for w in span),
-                                        span[-1][2], max(w[3] for w in span), token))
-            else:
-                assigned[index].extend(span)
-        for index, column in enumerate(header["columns"]):
-            column_words = assigned[index]
-            if column["kind"] == "ignore":
-                lab_codes.update(w[4] for w in column_words)
-            if column["kind"] in ("current", "historical"):
-                column_words = sorted(column_words, key=lambda w: ((w[1] + w[3]) / 2, w[0]))
-                dated_words = [w for w in column_words
-                               if _within_cell_column(w, column)
-                               and w[4] not in _STANDALONE_FLAGS]
-                phrase = _line_text(dated_words).lower()
-                text_cell = ruled and dated_words and all(
-                    not _is_cell_token(w[4]) and not _is_threshold_token(w[4]) for w in dated_words)
-                if phrase in _NOT_PERFORMED_CELLS or text_cell:
-                    first = dated_words[0]
-                    column_words = [w for w in column_words if w not in dated_words]
-                    token = "TNP" if phrase in _NOT_PERFORMED_CELLS and len(dated_words) > 1 \
-                        else _line_text(dated_words)
-                    column_words.insert(0, (first[0], first[1], first[2], first[3], token))
-            cells.extend(column_words)
-        printed = any((ruled or _is_cell_token(w[4]) or _is_threshold_token(w[4])) for w in cells
-                     if (i := _column_at((w[0] + w[2]) / 2, header["bounds"])) is not None
-                     and header["logical"][i] is not None
-                     and _within_cell_column(w, header["columns"][i]))
-        if not printed:
-            continue
-        if not text:
-            raise BloodworkParseError(
-                f"{_section_label(section)}: result-shaped token has no row name: {_line_text(words)!r}")
-        name = _clean_row_name(text, lab_codes)
-        occurrence_start = len(occurrences)
-        unknown_start = len(unrecognized)
-        before = len(occurrences) + len(unrecognized)
-        # Name words are supplied separately; the row reader sees only non-name cells.
-        _parse_bloodwork_row(cells, header, section, occurrences, unrecognized, row_name=name, allow_text=ruled)
-        if len(occurrences) + len(unrecognized) == before:
-            raise BloodworkParseError(f"{_section_label(section)}: unaccounted result row {name!r}")
-        if row_audit is not None:
-            row_audit.append({"page": page.number + 1 if hasattr(page, "number") else section.get("_page"),
-                              "name": name, "section": section.get("heading"),
-                              "y": min(w[1] for w in words),
-                              "occurrences": [dict(item) for item in occurrences[occurrence_start:]],
-                              "unrecognized": unrecognized[unknown_start:]})
+        if _is_column_header_row(words):
+            continue  # a repeated column-header line, ignored silently
+        try:
+            _parse_table_row(page, words, header, section, occurrences, unrecognized, row_audit, printed_lab_codes,
+                             name_right, ruled, cell_exclusions)
+        except BloodworkHardStop:
+            raise
+        except BloodworkParseError as error:
+            if cell_exclusions is None:
+                raise
+            cell_exclusions.append({"name": None, "column": "row", "date": _section_date(section),
+                                    "reason": str(error), "section": _section_label(section)})
+
+
+def _parse_table_row(page, words, header, section, occurrences, unrecognized, row_audit, printed_lab_codes,
+                     name_right, ruled, cell_exclusions):
+    name_words = [w for w in words if w[2] <= name_right
+                  and not _is_cell_token(w[4]) and not _is_threshold_token(w[4])]
+    other_words = [w for w in words if w not in name_words]
+    name_lines = _group_lines(name_words, 4.0)
+    text = " ".join(_line_text(line) for line in name_lines).strip()
+    band_text = " ".join(_line_text(line) for line in _group_lines(words, 4.0)).strip()
+    if name_words and band_text.isupper() and _is_single_phrase(words) and all(
+            not _is_cell_token(w[4]) and not _is_threshold_token(w[4]) for w in words):
+        section["heading"] = band_text
+        return
+    if _is_table_prose(words, name_right, header):
+        return
+    if text and not other_words:
+        section["heading"] = text
+        return
+    cells = []
+    lab_codes = set(printed_lab_codes)
+    row_lab_codes, unit_words = [], []
+    assigned = {index: [] for index in range(len(header["columns"]))}
+    for span in _printed_cells(other_words):
+        center = (span[0][0] + span[-1][2]) / 2
+        index = _column_at(center, header["bounds"])
+        column = header["columns"][index]
+        if column["kind"] in ("current", "historical"):
+            tokens = [w[4] for w in span]
+            popped = []
+            while len(tokens) > 1 and tokens[-1] in _STANDALONE_FLAGS:
+                popped.append(tokens.pop())
+            token = " ".join(tokens)
+            numeric = _CELL_VALUE_RE.fullmatch(token)
+            if popped in (["H"], ["L"]) and numeric and not numeric.group("flag"):
+                token += popped[0]  # keep the lab's printed flag with its own result
+            assigned[index].append((span[0][0], min(w[1] for w in span),
+                                    span[-1][2], max(w[3] for w in span), token))
+        else:
+            assigned[index].extend(span)
+    for index, column in enumerate(header["columns"]):
+        column_words = assigned[index]
+        if column["kind"] in ("ignore", "lab"):
+            lab_codes.update(w[4] for w in column_words)
+        if column["kind"] == "lab":
+            row_lab_codes.extend(w[4] for w in column_words)
+        if column["kind"] == "units":
+            # The printed unit; legend thresholds that spill into the column are never a unit.
+            unit_words.extend(w[4] for w in column_words if not _is_cell_token(w[4]) and not _is_threshold_token(w[4]))
+        if column["kind"] in ("current", "historical"):
+            column_words = sorted(column_words, key=lambda w: ((w[1] + w[3]) / 2, w[0]))
+            dated_words = [w for w in column_words
+                           if _within_cell_column(w, column)
+                           and w[4] not in _STANDALONE_FLAGS]
+            phrase = _line_text(dated_words).lower()
+            text_cell = ruled and dated_words and all(
+                not _is_cell_token(w[4]) and not _is_threshold_token(w[4]) for w in dated_words)
+            if phrase in _NOT_PERFORMED_CELLS or text_cell:
+                first = dated_words[0]
+                column_words = [w for w in column_words if w not in dated_words]
+                token = "TNP" if phrase in _NOT_PERFORMED_CELLS and len(dated_words) > 1 \
+                    else _line_text(dated_words)
+                column_words.insert(0, (first[0], first[1], first[2], first[3], token))
+        cells.extend(column_words)
+    printed = any((ruled or _is_cell_token(w[4]) or _is_threshold_token(w[4])) for w in cells
+                 if (i := _column_at((w[0] + w[2]) / 2, header["bounds"])) is not None
+                 and header["logical"][i] is not None
+                 and _within_cell_column(w, header["columns"][i]))
+    if not printed:
+        return
+    if not text:
+        raise BloodworkParseError(
+            f"{_section_label(section)}: result-shaped token has no row name: {_line_text(words)!r}")
+    name = _clean_row_name(text, lab_codes)
+    row_lab_codes += [code for code in re.findall(r"\(([A-Z][A-Z0-9]{1,5})\)", text) if code in lab_codes]
+    occurrence_start = len(occurrences)
+    unknown_start = len(unrecognized)
+    before = len(occurrences) + len(unrecognized)
+    excluded_before = len(cell_exclusions) if cell_exclusions is not None else 0
+    # Name words are supplied separately; the row reader sees only non-name cells.
+    _parse_bloodwork_row(cells, header, section, occurrences, unrecognized, row_name=name, allow_text=ruled,
+                         cell_exclusions=cell_exclusions)
+    for occurrence in occurrences[occurrence_start:]:
+        # Kept for a result that may be moved to lab-reported (non-fasting draw), which shows the printed unit.
+        if occurrence["name"] in clinic_config.FASTING_ONLY_MARKERS and occurrence.get("column") == "current" \
+                and unit_words:
+            occurrence["printed_unit"] = " ".join(unit_words)
+    for item in unrecognized[unknown_start:]:
+        item["raw_unit"] = " ".join(unit_words)
+        # A test printed inside another panel under its own lab code (testosterone panel ALBUMIN/GLOB) is a
+        # separate result from the chemistry test of the same name.
+        if scoped := lab_reported.panel_scoped(name, row_lab_codes):
+            item["show_as"] = scoped
+    excluded_now = len(cell_exclusions) if cell_exclusions is not None else 0
+    if len(occurrences) + len(unrecognized) == before and excluded_now == excluded_before:
+        raise BloodworkParseError(f"{_section_label(section)}: unaccounted result row {name!r}")
+    if row_audit is not None:
+        row_audit.append({"page": page.number + 1 if hasattr(page, "number") else section.get("_page"),
+                          "name": name, "section": section.get("heading"),
+                          "y": min(w[1] for w in words),
+                          "occurrences": [dict(item) for item in occurrences[occurrence_start:]],
+                          "unrecognized": unrecognized[unknown_start:]})
 
 
 def _is_single_phrase(words: list[tuple]) -> bool:
@@ -1390,31 +1483,80 @@ def _section_title(words: list[tuple]) -> str | None:
     return None
 
 
-def _dedupe_bloodwork_rows(occurrences, audit):
+def _normalize_fasting(values: set) -> str:
+    """One draw's printed fasting status: 'Y', 'N', or what was printed otherwise ('UNKNOWN', 'BLANK', 'CONFLICT')."""
+    statuses = {"Y" if value in ("Y", "YES") else "N" if value in ("N", "NO") else value for value in values}
+    return statuses.pop() if len(statuses) == 1 else "CONFLICT"
+
+
+def _draw_info(sections: list[dict]) -> dict:
+    """Per printed Collected date: the fasting status and collection time printed in that draw's header block."""
+    info = {"collected_dates": [], "fasting": {}, "times": {}}
+    for section in sections:
+        for date in section["dates"]:
+            if date not in info["collected_dates"]:
+                info["collected_dates"].append(date)
+            if section.get("fasting"):
+                info["fasting"][date] = _normalize_fasting(section["fasting"])
+            if section.get("times"):
+                info["times"][date] = sorted(section["times"])[0] if len(section["times"]) == 1 else None
+    return info
+
+
+def _same_result(left, right) -> bool:
+    return left["status"] == right["status"] and left["value"] == right["value"] and (
+        left["value"] is not None or left["disp_value"] == right["disp_value"])
+
+
+def _dedupe_bloodwork_rows(occurrences, audit, review_notes=None, exclusions=None):
+    """One result per test and date. The draw's own full report (a Current column) wins over the same date printed
+    in a later report's Historical column; a different historical value is a staff warning only. Two full-report
+    values that differ stop the job (BloodworkHardStop). Historical copies that differ from each other with no full
+    report for that date are both left out and listed (exclusions), or stop the job for direct callers."""
     pages = [row["page"] for row in audit for _ in row["occurrences"]]
-    unique = {}
-    sources = {}
+    groups: dict = {}
     for occurrence, page in zip(occurrences, pages, strict=True):
         key = (occurrence["name"], _normalize_date_for_matching(occurrence["date_display"]))
-        if key in unique:
-            previous = unique[key]
-            same_value = previous["value"] == occurrence["value"] and (
-                previous["value"] is not None or previous["disp_value"] == occurrence["disp_value"])
-            if previous["status"] != occurrence["status"] or not same_value:
-                raise BloodworkHardStop(
-                    f"{occurrence['name']} on {occurrence['date_display']}: conflicting results on "
-                    f"pages {sources[key][0]} and {page}: "
-                    f"{previous['disp_value'] or previous['status']!r} versus "
-                    f"{occurrence['disp_value'] or occurrence['status']!r}")
+        groups.setdefault(key, []).append((occurrence, page))
+    kept = []
+    for key, items in groups.items():
+        full = [(occ, page) for occ, page in items if occ.get("column", "current") == "current"]
+        historical = [(occ, page) for occ, page in items if occ.get("column", "current") != "current"]
+        chosen = full or historical
+        first, first_page = chosen[0]
+        for occurrence, page in chosen[1:]:
+            if not _same_result(first, occurrence):
+                if full or exclusions is None:
+                    raise BloodworkHardStop(
+                        f"{occurrence['name']} on {occurrence['date_display']}: conflicting results on "
+                        f"pages {first_page} and {page}: "
+                        f"{first['disp_value'] or first['status']!r} versus "
+                        f"{occurrence['disp_value'] or occurrence['status']!r}")
+                values = " / ".join(dict.fromkeys(f"{occ['disp_value'] or occ['status']} (page {p})"
+                                                  for occ, p in historical))
+                exclusions.append({"page": first_page, "section": first["source_label"], "scope": "cell",
+                                   "date": first["date_display"],
+                                   "reason": f"{first['name']} on {first['date_display']}: historical columns print "
+                                             f"different results ({values}) and no full report for that date is in "
+                                             "the file; not shown"})
+                break
         else:
-            unique[key] = dict(occurrence)
-            sources[key] = []
-        if page not in sources[key]:
-            sources[key].append(page)
-    for key, occurrence in unique.items():
-        if len(sources[key]) > 1:
-            occurrence["source_label"] += "; pages " + ", ".join(map(str, sources[key]))
-    return list(unique.values())
+            if full and historical and review_notes is not None:
+                for occurrence, page in historical:
+                    if not _same_result(first, occurrence):
+                        review_notes.append(
+                            f"HISTORICAL VALUE DIFFERS: {first['name']} on {first['date_display']}: the full report "
+                            f"(page {first_page}) prints {first['disp_value'] or first['status']!r}; a later report's "
+                            f"historical column (page {page}) prints "
+                            f"{occurrence['disp_value'] or occurrence['status']!r}. The full report's value is used.")
+            merged = dict(first)
+            source_pages = list(dict.fromkeys(page for _, page in chosen))
+            if len(source_pages) > 1:
+                merged["source_label"] += "; pages " + ", ".join(map(str, source_pages))
+            kept.append(merged)
+    for occurrence in kept:
+        occurrence.pop("column", None)
+    return kept
 
 
 def _headerless_marker_rows(page_words) -> list[str]:
@@ -1436,7 +1578,7 @@ def _headerless_marker_rows(page_words) -> list[str]:
 
 
 def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
-                            exclusions=None) -> tuple[list[dict], list[dict]]:
+                            exclusions=None, draw_info=None) -> tuple[list[dict], list[dict]]:
     """One rule for every Quest/Cleveland HeartLab section: each result printed in a test-name row is
     paired with the date governing its column - a Current-style column takes its section's own
     Collected: date, a Historical column takes the date printed in its own header. Sections are split
@@ -1487,16 +1629,21 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
         if state["header"] is not None and state["rows"]:
             state["section"]["_page"] = page_number
             marks = (len(occurrences), len(unrecognized), len(audit))
+            cells = []  # single cells/rows that could not be read: only they are left out
             try:
                 _parse_table_region(page, state["rows"], state["header"], state["section"],
-                                    occurrences, unrecognized, audit, printed_lab_codes)
+                                    occurrences, unrecognized, audit, printed_lab_codes, cells)
             except BloodworkHardStop:
                 raise
             except BloodworkParseError as error:
                 # Exclude only this table region; never keep part of it or guess.
                 rollback(marks)
                 excluded.append({"page": page_number, "section": _section_label(state["section"]),
-                                 "reason": str(error)})
+                                 "reason": str(error), "date": _section_date(state["section"])})
+            else:
+                excluded.extend({"page": page_number, "section": item["section"],
+                                 "reason": item["reason"], "date": item["date"],
+                                 "scope": "cell" if item["name"] else "row"} for item in cells)
         state["rows"] = []
 
     def parse_page(page, page_words):
@@ -1504,6 +1651,7 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
             text = _line_text(words)
             order = _ORDER_ID_RE.search(text)
             collected = _COLLECTED_RE.search(text)
+            fasting = _FASTING_RE.search(text)
             title = _section_title(words)
             if title is not None:
                 if title != state["title"]:
@@ -1543,7 +1691,14 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
                 add_dates(target, [date])
                 state["pending_dates"].append(date)
                 switch(target)
-            if order or collected:
+                if time := _COLLECTED_TIME_RE.search(text[collected.end():]):
+                    target.setdefault("times", set()).add(time.group(1))
+            fasting = fasting if state["header"] is None else None  # only the draw's header block
+            if fasting:
+                if state["section"] is None:
+                    switch(new_section(None))
+                state["section"].setdefault("fasting", set()).add(fasting.group(1).strip().upper() or "BLANK")
+            if order or collected or fasting:
                 continue
 
             if state["section"] is None:
@@ -1587,19 +1742,23 @@ def _parse_bloodwork_tables(pdf_pages, row_audit=None, review_notes=None,
             # Exclude only this page: everything it added is removed, nothing is guessed.
             rollback(page_marks)
             state.update(header=None, rows=[], excluded=False, await_dates=False, recent_lines=[])
-            excluded.append({"page": page_number, "section": "whole page", "reason": str(error)})
+            excluded.append({"page": page_number, "section": "whole page", "reason": str(error),
+                             "date": _section_date(state["section"]) if state["section"] else None})
             continue
         if not state["page_had_table"] and (names := _headerless_marker_rows(page_words)):
             excluded.append({"page": page_number, "section": "whole page", "reason": (
                 "result rows printed under no recognized table header (expected 'Current'/'Historical' or "
-                "'In Range'/'Out of Range'), so they were not read: " + ", ".join(names))})
+                "'In Range'/'Out of Range'), so they were not read: " + ", ".join(names)),
+                "date": _section_date(state["section"]) if state["section"] else None})
     if unreadable:
         warning = (f"Lab PDF pages {', '.join(map(str, unreadable))}: no readable text, "
                    "OCR not supported, manual review required")
         print(f"WARNING: {warning}")
         if review_notes is not None:
             review_notes.append(warning)
-    occurrences = _dedupe_bloodwork_rows(occurrences, audit)
+    if draw_info is not None:
+        draw_info.update(_draw_info(sections))
+    occurrences = _dedupe_bloodwork_rows(occurrences, audit, review_notes, excluded)
     # An unrecognized layout is never rendered as an empty bloodwork section without notice. Direct callers
     # (exclusions=None) get the error; the report pipeline excludes the pages, lists them under
     # INCOMPLETE and still builds the rest of the report.
@@ -1769,9 +1928,9 @@ def lab_header_checks(info: dict, staff_collected: str | None, staff_age: int | 
         notes.append(f"SEX CHECK: the lab header prints Sex {info['sex']}; staff entered {staff_sex}; the report "
                      "uses the staff entry")
     fasting_markers = sorted({occ["name"] for occ in occurrences if occ["name"] in ("Glucose (fasting)", "Fasting Insulin")})
-    if info.get("fasting") == "N" and fasting_markers:
-        # Glucose is relabelled by the layout (NON-FASTING GLUCOSE note); anything still labelled fasting is listed.
-        notes.append(f"NON-FASTING DRAW: the lab header prints 'Fasting: N'; {', '.join(fasting_markers)} "
+    if info.get("fasting") not in (None, "Y") and fasting_markers:
+        # Glucose and insulin are relabelled by the layout (NON-FASTING note); anything still labelled fasting is listed.
+        notes.append(f"NON-FASTING DRAW: the lab header prints 'Fasting: {info['fasting']}'; {', '.join(fasting_markers)} "
                      f"{'was' if len(fasting_markers) == 1 else 'were'} drawn non-fasting but the report still labels "
                      f"and scores {'it' if len(fasting_markers) == 1 else 'them'} as fasting (clinic decision, "
                      "docs/open_decisions.md)")
@@ -1863,6 +2022,7 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         start, unknown_start = len(occurrences), len(unknown)
         _parse_bloodwork_row(words, header, section, occurrences, unknown, row_name=name, allow_text=True)
         for occurrence in occurrences[start:]:
+            occurrence.pop("column", None)
             occurrence["source_label"] += f"; pages {row['page']}"
             occurrence["lab_flag"] = row["flag"] or "" if occurrence["disp_value"] else ""
         for item in unknown[unknown_start:]:
@@ -2057,6 +2217,130 @@ def parse_provider_note(note_text: str | None) -> dict:
     return result
 
 
+class LatestDrawNotAccepted(RuntimeError):
+    """The newest draw has no accepted result: no report is built (an older draw would be shown as "now")."""
+
+
+def _occurrence_to_lab_reported(occurrence: dict, show_as: tuple, note: str) -> dict:
+    """A scored-marker result moved to the lab-reported list: as printed, the lab's range, flag and unit, a note."""
+    unit = occurrence.get("printed_unit") or ""
+    return {"raw_name": occurrence["name"], "raw_value": occurrence["disp_value"], "raw_unit": unit,
+            "raw_range": occurrence.get("lab_range_display") or "", "source_context": occurrence["source_label"],
+            "section_heading": None, "show_as": show_as,
+            "cells": [{"kind": "current", "date_display": occurrence["date_display"], "status": occurrence["status"],
+                       "value": occurrence["value"], "disp_value": occurrence["disp_value"], "present": True,
+                       "lab_flag": occurrence.get("lab_flag") or None, "note": note}]}
+
+
+def apply_fasting_status(occurrences: list, unrecognized: list, fasting: dict, moved: dict | None = None) -> list[str]:
+    """Per draw: glucose and fasting insulin are scored only from a draw the lab printed as fasting ("Fasting: Y").
+    When the file prints a fasting status for any draw, every other draw ("N", "Unknown", blank, conflicting, or none
+    printed) has those results moved to lab-reported with a one-line note. Files that print no fasting status at all
+    are unchanged. Returns staff notes."""
+    if not fasting:
+        return []
+    notes, kept = [], []
+    for occurrence in occurrences:
+        shown = clinic_config.FASTING_ONLY_MARKERS.get(occurrence["name"])
+        has_result = occurrence["value"] is not None or occurrence["disp_value"]
+        date_key = _normalize_date_for_matching(occurrence["date_display"])
+        status = next((value for date, value in fasting.items() if _normalize_date_for_matching(date) == date_key),
+                      None)
+        if shown is None or status == "Y" or not has_result:
+            kept.append(occurrence)
+            continue
+        note = clinic_config.NON_FASTING_GLUCOSE_NOTE if status == "N" else clinic_config.FASTING_NOT_CONFIRMED_NOTE
+        printed = {"N": "'Fasting: N'", "UNKNOWN": "'Fasting: Unknown'", "BLANK": "a blank 'Fasting:'",
+                   "CONFLICT": "different fasting statuses", None: "no fasting status"}.get(status, f"'Fasting: {status}'")
+        unrecognized.append(_occurrence_to_lab_reported(occurrence, shown, note))
+        if moved is not None:
+            moved.setdefault(occurrence["name"], []).append(occurrence["date_display"])
+        notes.append(f"NON-FASTING DRAW: {occurrence['date_display']} prints {printed}; {occurrence['name']} "
+                     f"{occurrence['disp_value']!r} is shown as {shown[0]!r} (lab-reported, the lab's range and flag), "
+                     "not scored against the fasting range")
+    occurrences[:] = kept
+    return notes
+
+
+def _range_numbers(text: str | None) -> tuple:
+    return tuple(float(number) for number in re.findall(r"\d+(?:\.\d+)?", text or ""))
+
+
+def apply_assay_changes(occurrences: list, unrecognized: list, sex: str | None,
+                        moved: dict | None = None) -> tuple[list[str], dict]:
+    """A scored test whose printed reference range differs between draws (a different assay or a new range): every
+    draw keeps its own printed range and a note; a draw whose range is not the CellDeep range basis (or that prints no
+    range of its own) is moved to lab-reported, never scored. Returns (staff notes, {marker: note})."""
+    import access_medical
+
+    notes, changed = [], {}
+    by_marker: dict = {}
+    for occurrence in occurrences:
+        if occurrence["value"] is not None or occurrence["disp_value"]:
+            by_marker.setdefault(occurrence["name"], []).append(occurrence)
+    moved_items = []
+    for name, items in by_marker.items():
+        printed = {_range_numbers(item["lab_range_display"]) for item in items if item.get("lab_range_display")}
+        if len(printed) < 2:
+            continue
+        config = resolve_marker_config(name, MARKER_LIBRARY[name], sex)
+        basis = clinic_config.CELLDEEP_RANGE_BASIS.get(name)
+        changed[name] = clinic_config.ASSAY_CHANGED_NOTE
+        for item in items:
+            own = item.get("lab_range_display")
+            if not own:
+                why = "prints no range of its own, so its assay cannot be told"
+            elif basis is not None:
+                why = None if _range_numbers(own) == _range_numbers(basis) else \
+                    f"prints {own}, not the CellDeep range basis {basis}"
+            else:
+                why = access_medical.assay_differs(None, config, own)
+            if why:
+                moved_items.append(item)
+                if moved is not None:
+                    moved.setdefault(name, []).append(item["date_display"])
+                group = {"Hormones": "Hormones", "Thyroid": "Hormones", "Lipids": "Lipids",
+                         "Inflammation": "Inflammation"}.get(config.get("category"), "Chemistry")
+                unrecognized.append(_occurrence_to_lab_reported(item, (name, group), clinic_config.ASSAY_CHANGED_NOTE))
+                notes.append(f"ASSAY OR RANGE CHANGED: {name} {item['disp_value']!r} on {item['date_display']} {why}; "
+                             "shown lab-reported with the lab's range and flag, not scored")
+        ranges = "; ".join(f"{item['date_display']}: {item.get('lab_range_display') or 'none printed'}"
+                           for item in sorted(items, key=lambda i: _normalize_date_for_matching(i["date_display"])))
+        notes.append(f"ASSAY OR RANGE CHANGED: {name} prints different reference ranges across draws ({ranges}); "
+                     "each draw is shown with its own range - not directly comparable")
+    occurrences[:] = [item for item in occurrences if not any(item is other for other in moved_items)]
+    return notes, changed
+
+
+def latest_draw_block(printed_dates: list, staff_date: str | None, occurrences: list, lab_items: list,
+                      parse_exclusions: list) -> str | None:
+    """Why the report must not be built, or None: the staff-entered Collected date, or the latest Collected date
+    printed in the lab PDF, has no accepted result."""
+    if not clinic_config.LATEST_DRAW_GUARD:
+        return None
+    accepted = {_normalize_date_for_matching(occ["date_display"]) for occ in occurrences
+                if occ["value"] is not None or occ["disp_value"]}
+    accepted |= {_normalize_date_for_matching(result["date_display"]) for item in lab_items for result in item["results"]}
+    dated = [date for date in printed_dates if isinstance(_normalize_date_for_matching(date), tuple)]
+    problems = []
+    if dated:
+        latest = max(dated, key=_normalize_date_for_matching)
+        if _normalize_date_for_matching(latest) not in accepted:
+            problems.append(f"the latest Collected date printed in the lab PDF, {latest}, has no accepted result")
+    if not accepted:
+        return None  # no bloodwork at all: nothing older can be shown as "now" (pages are listed under INCOMPLETE)
+    if staff_date and _normalize_date_for_matching(staff_date) not in accepted:
+        problems.append(f"the entered bloodwork Collected date, {staff_date}, has no accepted result")
+    if not problems:
+        return None
+    lines = ["Report not generated: " + "; ".join(problems) + ". An older draw is never shown as the current one."]
+    if summary := excluded_draw_dates(parse_exclusions):
+        lines.append(summary + ".")
+    lines.append("Check the entered Collected date and the lab PDF (its pages for that draw may be missing or "
+                 "unreadable), then try again.")
+    return " ".join(lines)
+
+
 def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             patient_name: str | None = None, audit_root: str | None = None,
             client: Anthropic | None = None, collected_date: str | None = None, age: int | None = None,
@@ -2072,6 +2356,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     dob_sources = []  # (source label, (y, m, d)); used only to compute age, never stored
     printed_names = []  # (source, page or None, name as printed) for the staff-notes header
     layout, layout_info = None, {}  # a registered lab layout (lab_layouts) and what its header printed
+    draw_info = {}  # per printed Collected date: fasting status and collection time (default table parser)
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
             pages = list(document)
@@ -2102,7 +2387,9 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             elif digital_pages:
                 occurrences, unrecognized = _parse_bloodwork_tables(
                     digital_pages, row_audit=row_audit, review_notes=lab_review_notes,
-                    exclusions=parse_exclusions)
+                    exclusions=parse_exclusions, draw_info=draw_info)
+                if window := _morning_window(digital_pages):
+                    draw_info["morning_window"] = window
             if scans:
                 scanned, scan_unknown, scan_notes = _extract_scan_bloodwork(
                     scans, digital_pages, client, row_audit, patient_name, collected_date, dob_sources,
@@ -2111,6 +2398,11 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                 unrecognized.extend(scan_unknown)
                 lab_review_notes.extend(scan_notes)
     scan_summary = _scan_summary(scan_numbers, scan_notes, collected_date) if scan_numbers else []
+    moved_to_lab_reported = {}  # scored test -> dates of results shown lab-reported instead (fasting, assay)
+    lab_review_notes.extend(apply_fasting_status(occurrences, unrecognized, draw_info.get("fasting", {}),
+                                                 moved_to_lab_reported))
+    assay_notes, assay_changed = apply_assay_changes(occurrences, unrecognized, sex, moved_to_lab_reported)
+    lab_review_notes.extend(assay_notes)
     lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
     lab_review_notes.extend(lab_notes)
     dexa_exclusions = []  # DEXA pages not attributed to this patient: listed under INCOMPLETE
@@ -2165,6 +2457,12 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                         *lab_header_checks(layout_info, collected_date, age, sex, dexa_info, occurrences)],
         "lab_layout": layout.NAME if layout is not None else None,
         "lab_header": layout_info,
+        "draw_info": draw_info,
+        "assay_changed": assay_changed,
+        "moved_to_lab_reported": moved_to_lab_reported,
+        "blocked": latest_draw_block(
+            [*draw_info.get("collected_dates", []), *([layout_info["collected"]] if layout_info.get("collected") else [])],
+            collected_date if labs_pdf else None, occurrences, lab_items, parse_exclusions),
     }
 
     audit_base = Path(audit_root or tempfile.gettempdir()) / "celldeep_extraction_audits"
@@ -2270,6 +2568,63 @@ def _clock_minutes(text: str | None) -> int | None:
             return None
         hour = hour % 12 + (12 if match[3].upper() == "PM" else 0)
     return hour * 60 + minute if hour < 24 and minute < 60 else None
+
+
+def _morning_window(pages) -> tuple | None:
+    """The lab's printed morning window for cortisol ("Morning (6-10 AM): ..."), when exactly one is printed."""
+    import access_medical
+
+    windows = {(int(match[1]), int(match[2])) for page in pages
+               for match in access_medical._MORNING_WINDOW_RE.finditer(_page_text(page))}
+    return windows.pop() if len(windows) == 1 else None
+
+
+def _draw_time_text(time: str | None) -> str:
+    if time is None:
+        return clinic_config.COLLECTION_TIME_NOT_RECORDED
+    if time.strip() in clinic_config.PLACEHOLDER_COLLECTION_TIMES:
+        return clinic_config.COLLECTION_TIME_NOT_RECORDED
+    return f"collected {time}"
+
+
+def label_cortisol_draws(markers: list, draw_info: dict) -> list[str]:
+    """Multi-draw reports (default table parser): "Cortisol, Total (AM)" keeps "(AM)" only when every shown draw's
+    printed collection time is inside the lab's printed morning window; each draw's time is shown (a placeholder time
+    such as 00:01, or none, reads clinic_config.COLLECTION_TIME_NOT_RECORDED). Applies only when the file prints
+    collection times."""
+    times = draw_info.get("times") or {}
+    if not times:
+        return []
+    window = draw_info.get("morning_window")
+    notes = []
+    for marker in markers:
+        if marker.name != "Cortisol, Total (AM)":
+            continue
+        dates = [date for date in [marker.then_date_display if marker.then is not None or marker.disp_then else None,
+                                   *[entry["date_display"] for entry in marker.full_history],
+                                   marker.now_date_display if marker.now is not None or marker.disp_now else None]
+                 if date]
+        if not dates:
+            continue
+        per_draw = []
+        inside_all = window is not None
+        for date in dates:
+            key = _normalize_date_for_matching(date)
+            time = next((value for printed, value in times.items() if _normalize_date_for_matching(printed) == key), None)
+            real = time is not None and time.strip() not in clinic_config.PLACEHOLDER_COLLECTION_TIMES
+            minutes = _clock_minutes(time) if real else None
+            inside = minutes is not None and window is not None and window[0] * 60 <= minutes <= window[1] * 60
+            inside_all = inside_all and inside
+            per_draw.append((date, _draw_time_text(time if real else None)))
+        marker.display_name = "Cortisol, Total (AM)" if inside_all else "Cortisol, Total"
+        marker.value_note = per_draw[0][1] if len(per_draw) == 1 else \
+            "; ".join(f"{text} on {date}" for date, text in per_draw)
+        if not inside_all:
+            why = "no morning window printed" if window is None else \
+                "not every draw's collection time is inside the lab's morning window " \
+                f"{window[0]}-{window[1]} ({'; '.join(f'{date}: {text}' for date, text in per_draw)})"
+            notes.append(f"CORTISOL LABEL: shown as 'Cortisol, Total' without '(AM)' ({why})")
+    return notes
 
 
 def label_cortisol(markers: list, lab_header: dict) -> list[str]:
@@ -2462,6 +2817,16 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                       for item in extracted.get("lab_reported", [])],
     )
     notice.other_notes.extend(label_cortisol(markers, extracted.get("lab_header") or {}))
+    notice.other_notes.extend(label_cortisol_draws(markers, extracted.get("draw_info") or {}))
+    for marker in markers:
+        dates = (extracted.get("moved_to_lab_reported") or {}).get(marker.name, [])
+        shown = [d for d in (marker.now_date_display, marker.then_date_display) if d]
+        newer = [d for d in dates if not shown or _normalize_date_for_matching(d) > max(
+            _normalize_date_for_matching(d2) for d2 in shown)]
+        if newer:
+            marker.latest_lab_reported_date = max(newer, key=_normalize_date_for_matching)
+        if note := (extracted.get("assay_changed") or {}).get(marker.name):
+            marker.value_note = f"{marker.value_note}; {note}" if marker.value_note else note
     censored = [f"{m.name} {disp!r} on {date}" + (f" (lab flag {flag})" if flag else "")
                 for m in markers
                 for disp, value, date, flag in ((m.disp_then, m.then, m.then_date_display, m.lab_flag_then),
@@ -2483,13 +2848,21 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                                    for d in record.dexa_history):
         notice.other_notes.append("DEXA VAT/SAT NOT FOUND: no accepted DEXA page prints visceral fat (VAT/SAT page "
                                   "missing or excluded); the report shows no visceral-fat line - check the DEXA file")
-    exclusions = extracted.get("parse_exclusions", [])
+    exclusions = [item for item in extracted.get("parse_exclusions", []) if not _is_cell_exclusion(item)]
+    cell_exclusions = [item for item in extracted.get("parse_exclusions", []) if _is_cell_exclusion(item)]
     if exclusions:
         pages = sorted({item["page"] for item in exclusions})
         notice.incomplete = [
             f"INCOMPLETE - pages/sections excluded: lab PDF page(s) {', '.join(map(str, pages))} could not be "
             "parsed deterministically; their results are NOT in this report - review them by hand",
             *[f"  - page {item['page']} ({item['section']}): {item['reason']}" for item in exclusions]]
+    if cell_exclusions:
+        pages = sorted({item["page"] for item in cell_exclusions})
+        notice.incomplete += [
+            f"INCOMPLETE - results excluded: {len(cell_exclusions)} unreadable cell(s)/row(s) on lab PDF page(s) "
+            f"{', '.join(map(str, pages))}; only those results are left out, every readable result on those pages is "
+            "in this report - review them by hand",
+            *[f"  - page {item['page']} ({item['section']}): {item['reason']}" for item in cell_exclusions]]
     notice.incomplete.extend(f"INCOMPLETE - row excluded: {item['name']} ({scan_row_reason(item)}) - "
                              f"scanned lab page {item['page']}; not in this report"
                              for item in extracted.get("scan_row_exclusions", []))
@@ -2537,12 +2910,34 @@ def note_status(note_text: str | None, note: dict) -> str:
     return f"read; {unread} line(s) outside the template not read" if unread else "read"
 
 
+def _is_cell_exclusion(item: dict) -> bool:
+    """One unreadable cell or row, as opposed to a whole page or table section."""
+    return item.get("scope") in ("cell", "row")
+
+
+def excluded_draw_dates(parse_exclusions) -> str | None:
+    """'Draw dates with excluded lab results: 03/02/2026 (pages 3, 4); undated (page 7)' - for the stop screen."""
+    by_date: dict = {}
+    for item in parse_exclusions:
+        if "date" in item:  # layouts that track the draw of each exclusion
+            by_date.setdefault(item["date"] or "undated", set()).add(item["page"])
+    if not by_date:
+        return None
+    order = sorted(by_date, key=lambda date: (date == "undated", _normalize_date_for_matching(date)
+                                              if date != "undated" else ()))
+    return "Draw dates with excluded lab pages or results: " + "; ".join(
+        f"{date} (page{'s' if len(by_date[date]) > 1 else ''} {', '.join(map(str, sorted(by_date[date])))})"
+        for date in order)
+
+
 def preflight_items(parse_exclusions, scan_notes, scan_row_exclusions, dexa_exclusions, dexa_info,
                     unrecognized=()) -> list[str]:
     """Every lab page/section, scanned result row, unrecognized printed result and DEXA page left out of the
     report, one line each, for the confirmation step before the report is built (staff can stop there). Only
     result rows count: a heading or label row with no value is never listed. Empty when nothing was left out."""
     items = [f"Lab PDF page {item['page']} ({item['section']}): {item['reason']}" for item in parse_exclusions]
+    if summary := excluded_draw_dates(parse_exclusions):
+        items.insert(0, summary)
     for note in scan_notes:
         if match := _SCAN_PAGE_EXCLUDED_RE.match(note):
             items.append(f"Lab PDF page {match[1]} (scanned): {match[2]}")
@@ -2551,10 +2946,16 @@ def preflight_items(parse_exclusions, scan_notes, scan_row_exclusions, dexa_excl
     items += [f"DEXA file {key[0]} page {key[1]}: {reason}" for key, reason in dexa_exclusions]
     items += [f"DEXA file {key[0]} page {key[1]}: could not be read ({reason})"
               for key, reason in dexa_info.get("failed", [])]
-    if unrecognized:
-        names = ", ".join(dict.fromkeys(" ".join(item["raw_name"].split()) for item in unrecognized))
-        items.append(f"Lab PDF: {len(unrecognized)} printed result(s) with a test name the tool does not recognize, "
+    left_out = [item for item in unrecognized if not item.get("shown_as_lab_reported")]
+    shown = [item for item in unrecognized if item.get("shown_as_lab_reported")]
+    if left_out:
+        names = ", ".join(dict.fromkeys(" ".join(item["raw_name"].split()) for item in left_out))
+        items.append(f"Lab PDF: {len(left_out)} printed result(s) with a test name the tool does not recognize, "
                      f"left out of the report and listed in the staff notes: {names}")
+    if shown:
+        names = ", ".join(dict.fromkeys(" ".join(item["raw_name"].split()) for item in shown))
+        items.append(f"Lab PDF: {len(shown)} printed result(s) with a test name the tool does not recognize, shown "
+                     f"as lab-reported (not scored) and listed in the staff notes: {names}")
     return items
 
 
@@ -2564,7 +2965,8 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
     info = extracted.get("dexa_info", {})
     excluded_dexa = extracted.get("dexa_exclusions", [])
     lab = extracted.get("lab_pages", {"text": [], "scanned": []})
-    lab_excluded = sorted({item["page"] for item in extracted.get("parse_exclusions", [])})
+    lab_excluded = sorted({item["page"] for item in extracted.get("parse_exclusions", [])
+                           if not _is_cell_exclusion(item)})
     scan_excluded = sorted({int(m[1]) for note in extracted.get("other_notes", [])
                             if (m := _SCAN_PAGE_EXCLUDED_RE.match(note))})
     ages = sorted({age for _, age in info.get("accepted", []) if age}, key=float)
@@ -2596,7 +2998,8 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
         lines.append(f"  Lab pages accepted: {', '.join(map(str, sorted(kept_text + kept_scan))) or 'none'}"
                      + (f" (scanned: {', '.join(map(str, kept_scan))})" if kept_scan else ""))
         for item in extracted.get("parse_exclusions", []):
-            lines.append(f"  LAB EXCLUDED page {item['page']} ({item['section']}): {item['reason']}")
+            what = "LAB RESULT EXCLUDED" if _is_cell_exclusion(item) else "LAB EXCLUDED"
+            lines.append(f"  {what} page {item['page']} ({item['section']}): {item['reason']}")
         for note in extracted.get("other_notes", []):
             if match := _SCAN_PAGE_EXCLUDED_RE.match(note):
                 lines.append(f"  LAB EXCLUDED page {match[1]} (scanned): {match[2]}")
@@ -2783,6 +3186,9 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     print("Step 1/3: parsing source documents...")
     extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client,
                         collected_date=collected_date, age=age, sex=sex)
+    if extracted.get("blocked"):
+        print("generation blocked: the latest bloodwork draw has no accepted result")  # value-free
+        raise LatestDrawNotAccepted(extracted["blocked"])
     if confirm is not None and extracted["preflight"] and not confirm(list(extracted["preflight"])):
         raise GenerationAborted("stopped by staff at the confirmation step")
     extracted["name"] = patient_name
@@ -2799,7 +3205,9 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
 
     print("Step 2/3: scoring (deterministic, no AI)...")
     record, notice = score_and_build_record(extracted)
-    notice.unrecognized_markers.extend(UnrecognizedMarker(**raw) for raw in extracted["unrecognized_markers"])
+    fields = UnrecognizedMarker.__dataclass_fields__
+    notice.unrecognized_markers.extend(UnrecognizedMarker(**{key: value for key, value in raw.items() if key in fields})
+                                       for raw in extracted["unrecognized_markers"])
     notice.other_notes.extend(completeness_notice.other_notes)
 
     print("Step 3/3: filling report templates (deterministic, no AI)...")

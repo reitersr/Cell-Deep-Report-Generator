@@ -234,7 +234,7 @@ MARKER_LIBRARY = {
             "female": dict(lo=None, hi=None, disp_range="postmenopausal BHRT target only"),
             "male": dict(lo=20, hi=50, disp_range="20\u201350"),
         },
-        aliases=["shbg", "sex hormone binding globulin", "sex hormone-binding globulin", "sex hormone binding globulin, serum", "sex hormone bind globulin"]),
+        aliases=["shbg", "sex hormone binding globulin", "sex hormone-binding globulin", "sex hormone binding globulin, serum", "sex hormone bind globulin", "sex hormone binding glob"]),
     "PSA Total": dict(category="Also Monitored", unit="ng/mL", kind="bounded",
         direction="lower", optimal=4.0, moderate=4.0, disp_range="optimal \u22644.0",
         aliases=["psa", "psa total", "psa, total", "prostate specific antigen", "total psa", "prostate-specific antigen",
@@ -250,7 +250,7 @@ MARKER_LIBRARY = {
                  "Troponin T, High Sensitivity (hs-TnT)"]),
     "Urinalysis \u2014 Occult Blood": dict(category="Also Monitored", unit="", kind="categorical",
         disp_range="expected negative",
-        aliases=["urinalysis", "occult blood", "urine occult blood"]),
+        aliases=["urinalysis"]),
 }
 
 # Data category -> patient-facing category name (matches PATIENT_TO_DATA in build_final_v7.py exactly)

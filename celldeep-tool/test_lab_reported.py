@@ -39,7 +39,7 @@ def _items(extracted):
 def test_listed_tests_show_printed_value_range_and_lab_flag(extracted):
     items = _items(extracted)
     assert items["Hemoglobin"]["results"] == [
-        {"date_display": DATE, "disp_value": "17.6", "lab_flag": "H", "lab_range": "13.2-17.1"}]
+        {"date_display": DATE, "disp_value": "17.6", "lab_flag": "H", "lab_range": "13.2-17.1", "unit": "g/dL"}]
     assert items["Hematocrit"]["results"][0]["lab_flag"] == "H"
     assert items["Sodium"]["results"][0]["lab_flag"] is None
     assert items["Hemoglobin"]["group"] == "Complete Blood Count"
@@ -63,7 +63,8 @@ def test_any_lab_flagged_result_is_shown_and_still_reviewed(extracted):
     assert items["Novel Synthetic Assay"]["group"] == lab_reported.OTHER_FLAGGED
     staff = {item["raw_name"] for item in extracted["unrecognized_markers"]}
     assert "Novel Synthetic Assay" in staff  # shown to the patient AND queued for the library
-    assert "Unflagged Synthetic Assay" in staff and "Unflagged Synthetic Assay" not in items
+    # An unflagged unaliased row with the lab's unit and range is shown too, under the lab's own section heading.
+    assert "Unflagged Synthetic Assay" in staff and items["Unflagged Synthetic Assay"]["group"] == lab_reported.OTHER_RESULTS
 
 
 def test_conventional_troponin_is_not_mapped_to_high_sensitivity_troponin(extracted):

@@ -19,6 +19,7 @@ from schema import normalize_date_for_matching
 
 URINALYSIS = "Urinalysis"
 OTHER_FLAGGED = "Other Lab-Flagged Results"
+OTHER_RESULTS = "Other Lab Results"  # an unaliased printed result under no section heading
 GROUP_ORDER = ("Complete Blood Count", "Chemistry", "Iron Studies", "Lipids", "Fatty Acids (OmegaCheck)",
                "Cardiovascular", "Inflammation", "Hormones", "Tumor Markers", "Infectious Disease", URINALYSIS,
                OTHER_FLAGGED)
@@ -42,12 +43,12 @@ LAB_REPORTED_LIBRARY = {
         ("Platelet Count", ["platelet count", "platelets", "plt"]),
         ("MPV", ["mpv", "mean platelet volume"]),
         ("Absolute Neutrophils", ["absolute neutrophils", "neutrophils, absolute", "neutrophils (absolute)",
-                                  "neutrophil #"]),
+                                  "neutrophil #", "neutrophil absolute"]),
         ("Absolute Lymphocytes", ["absolute lymphocytes", "lymphocytes, absolute", "lymphs (absolute)",
-                                  "lymphocyte #"]),
-        ("Absolute Monocytes", ["absolute monocytes", "monocytes, absolute", "monocytes (absolute)", "monocyte #"]),
-        ("Absolute Eosinophils", ["absolute eosinophils", "eosinophils, absolute", "eos (absolute)", "eosinophil #"]),
-        ("Absolute Basophils", ["absolute basophils", "basophils, absolute", "baso (absolute)", "basophil #"]),
+                                  "lymphocyte #", "lymphocyte absolute"]),
+        ("Absolute Monocytes", ["absolute monocytes", "monocytes, absolute", "monocytes (absolute)", "monocyte #", "monocyte absolute"]),
+        ("Absolute Eosinophils", ["absolute eosinophils", "eosinophils, absolute", "eos (absolute)", "eosinophil #", "eosinophil absolute"]),
+        ("Absolute Basophils", ["absolute basophils", "basophils, absolute", "baso (absolute)", "basophil #", "basophil absolute"]),
         ("Neutrophils %", ["neutrophils", "neutrophils %", "neutrophils, percent", "neutrophils (%)",
                            "neutrophil %"]),
         ("Lymphocytes %", ["lymphocytes", "lymphocytes %", "lymphocytes, percent", "lymphs", "lymphocyte %"]),
@@ -126,7 +127,7 @@ LAB_REPORTED_LIBRARY = {
         ("Color", ["color"]), ("Appearance", ["appearance"]), ("Specific Gravity", ["specific gravity"]),
         ("pH", ["ph"]), ("Glucose", ["glucose"]), ("Bilirubin", ["bilirubin", "bili"]), ("Ketones", ["ketones"]),
         ("Protein", ["protein"]), ("Nitrite", ["nitrite"]), ("Leukocyte Esterase", ["leukocyte esterase", "leukocytes"]),
-        ("Urobilinogen", ["urobilinogen"]), ("Blood", ["blood", "occult blood"]), ("WBC", ["wbc"]), ("RBC", ["rbc"]),
+        ("Urobilinogen", ["urobilinogen"]), ("Blood", ["blood", "occult blood", "urine occult blood"]), ("WBC", ["wbc"]), ("RBC", ["rbc"]),
         ("Squamous Epithelial Cells", ["squamous epithelial cells"]), ("Bacteria", ["bacteria"]),
         ("Hyaline Cast", ["hyaline cast", "hyaline casts"]), ("Yeast", ["yeast"]),
         ("Reflexive Urine Culture", ["reflexive urine culture"]),
@@ -134,6 +135,29 @@ LAB_REPORTED_LIBRARY = {
 }
 
 _FLAGS = {"H", "L", "HH", "LL"}
+
+# Rows a lab prints inside another test's panel under that panel's own lab code: (printed name, lab code) ->
+# (shown name, group). They are separate results from the chemistry test of the same name, never a conflict.
+PANEL_SCOPED = {
+    ("albumin", "AMD"): ("Albumin (testosterone panel)", "Hormones"),
+    ("glob", "AMD"): ("Globulin (testosterone panel)", "Hormones"),
+    ("globulin", "AMD"): ("Globulin (testosterone panel)", "Hormones"),
+}
+
+
+def panel_scoped(raw_name, lab_codes):
+    """(shown name, group) for a row printed under a panel's own lab code, else None. Exact name and code only."""
+    for code in lab_codes or ():
+        if (found := PANEL_SCOPED.get((_key(raw_name), code.strip().upper()))) is not None:
+            return found
+    return None
+
+
+def _group_rank(group):
+    """Library groups in GROUP_ORDER; the lab's own section headings after Urinalysis, before the flagged list."""
+    if group in GROUP_ORDER:
+        return GROUP_ORDER.index(group) * 2
+    return GROUP_ORDER.index(OTHER_FLAGGED) * 2 - 1
 
 
 def _key(text):
@@ -170,10 +194,14 @@ def _results(unknown):
             continue
         flag = cell.get("lab_flag")
         unit = (unknown.get("raw_unit") or "").strip()
+        # The printed range and unit belong to the current result; a historical column prints neither.
+        current = cell.get("kind", "current") == "current"
         results.append({"date_display": cell["date_display"], "disp_value": cell["disp_value"],
                         "lab_flag": flag if flag in _FLAGS else None,
-                        "lab_range": (unknown.get("raw_range") or "").strip() or None,
-                        **({"unit": unit} if unit else {})})  # the lab's printed unit only, never filled in
+                        "lab_range": ((unknown.get("raw_range") or "").strip() or None) if current else None,
+                        **({"unit": unit} if unit and current else {}),  # the lab's printed unit only
+                        **({"note": cell["note"]} if cell.get("note") else {}),
+                        "_column": "current" if current else "historical"})
     return results
 
 
@@ -193,11 +221,19 @@ def build(unrecognized):
                  ) if results else None
         if match is None:
             remaining.append(unknown)
-            if not any(result["lab_flag"] for result in results):
+            flagged = any(result["lab_flag"] for result in results)
+            # A readable result row (name, value, and the lab's unit or range) with no CellDeep alias is shown as
+            # printed under the lab's own section heading; it stays in the staff list so the library can grow.
+            readable = bool(results) and bool((unknown.get("raw_unit") or "").strip()
+                                              or (unknown.get("raw_range") or "").strip())
+            if not (flagged or readable):
                 continue
+            unknown["shown_as_lab_reported"] = True
             urine = is_urinalysis(_heading(unknown))
             name = " ".join(unknown["raw_name"].split())
-            canonical, group = (f"{URINALYSIS} — {name}" if urine else name), OTHER_FLAGGED
+            group = URINALYSIS if urine and not flagged else OTHER_FLAGGED if flagged else \
+                (" ".join((_heading(unknown) or "").split()) or OTHER_RESULTS)
+            canonical = f"{URINALYSIS} — {name}" if urine else name
         else:
             canonical, group = match
         item = items.setdefault(_key(canonical), {"name": canonical, "group": group, "results": [],
@@ -213,16 +249,29 @@ def build(unrecognized):
             by_date.setdefault(normalize_date_for_matching(result["date_display"]), []).append(result)
         kept = []
         for date, results in by_date.items():
+            # The draw's own full report wins over a later report's historical column; a difference is a warning.
+            full = [r for r in results if r["_column"] == "current"]
+            if full:
+                for other in (r for r in results if r["_column"] != "current"):
+                    if (other["disp_value"], other["lab_flag"]) != (full[0]["disp_value"], full[0]["lab_flag"]):
+                        notes.append(f"HISTORICAL VALUE DIFFERS: {item['name']!r} on {full[0]['date_display']}: the "
+                                     f"full report prints {full[0]['disp_value']!r}; a later report's historical column "
+                                     f"prints {other['disp_value']!r}. The full report's value is used.")
+                results = full
             distinct = {(r["disp_value"], r["lab_flag"]) for r in results}
             if len(distinct) > 1:
                 notes.append(f"LAB-REPORTED CONFLICT: {item['name']!r} on {results[0]['date_display']} was printed "
                              f"with different results {sorted(map(str, distinct))}; not shown - manual review required")
                 continue
             ranges = {r["lab_range"] for r in results if r["lab_range"]}
-            kept.append({**results[0], "lab_range": next(iter(ranges)) if len(ranges) == 1 else None})
+            units = {r["unit"] for r in results if r.get("unit")}
+            result = {key: value for key, value in results[0].items() if key not in ("_column", "unit")}
+            kept.append({**result, "lab_range": next(iter(ranges)) if len(ranges) == 1 else None,
+                         **({"unit": next(iter(units))} if len(units) == 1 else {})})
         if kept:
             kept.sort(key=lambda r: normalize_date_for_matching(r["date_display"]))
             final.append({**item, "results": kept})
-    final.sort(key=lambda item: (GROUP_ORDER.index(item["group"]), list(LAB_REPORTED_LIBRARY).index(item["name"])
+    final.sort(key=lambda item: (_group_rank(item["group"]), item["group"],
+                                 list(LAB_REPORTED_LIBRARY).index(item["name"])
                                  if item["name"] in LAB_REPORTED_LIBRARY else 0, item["name"]))
     return final, remaining, notes

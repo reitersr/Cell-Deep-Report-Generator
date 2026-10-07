@@ -60,7 +60,8 @@
           "date_display": "03/02/2026",
           "disp_value": "17.6",
           "lab_flag": "H",
-          "lab_range": "13.0-17.0"
+          "lab_range": "13.0-17.0",
+          "unit": "g/dL"
         }
       ]
     },
@@ -72,7 +73,8 @@
           "date_display": "03/02/2026",
           "disp_value": "52.3",
           "lab_flag": "H",
-          "lab_range": "37.5-51.0"
+          "lab_range": "37.5-51.0",
+          "unit": "%"
         }
       ]
     },
@@ -84,7 +86,8 @@
           "date_display": "03/02/2026",
           "disp_value": "250",
           "lab_flag": null,
-          "lab_range": "150-450"
+          "lab_range": "150-450",
+          "unit": "x10E3/uL"
         }
       ]
     },
@@ -96,7 +99,8 @@
           "date_display": "03/02/2026",
           "disp_value": "5.6",
           "lab_flag": "H",
-          "lab_range": "3.5-5.2"
+          "lab_range": "3.5-5.2",
+          "unit": "mmol/L"
         }
       ]
     },
@@ -108,7 +112,8 @@
           "date_display": "03/02/2026",
           "disp_value": "0.2",
           "lab_flag": "L",
-          "lab_range": "0.5-2.0"
+          "lab_range": "0.5-2.0",
+          "unit": "U/L"
         }
       ]
     }

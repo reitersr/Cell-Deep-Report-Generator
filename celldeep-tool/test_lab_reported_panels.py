@@ -3,6 +3,7 @@ lab-flagged result reaches the patient report, including results from a middle d
 
 import fitz
 
+import lab_reported
 import pipeline
 import template
 from synthetic_fixtures import deterministic_fixtures as fx
@@ -72,11 +73,14 @@ ALIAS_PANEL = [  # invented values; names as one lab prints them
 def test_spelled_out_chemistry_names_and_prolactin_are_shown_not_scored(tmp_path):
     extracted, record, notice, text, _ = _render(tmp_path, [layouts._quest_page("03/02/2026", ALIAS_PANEL, "SYN-ALIAS")])
     shown = {item.name: item.results[-1]["disp_value"] for item in record.lab_reported}
+    # "Apo A1" has no alias but prints a value and the lab's range: shown as printed under the lab's own section
+    # heading (none here: "Other Lab Results"), never scored (docs/open_decisions.md #13).
     assert shown == {"Urea Nitrogen (BUN)": "15", "Carbon Dioxide": "25", "Alkaline Phosphatase": "66", "ALT": "52",
-                     "AST": "22", "Prolactin": "9.4"}
+                     "AST": "22", "Prolactin": "9.4", "Apo A1": "150"}
+    assert next(item for item in record.lab_reported if item.name == "Apo A1").group == lab_reported.OTHER_RESULTS
     assert {m.name for m in record.markers} == {"TSH"}  # none of them is scored
-    # Names awaiting a clinic decision (docs/open_decisions.md #13) stay staff-only and unscored.
+    # Every unaliased name stays on the staff list; one with neither a unit nor a range is staff-only.
     unrecognized = {item["raw_name"] for item in extracted["unrecognized_markers"]}
     assert {"TG/HDL-C", "Apo A1", "Omega-3 total"} <= unrecognized
-    assert "Apo A1" not in text and "Omega-3 total" not in text
+    assert "Apo A1" in text and "Omega-3 total" not in text
     assert not any("COVERAGE GAP" in note for note in notice.other_notes)

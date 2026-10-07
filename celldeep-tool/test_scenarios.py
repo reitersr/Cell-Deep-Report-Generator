@@ -14,7 +14,8 @@ EXPECTED_CONFIRMATIONS = {
     "labcorp_digital": 1,     # one printed result with a test name the tool does not know
     "scanned": 0,
     "mixed": 0,
-    "variant": 3,             # a page under an unknown header, a renamed test, a provider note without sections
+    "variant": 4,             # the draw date with an excluded page, a page under an unknown header, a renamed test
+                              # (shown lab-reported), a provider note without sections
     "scanned_noisy": 1,       # FERRITIN: three reads, three values (the heading and the 2-of-3 row never count)
     "clinic_dexa": 1,         # the foreign DEXA profile page
     "clinic_dexa_no_age": 1,  # the same page without a staff-entered age
@@ -51,13 +52,14 @@ def test_scan_reads_two_of_three_and_headings(results):
 def test_a_new_layout_and_a_malformed_note_still_build_the_report(results):
     variant = results["variant"]
     assert "TSH" in variant["text"] and "hs-CRP" in variant["text"]
-    for absent in ("Ferritin", "Vitamin B12", "Thyroid Stimulating Hormone Ultra", "512"):
+    for absent in ("Ferritin", "Vitamin B12", "512"):
         assert absent not in variant["text"]
     assert variant["confirmation"] == [
+        "Draw dates with excluded lab pages or results: 04/14/2026 (page 3)",
         "Lab PDF page 3 (whole page): result rows printed under no recognized table header (expected "
         "'Current'/'Historical' or 'In Range'/'Out of Range'), so they were not read: Ferritin, Vitamin B12",
-        "Lab PDF: 1 printed result(s) with a test name the tool does not recognize, left out of the report and "
-        "listed in the staff notes: Thyroid Stimulating Hormone Ultra",
+        "Lab PDF: 1 printed result(s) with a test name the tool does not recognize, shown as lab-reported (not "
+        "scored) and listed in the staff notes: Thyroid Stimulating Hormone Ultra",
         "Provider note: NOT READ - it has no '## ' section headings, so its protocol, concerns, targets and "
         "Vitality Index are not in the report (the staff notes list the required headings)"]
     notes = without_staff_check(variant["review"])
