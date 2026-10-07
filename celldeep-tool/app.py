@@ -155,7 +155,7 @@ def _form_rejected(message: str, clear_date: bool = False):
     """Show the upload form again with the message and everything staff entered (files cannot be kept)."""
     form = request.form.to_dict()
     if clear_date:
-        form["collected_date"] = ""
+        form["collected_date"] = form["scan_collected_date"] = ""
     flash(message)
     return render_template("index.html", form=form), 422
 
@@ -295,6 +295,7 @@ def _run_report(job_directory: Path, job_data: dict, run) -> None:
             out_path=str(job_directory / "report.pdf"),
             vitality_index=job_data["vitality_index"],
             collected_date=job_data.get("collected_date"),
+            scan_collected_date=job_data.get("scan_collected_date"),
             confirm=lambda items: _confirm_with_staff(job_directory, items),
         )
         shutil.move(review_path, job_directory / "review_notes.txt")
@@ -324,6 +325,7 @@ def generate():
         sex = request.form.get("sex", "").strip() or None
         note_text = request.form.get("note_text", "").strip() or None
         collected_date = request.form.get("collected_date", "").strip() or None
+        scan_collected_date = request.form.get("scan_collected_date", "").strip() or None
         vitality_index = {
             label: request.form.get(f"vitality_{field}", "Not Assessed")
             for field, label in VITALITY_FIELDS
@@ -336,6 +338,11 @@ def generate():
         if collected_date:
             try:
                 collected_date = pipeline.scan_collected_date(collected_date)
+            except ValueError as error:
+                return _form_rejected(str(error), clear_date=True)
+        if scan_collected_date:
+            try:
+                scan_collected_date = pipeline.scan_collected_date(scan_collected_date)
             except ValueError as error:
                 return _form_rejected(str(error), clear_date=True)
 
@@ -373,6 +380,7 @@ def generate():
             "sex": sex,
             "vitality_index": vitality_index,
             "collected_date": collected_date,
+            "scan_collected_date": scan_collected_date,
         }
         _write_job_status(job_directory, "processing")
         _touch_heartbeat(job_directory)

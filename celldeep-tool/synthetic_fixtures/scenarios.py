@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import fitz
 
 import pipeline
-from synthetic_fixtures import access_medical_lab, chl_extensive, clinic_dexa
+from synthetic_fixtures import access_medical_lab, chl_extensive, clinic_dexa, female_chl
 from synthetic_fixtures import deterministic_fixtures as fx
 from synthetic_fixtures import dexa as dexa_fx
 from synthetic_fixtures import layouts
@@ -139,12 +139,21 @@ def build(name, folder):
         reads = {(str(dexa), number): script[label] for number, label in enumerate(chl_extensive.DEXA_LABELS, 1)}
         return str(labs), [str(dexa)], reads, {"age": chl_extensive.AGE, "patient": chl_extensive.PATIENT,
                                                "collected_date": chl_extensive.LATEST}
+    if name == "female_chl_scanned_undated":
+        labs = female_chl.write_labs(folder / "labs.pdf")
+        dexa = dexa_fx.write_pdf(folder / "dexa.pdf", female_chl.DEXA_LABELS)
+        script = female_chl.dexa_pages()
+        reads = {(str(dexa), number): script[label] for number, label in enumerate(female_chl.DEXA_LABELS, 1)}
+        reads.update({(str(labs), number): [page, page] for number, page in female_chl.scan_reads().items()})
+        return str(labs), [str(dexa)], reads, {"age": female_chl.AGE, "patient": female_chl.PATIENT, "sex": "female",
+                                               "collected_date": female_chl.LATEST}
     raise KeyError(name)
 
 
 ACCESS_SCAN_DATE = "07/20/2026"
 SCENARIOS = ["quest_digital", "chl_digital", "labcorp_digital", "scanned", "mixed", "variant", "scanned_noisy",
-             "clinic_dexa", "clinic_dexa_no_age", "access_medical", "access_medical_limited", "chl_extensive"]
+             "clinic_dexa", "clinic_dexa_no_age", "access_medical", "access_medical_limited", "chl_extensive",
+             "female_chl_scanned_undated"]
 
 
 def run_scenario(name, folder, monkeypatch=None):
@@ -174,7 +183,7 @@ def run_scenario(name, folder, monkeypatch=None):
     try:
         out = folder / "report.pdf"
         patient = options.get("patient") or (clinic_dexa.PATIENT if dexa else layouts.PATIENT)
-        pipeline.run(labs, dexa, options.get("note"), patient, options.get("age"), "male", str(out),
+        pipeline.run(labs, dexa, options.get("note"), patient, options.get("age"), options.get("sex", "male"), str(out),
                      collected_date=options.get("collected_date"), confirm=confirm)
     finally:
         if saved_env is None:

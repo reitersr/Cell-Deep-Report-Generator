@@ -206,6 +206,7 @@ class PatientRecord:
 
     # lab results shown as printed (value, lab range, lab H/L flag) but never scored
     lab_reported: list = field(default_factory=list)   # list[LabReportedResult]
+    draft_label: Optional[str] = None   # printed on the patient PDF when the report needs staff review before release
 
     # document mode — determined by whether first_draw_date is None (true first consult)
     # or a real prior date exists (progression document). Generation branches on this.

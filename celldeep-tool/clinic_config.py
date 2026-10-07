@@ -179,3 +179,36 @@ LATEST_LAB_REPORTED_CHIP = "See lab-reported"
 # own balance (total = fat + lean + bone mineral) with a bone-mineral remainder above 0 and at most this many pounds
 # is the one confirmed by the scan's other printed values; any other candidate is a regional value read by mistake.
 DEXA_BONE_MINERAL_MAX_LB = 15.0
+
+# Scanned lab pages that print no Collected date, uploaded with a dated digital report (whose date staff entered),
+# are dated only when at least this many of their plain numeric results exactly match that report's Historical
+# column under one single historical date, with no conflicting result at that date; otherwise no report is built
+# and staff enter the scanned pages' date. Owner decision (undated scanned draw rule).
+UNDATED_SCAN_MIN_MATCHES = 10
+
+# Female reference ranges are not yet confirmed by the clinic. While False, every report whose form or lab sex is
+# female opens its STAFF CHECK with FEMALE_RANGES_STAFF_CHECK_LINE and the patient PDF carries FEMALE_DRAFT_MARK.
+# Owner/clinic decision (docs/open_decisions.md); set True only when the clinic has confirmed the female ranges.
+FEMALE_RANGES_CONFIRMED = False
+
+# First line of the STAFF CHECK for a female report while FEMALE_RANGES_CONFIRMED is False.
+FEMALE_RANGES_STAFF_CHECK_LINE = "FEMALE RANGES NOT CLINIC-CONFIRMED - STAFF REVIEW ONLY, DO NOT RELEASE"
+
+# Mark printed on the patient PDF of a female report while FEMALE_RANGES_CONFIRMED is False.
+FEMALE_DRAFT_MARK = "DRAFT - staff review required before release"
+
+# Lab-reported note for a female result whose marker has no CellDeep female threshold (never invented, never scored
+# against the lab's printed range).
+FEMALE_NO_THRESHOLD_NOTE = "no clinic-confirmed female range; shown as the lab reported it, not scored"
+
+# Hormones whose printed female reference range depends on the cycle phase; no phase is recorded, so none is ever
+# chosen: they are shown lab-reported, unscored, with no flag, and the printed phase ranges go to the staff notes.
+CYCLE_PHASE_HORMONES = ("Estradiol", "FSH", "LH", "Progesterone")
+
+# Lab-reported note shown with a cycle-phase hormone's value.
+CYCLE_PHASE_NOTE = "reference range depends on cycle phase (not recorded)"
+
+# The DEXA scan paired with the latest bloodwork ("Where you are now") is the scan with body composition nearest the
+# latest Collected date within this many days either side; scans dated after it are left out (staff note), never
+# blended. With no scan inside the window the latest accepted scan is used as before. Owner decision.
+DEXA_PAIRING_WINDOW_DAYS = 60

@@ -13,6 +13,7 @@ and listed in the staff notes, and it appears on the confirmation screen before 
 | **Quest-style** (In Range / Out of Range) | No registered layout matches, so `lab_layouts.select` returns `None` and the default table reader runs. Each section starts at a `Collected:` / `Order ID` line. Each table needs a `Test Name` (or `Test` / `Tests` / `Analyte`) line that also prints `In Range` / `Out of Range` or `Current` / `Historical` (`pipeline._bloodwork_header`). | `pipeline._parse_bloodwork_tables` | `quest_digital`, `labcorp_digital` (Labcorp-style Flag column), `mixed` | Quest-layout patient (reports 89/90): verified, not yet locked |
 | **Cleveland HeartLab with Quest chemistry** (multi-draw) | The same default reader. The risk-category tables print `Current` / `Historical` group labels above the `Test Name` line. The Quest chemistry pages in the same file print the panel header (`Current Result`, `Reference Range`, `Units`, `Lab`, `Historical Results`, `In Range` / `Out of Range`). | `pipeline._parse_bloodwork_tables` | `chl_digital`, `chl_extensive` | Cleveland HeartLab extensive male: verified and locked |
 | **Scanned (image-only) pages**, any lab | The page has no text layer | `scan_bloodwork.py`: 2 vision reads, a 3rd when they disagree; a row is kept only when 2 reads agree exactly. Staff must enter the Collected date. | `scanned`, `scanned_noisy`, `mixed` | Quest-layout patient (scanned draw): verified, not yet locked |
+| **Undated scanned draw + dated Cleveland HeartLab report** (female patient type) | Scanned pages that print no Collected date, uploaded with a digital report whose own Collected date staff entered | Dated only by an exact Historical-column match (below) | `female_chl_scanned_undated` | Female Cleveland HeartLab: dry run done, waiting for the owner's hand verification, then `--record-real` |
 
 ## The column-role model (default reader)
 
@@ -57,6 +58,60 @@ Every table's columns get a role from the printed header, by x-position only (`_
 | **Access OUT OF RANGE SUMMARY block** | It repeats rows printed in their own sections. It is ignored silently unless a summary line matches no table row (or shows a different value). | Staff note only on a mismatch |
 | **A table whose header date sits under no Historical column** | The columns cannot be assigned roles. Only that table is left out. | `INCOMPLETE` notice naming the tests |
 | **Unknown layouts** | No reader recognizes them. Each page is excluded instead of stopping the report, unless the AI fallback below reads and verifies it. | `INCOMPLETE` notice and confirmation screen |
+
+## Undated scanned draws
+
+Some files start with screenshots of an earlier report: image-only pages that print no name, no Collected date, no
+fasting status and no collection time (only an order ID and "Page n of m"). A date is never guessed.
+
+- **When the rule applies:** the scanned pages print no Collected date, and the staff-entered Collected date is the
+  digital report's own date.
+- **How the date is found:** the scanned rows are read as usual (2 of 3 reads), then compared with the dated report's
+  Historical column (`pipeline.date_undated_scan_draw`). A date is assigned only when:
+  - at least `clinic_config.UNDATED_SCAN_MIN_MATCHES` (10) plain numeric results match exactly;
+  - all of those matches fall under one single historical date;
+  - no result conflicts at that date.
+  Staff notes: "UNDATED SCANNED DRAW: ... date <date> assigned from historical-column match (N markers)".
+- **When the match is not met:** no report is built. The stop message names the pages and asks staff to enter the
+  scanned pages' own date in the upload form's "Scanned Pages Collected Date" field.
+- **The dated draw:**
+  - Its fasting status is unknown, so the non-fasting rule applies to glucose and insulin.
+  - Its collection time reads "time not recorded".
+  - The scanned name line reads "no name printed - confirm".
+- **Values printed twice:** a test on both the scanned page and the later report's Historical column shows one value.
+  If the two differ, the scanned page's value is kept and a "HISTORICAL VALUE DIFFERS" note is added.
+- **Scanned-only tests** (for example bioavailable testosterone, the testosterone panel's albumin) are read like any
+  other row.
+
+## DEXA pairing with the bloodwork
+
+The current DEXA scan ("Where you are now") is the scan with body composition nearest the latest bloodwork Collected
+date, within `clinic_config.DEXA_PAIRING_WINDOW_DAYS` (60) either side (`pipeline.pair_dexa_with_bloodwork`).
+
+- **Earlier scans** are history.
+- **Scans dated after the paired scan** (for example 60+ days after the bloodwork) are left out of the report and
+  never blended in. A "DEXA PAIRING" line in the STAFF CHECK names them; there is no stop screen.
+- **No scan within 60 days:** the latest scan is used, as before, and the existing staleness warning applies.
+
+## Female reports
+
+These rules apply when the form sex, or the sex printed on the lab report ("Gender: Female"), is female. Thresholds
+are never invented.
+
+- **No CellDeep female threshold** (cortisol, DHEA-S, SHBG, total / free / bioavailable testosterone, ...): the
+  result is shown lab-reported with the lab's range and flag and is never scored. Staff notes say
+  "FEMALE RANGE NOT CONFIRMED".
+- **Cycle-phase hormones** (Estradiol, FSH, LH, Progesterone; `clinic_config.CYCLE_PHASE_HORMONES`): their printed
+  ranges depend on a cycle phase that is not recorded, and a phase is never chosen. They are shown lab-reported and
+  unscored, with no range and no flag, and the note "reference range depends on cycle phase (not recorded)". The
+  lab's printed phase ranges go to the staff notes ("CYCLE PHASE NOT RECORDED"). With explicit postmenopausal BHRT
+  in the provider note, the CellDeep BHRT targets apply as before.
+- **Cortisol** (lab-reported for women): it is named "Cortisol, Total", and each result notes its own collection time
+  and whether that falls inside the lab's printed AM window.
+- **`clinic_config.FEMALE_RANGES_CONFIRMED`** (default False). While False:
+  - the STAFF CHECK opens with "FEMALE RANGES NOT CLINIC-CONFIRMED - STAFF REVIEW ONLY, DO NOT RELEASE";
+  - every page of the patient PDF carries "DRAFT - staff review required before release".
+  The stop screen and its button are unchanged.
 
 ## Unknown-layout AI fallback: status
 

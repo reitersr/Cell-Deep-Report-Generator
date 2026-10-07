@@ -54,6 +54,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/synthetic_fixtures/chl_multi_draw.py` | Three-draw Cleveland HeartLab-style lab PDF (`test_chl_round1.py`). |
 | `celldeep-tool/synthetic_fixtures/scenarios.py` | End-to-end synthetic scenarios with a scripted vision model (smoke test, `test_scenarios.py`). |
 | `scripts/regression_check.py` | Runs every fixture (synthetic, and git-ignored `real_fixtures/*.expected.json`) to the report data (every lab result, DEXA scan, per-system counts and scores, overall score) and diffs it against expected values (`--snapshot`/`--diff` for before/after; `--dexa-reads` replays stored DEXA transcriptions offline; `--record-real` locks a hand-verified real report, compared exactly); CI runs it on the synthetic fixtures (`test_regression_check.py`) and fails on any difference. |
+| `celldeep-tool/synthetic_fixtures/female_chl.py` | Synthetic female Cleveland HeartLab type: undated scanned draw dated by the Historical column, four DEXA scans (two after the pairing window), cycle-phase hormones (`female_chl_scanned_undated`, `test_female_chl.py`). |
 | `celldeep-tool/synthetic_fixtures/chl_extensive.py` | Synthetic stand-in for the verified Cleveland HeartLab extensive male (thresholds, Historical dates, "/ /", "60L", unknown fasting, changed assay, trend page, three DEXA scans); with `quest_digital` and `access_medical_limited` it covers the three verified patient types (`test_layout_fixtures.py`). |
 | `scripts/smoke_test.py` | Generates reports from synthetic fixtures and prints PASS/FAIL (no API key, no network, under a minute). |
 | `docs/` | Audits, open clinical decisions (`open_decisions.md`, current decisions first), `supported_layouts.md` (layout matrix, AI fallback status, how to add a layout), `staff_guide.md`, `what_the_tool_guarantees.md`. |
@@ -133,7 +134,11 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      configured basis any draw printing another range is lab-reported even when every draw prints it; the note is
      shown only on results not scored on a CellDeep range (never on SHBG). A scored test whose newer result was
      moved to lab-reported is never called "not retested". Testosterone-panel ALBUMIN/GLOB under lab code AMD
-     are separate lab-reported results (`lab_reported.PANEL_SCOPED`).
+     are separate lab-reported results (`lab_reported.PANEL_SCOPED`). Female reports (form or printed lab sex,
+     `apply_female_ranges`): a marker with no CellDeep female threshold is lab-reported, never scored; Estradiol, FSH,
+     LH, Progesterone (`CYCLE_PHASE_HORMONES`) are lab-reported with no range or flag and `CYCLE_PHASE_NOTE`, the
+     printed phase ranges in the staff notes; while `FEMALE_RANGES_CONFIRMED` is False the STAFF CHECK opens with
+     `FEMALE_RANGES_STAFF_CHECK_LINE` and the patient PDF carries `FEMALE_DRAFT_MARK` (`PatientRecord.draft_label`).
    - Image-only pages: `_extract_scan_bloodwork` renders each page and reads it twice with the vision model
      (no sampling settings: anthropic 1.x accepts no temperature/top_p/top_k and has no seed); when the two
      reads disagree on any result row, a third read is made (`scan_bloodwork.SCAN_MAX_READS`). Transport
@@ -142,7 +147,13 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      and flag-vs-range checks. A row no two reads agree on is listed as "INCOMPLETE - row excluded: <marker>
      (reads disagree: X / Y / Z)"; every other excluded result row is listed with its check. A row no read
      prints a value for (a section heading) is not a result and is never listed or confirmed. Staff-entered
-     name and Collected date identify the pages.
+     name and Collected date identify the pages. Undated scanned draw (`date_undated_scan_draw`): scanned pages that
+     print no Collected date, uploaded with a digital report whose own date staff entered, are an earlier draw dated
+     only when at least `clinic_config.UNDATED_SCAN_MIN_MATCHES` plain numeric results exactly match that report's
+     Historical column under one single date with no conflict ("assigned from historical-column match (N markers)");
+     otherwise `UndatedScanNotMatched` stops the job and staff enter "Scanned Pages Collected Date"
+     (`run(scan_collected_date=...)`). That draw is non-fasting, its time "not recorded", its name line "no name
+     printed - confirm"; a test also in the Historical column shows one value (the scanned page's when they differ).
    - Unknown-layout fallback (`vision_fallback`; kill switch `CELLDEEP_ALLOW_VISION_FALLBACK=0`, default on): a
      text page the table reader left out whole (layout not recognized, or a header it could not read) is read by
      the vision model with the scanned-page rule (2 of 3 reads agree), dated only by the Collected date printed on
@@ -190,8 +201,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    label appear in the history, "When you came in", "Where you are now" (the latest accepted scan with body
    composition, `scoring.has_body_composition`), the summary line, the headline and the score; with nothing to
    score, the "% optimized" figure is left out (never "—%") and the staff notes say why (`dexa_score_notes`).
-   Staff notes warn when "Where you are now" is older than the latest bloodwork by more than
-   `DEXA_STALE_DAYS`. Kept scans are merged by date and
+   The current scan is the body-composition scan nearest the latest bloodwork within `DEXA_PAIRING_WINDOW_DAYS`
+   either side (`pair_dexa_with_bloodwork`); scans dated after it are left out (STAFF CHECK "DEXA PAIRING"); with none
+   inside the window the latest scan is used. Staff notes warn when "Where you are now" is older than the latest
+   bloodwork by more than `DEXA_STALE_DAYS`. Kept scans are merged by date and
    sorted oldest first. Outcomes open the staff notes (DEXA block). Names everywhere compare with
    `scan_bloodwork.names_match` (any order and case, or first name plus last initial).
 4. **Provider note**: `parse_provider_note` reads only the documented template sections

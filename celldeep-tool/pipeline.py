@@ -2042,7 +2042,8 @@ def _has_image_only_pages(paths: list[str]) -> bool:
     return False
 
 
-def _scan_summary(numbers: list[int], notes: list[str], collected_date: str | None) -> list[str]:
+def _scan_summary(numbers: list[int], notes: list[str], collected_date: str | None,
+                  assigned_date: str | None = None) -> list[str]:
     """The scanned-page outcome digest printed at the top of the staff notes."""
     kept, excluded, pages, batch, mismatches = {}, [], [], [], []
     for note in notes:
@@ -2056,7 +2057,9 @@ def _scan_summary(numbers: list[int], notes: list[str], collected_date: str | No
             pages.append(f"page {match[1]}: {match[2]}")
         elif note.startswith("source=scan pages") and "identified by staff-entered" not in note:
             batch.append(note.split(": ", 1)[1] if ": " in note else note)
-    identity = (f"staff-entered patient name and Collected {collected_date}" if collected_date
+    identity = (f"staff-entered patient name; Collected {assigned_date} assigned from historical-column match "
+                "(no date printed)" if assigned_date else
+                f"staff-entered patient name and Collected {collected_date}" if collected_date
                 else "printed page identity (no staff Collected date)")
     lines = [f"SCANNED BLOODWORK - pages {', '.join(map(str, numbers))} - identified by {identity}",
              f"  Kept: {sum(kept.values())} results"
@@ -2147,7 +2150,7 @@ def scan_collected_date(text: str) -> str:
 
 
 def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_name=None, collected_date=None,
-                            dob_sink=None, name_sink=None, row_exclusions=None):
+                            dob_sink=None, name_sink=None, row_exclusions=None, printed_dates=None):
     import scan_bloodwork as scan
 
     numbers = [page.number + 1 for page in pages]
@@ -2174,6 +2177,8 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
             reads.append(scan.read_page(page, client, _create_anthropic_message, MODEL, max_reads))
         except scan.ScanGateError as error:
             failures.append((page.number + 1, error.reads, str(error)))
+    if printed_dates is not None:
+        printed_dates.extend(page["collected"] for pair in reads for page in pair if page.get("collected"))
     if name_sink is not None:
         for pair in reads:
             printed = {" ".join(page["patient_name"].split()) for page in pair if page["patient_name"]}
@@ -2409,6 +2414,155 @@ def _merge_scan_occurrences(digital, scanned, row_audit):
     return list(combined.values())
 
 
+_SECTION_COLLECTED_RE = re.compile(r"\(collected (\d{1,2}/\d{1,2}/\d{4})\)", re.I)
+_PLAIN_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def digital_draw_dates(occurrences: list, unrecognized: list) -> set:
+    """Normalized Collected dates of the dated digital reports themselves (their own Current columns)."""
+    dates = {_normalize_date_for_matching(match[1]) for o in occurrences
+             if (match := _SECTION_COLLECTED_RE.search(o.get("source_label") or ""))}
+    dates |= {_normalize_date_for_matching(cell["date_display"]) for item in unrecognized
+              for cell in item.get("cells", []) if cell.get("kind") == "current" and cell.get("date_display")}
+    return dates
+
+
+def _unknown_identity(item: dict) -> tuple:
+    """A test name the library does not know is identified by its name and whether it is printed under a urinalysis
+    section ("WBC" in a CBC and "WBC" in a urinalysis are different tests)."""
+    section = f"{item.get('section_heading') or ''} {item.get('source_context') or ''}".casefold()
+    return item["raw_name"], "urinalysis" if "urinalysis" in section else ""
+
+
+def _historical_copies(occurrences: list, unrecognized: list) -> dict:
+    """{(test name, normalized date): {printed value: display date}} printed in the dated reports' Historical
+    columns (a result dated other than the report's own Collected date)."""
+    copies = {}
+    for o in occurrences:
+        own = _SECTION_COLLECTED_RE.search(o.get("source_label") or "")
+        if own and o.get("disp_value") and _normalize_date_for_matching(o["date_display"]) != \
+                _normalize_date_for_matching(own[1]):
+            copies.setdefault((o["name"], _normalize_date_for_matching(o["date_display"])), {})[o["disp_value"]] = \
+                o["date_display"]
+    for item in unrecognized:
+        for cell in item.get("cells", []):
+            if cell.get("kind") == "historical" and cell.get("present") and cell.get("disp_value"):
+                copies.setdefault((_unknown_identity(item), _normalize_date_for_matching(cell["date_display"])), {})[
+                    cell["disp_value"]] = cell["date_display"]
+    return copies
+
+
+def date_undated_scan_draw(scan_numbers: list, scanned: list, scan_unknown: list, occurrences: list,
+                           unrecognized: list, row_audit: list, staff_date: str) -> tuple[str, list[str]]:
+    """Scanned pages that print no Collected date, uploaded with a dated digital report: they are given a date only
+    when at least clinic_config.UNDATED_SCAN_MIN_MATCHES of their plain numeric results exactly match the dated
+    report's Historical column under one single historical date, with no conflict at that date. The scanned rows
+    are re-dated to it (they were read under the staff-entered date, which belongs to the digital report), and that
+    report's Historical copies of the same tests at that date are dropped: the standalone page's value is the one
+    shown (a different historical value is a staff note). Returns (assigned display date, staff notes); raises
+    UndatedScanNotMatched when the match is not met. A date is never guessed."""
+    pages = _page_list(scan_numbers)
+    copies = _historical_copies(occurrences, unrecognized)
+    entries = [(o["name"], o["disp_value"]) for o in scanned if _PLAIN_NUMBER_RE.fullmatch(o.get("disp_value") or "")]
+    entries += [(_unknown_identity(item), cell["disp_value"]) for item in scan_unknown for cell in item.get("cells", [])
+                if cell.get("present") and _PLAIN_NUMBER_RE.fullmatch(cell.get("disp_value") or "")]
+    tally = {}  # normalized historical date -> [matches, conflicts, display date]
+    for (name, date), printed in copies.items():
+        entry = tally.setdefault(date, [0, [], next(iter(printed.values()))])
+        for scanned_name, value in entries:
+            if scanned_name != name:
+                continue
+            if set(printed) == {value}:
+                entry[0] += 1
+            else:
+                label = name if isinstance(name, str) else " ".join(filter(None, name))
+                entry[1].append(f"{label} (scanned {value}; historical {' / '.join(sorted(printed))})")
+    matched = {date: entry for date, entry in tally.items() if entry[0]}
+    needed = clinic_config.UNDATED_SCAN_MIN_MATCHES
+    if len(matched) != 1 or next(iter(matched.values()))[0] < needed or next(iter(matched.values()))[1]:
+        found = "; ".join(f"{entry[2]}: {entry[0]} matching, {len(entry[1])} conflicting" for entry in
+                          sorted(matched.values(), key=lambda e: -e[0])) or "no matching result"
+        raise UndatedScanNotMatched(
+            f"Report not generated: lab PDF {pages} are scanned pages that print no Collected date, and their "
+            f"results do not identify one ({found}; at least {needed} matching results under one single historical "
+            "date with no conflict are needed). A date is never guessed. Enter the scanned pages' own Collected date "
+            "in 'Scanned Pages Collected Date' on the upload form and generate again.")
+    date, (count, _, display) = next(iter(matched.items()))
+    staff_key = _normalize_date_for_matching(staff_date)
+    label = f"Collected {display} (assigned from historical-column match)"
+
+    def redate(occurrence):
+        if _normalize_date_for_matching(occurrence["date_display"]) == staff_key:
+            occurrence["date_display"] = display
+            occurrence["source_label"] = occurrence["source_label"].replace(f"Collected {staff_date}", label)
+
+    for occurrence in scanned:
+        redate(occurrence)
+    for item in scan_unknown:
+        for cell in item.get("cells", []):
+            if _normalize_date_for_matching(cell.get("date_display") or "") == staff_key:
+                cell["date_display"] = display
+        item["source_context"] = (item.get("source_context") or "").replace(f"Collected {staff_date}", label)
+    for row in row_audit:
+        if row["page"] in scan_numbers:
+            for occurrence in row["occurrences"]:
+                redate(occurrence)
+    notes = [f"UNDATED SCANNED DRAW: lab PDF {pages} print no Collected date; date {display} assigned from "
+             f"historical-column match ({count} markers) with the dated report's Historical column, no conflicts. "
+             "Fasting status not printed (the non-fasting rule applies); collection "
+             f"{clinic_config.COLLECTION_TIME_NOT_RECORDED}; no name printed - confirm these pages are this "
+             "patient's draw"]
+    # One value per test and date: the standalone scanned page's own result replaces the later report's copy.
+    from_scan = {(o["name"], date): o for o in scanned}
+    from_scan_unknown = {(_unknown_identity(item), date): cell for item in scan_unknown
+                         for cell in item.get("cells", []) if cell.get("present")}
+    kept = []
+    for o in occurrences:
+        own = _SECTION_COLLECTED_RE.search(o.get("source_label") or "")
+        key = (o["name"], _normalize_date_for_matching(o["date_display"]))
+        if own and key[1] == date and key in from_scan:
+            if o.get("disp_value") and o["disp_value"] != from_scan[key].get("disp_value"):
+                notes.append(f"HISTORICAL VALUE DIFFERS: {o['name']} on {display}: the scanned page prints "
+                             f"'{from_scan[key].get('disp_value')}'; the later report's historical column prints "
+                             f"'{o.get('disp_value')}'. The scanned page's value is used.")
+            continue
+        kept.append(o)
+    occurrences[:] = kept
+    # Tests the library does not know: an agreeing pair is shown once, from the dated report's own row (which
+    # carries the lab's printed unit and range); a disagreeing pair keeps the scanned page's value.
+    agreed = set()
+    for item in unrecognized:
+        cells = []
+        for cell in item.get("cells", []):
+            key = (_unknown_identity(item), _normalize_date_for_matching(cell.get("date_display") or ""))
+            if cell.get("kind") == "historical" and key[1] == date and key in from_scan_unknown:
+                scanned_value = from_scan_unknown[key].get("disp_value")
+                if cell.get("present") and cell.get("disp_value") == scanned_value:
+                    agreed.add(key)
+                elif cell.get("present") and cell.get("disp_value"):
+                    notes.append(f"HISTORICAL VALUE DIFFERS: {item['raw_name']} on {display}: the scanned page prints "
+                                 f"'{scanned_value}'; the later report's historical column prints "
+                                 f"'{cell.get('disp_value')}'. The scanned page's value is used.")
+                    continue
+                else:
+                    continue
+            cells.append(cell)
+        item["cells"] = cells
+    for item in scan_unknown:
+        item["cells"] = [cell for cell in item.get("cells", [])
+                         if (_unknown_identity(item), _normalize_date_for_matching(cell.get("date_display") or ""))
+                         not in agreed]
+    scan_unknown[:] = [item for item in scan_unknown if item["cells"]]
+    return display, notes
+
+
+def _page_list(numbers: list) -> str:
+    numbers = sorted(numbers)
+    if len(numbers) > 2 and numbers == list(range(numbers[0], numbers[-1] + 1)):
+        return f"pages {numbers[0]}-{numbers[-1]}"
+    return f"page{'s' if len(numbers) > 1 else ''} {', '.join(map(str, numbers))}"
+
+
 # ---------------------------------------------------------------------------
 # Structured provider notes (see templates/provider_notes_template.md)
 # ---------------------------------------------------------------------------
@@ -2580,6 +2734,10 @@ class NoResultsRead(GenerationBlocked):
     computed from nothing)."""
 
 
+class UndatedScanNotMatched(GenerationBlocked):
+    """Scanned pages print no Collected date and their results do not identify one: no report is built."""
+
+
 NO_RESULTS_MESSAGE = "No results were read from the uploaded files"
 
 
@@ -2682,6 +2840,97 @@ def apply_assay_changes(occurrences: list, unrecognized: list, sex: str | None,
     return notes, changed
 
 
+_PRINTED_SEX_RE = re.compile(r"\b(?:Gender|Sex)\s*:\s*(Female|Male|F|M)\b")
+_PHASE_NAMES = {"Estradiol": ("Estradiol",), "FSH": ("Follicle Stimulating Hormone", "FSH"),
+                "LH": ("Luteinizing Hormone", "LH"), "Progesterone": ("Progesterone",)}
+
+
+def printed_lab_sexes(pages) -> set:
+    """The sex each digital lab page prints in its header ("Gender: Female", "Sex: F"), normalized."""
+    return {{"f": "female", "m": "male"}[match[1][0].lower()] for page in pages
+            for match in _PRINTED_SEX_RE.finditer(_page_text(page))}
+
+
+def printed_phase_ranges(pages) -> dict:
+    """{hormone: the lab's printed cycle-phase reference text ("Follicular phase: ...; Postmenopausal: ...")} from
+    the digital pages, for the staff notes only. Never used to choose a phase or score."""
+    text = " ".join(" ".join(_page_text(page).split()) for page in pages)
+    found = {}
+    for marker, names in _PHASE_NAMES.items():
+        for name in names:
+            match = re.search(re.escape(name) + r"\b.{0,200}?(Follicular phase:.*?)\.\s+(?=[A-Z]|$)", text)
+            if match:
+                found[marker] = match[1]
+                break
+    return found
+
+
+def _cortisol_draw_note(date_display: str, draw_info: dict) -> str:
+    """'collected 08:40 AM (inside the lab's printed AM window 6-10)', 'collected 3:15 PM' or
+    clinic_config.COLLECTION_TIME_NOT_RECORDED: the draw's own printed collection time, never assumed."""
+    times, window = draw_info.get("times") or {}, draw_info.get("morning_window")
+    key = _normalize_date_for_matching(date_display)
+    time = next((value for printed, value in times.items() if _normalize_date_for_matching(printed) == key), None)
+    real = time is not None and not _is_placeholder_time(time)
+    minutes = _clock_minutes(time) if real else None
+    inside = minutes is not None and window is not None and window[0] * 60 <= minutes <= window[1] * 60
+    return _draw_time_text(time if real else None) + (
+        f" (inside the lab's printed AM window {window[0]}-{window[1]})" if inside else "")
+
+
+def apply_female_ranges(occurrences: list, unrecognized: list, postmenopausal_bhrt: bool | None, overrides: set,
+                        phase_ranges: dict, moved: dict | None = None, draw_info: dict | None = None) -> list[str]:
+    """Female reports (form or lab sex): thresholds are never invented. A library marker with no CellDeep female
+    threshold (it would fall back to the lab's printed range) is shown lab-reported with the lab's range and flag,
+    never scored. Estradiol, FSH, LH and Progesterone (clinic_config.CYCLE_PHASE_HORMONES) print cycle-phase ranges
+    and no phase is recorded, so a phase is never chosen: they are lab-reported with no range and no flag and the
+    note clinic_config.CYCLE_PHASE_NOTE; the printed phase ranges go to the staff notes. With explicit
+    postmenopausal BHRT in the provider note the CellDeep BHRT targets apply as before. Returns staff notes."""
+    notes, moved_items, by_marker = [], [], {}
+    for occurrence in occurrences:
+        name = occurrence["name"]
+        if name not in MARKER_LIBRARY or name in overrides or not (occurrence["value"] is not None
+                                                                   or occurrence["disp_value"]):
+            continue
+        config = resolve_marker_config(name, MARKER_LIBRARY[name], "female", postmenopausal_bhrt=postmenopausal_bhrt)
+        phase = name in clinic_config.CYCLE_PHASE_HORMONES and postmenopausal_bhrt is not True
+        if not (phase or has_missing_thresholds(config)):
+            continue
+        moved_items.append(occurrence)
+        by_marker.setdefault((name, phase), []).append(occurrence)
+        if moved is not None:
+            moved.setdefault(name, []).append(occurrence["date_display"])
+        group = {"Hormones": "Hormones", "Thyroid": "Hormones", "Lipids": "Lipids",
+                 "Inflammation": "Inflammation"}.get(config.get("category"), "Chemistry")
+        if phase:
+            shown = dict(occurrence, lab_flag="", lab_range_display="")
+            unrecognized.append(_occurrence_to_lab_reported(shown, (name, group), clinic_config.CYCLE_PHASE_NOTE))
+        elif name == "Cortisol, Total (AM)":
+            # "(AM)" is a claim about the draw time: the lab-reported name never carries it; each result says when
+            # its draw was collected (and whether that is inside the lab's printed AM window).
+            unrecognized.append(_occurrence_to_lab_reported(
+                occurrence, ("Cortisol, Total", group),
+                f"{clinic_config.FEMALE_NO_THRESHOLD_NOTE}; "
+                f"{_cortisol_draw_note(occurrence['date_display'], draw_info or {})}"))
+        else:
+            unrecognized.append(_occurrence_to_lab_reported(occurrence, (name, group),
+                                                            clinic_config.FEMALE_NO_THRESHOLD_NOTE))
+    for (name, phase), items in by_marker.items():
+        name = "Cortisol, Total" if name == "Cortisol, Total (AM)" else name
+        values = "; ".join(f"{item['date_display']}: {item['disp_value']}"
+                           for item in sorted(items, key=lambda i: _normalize_date_for_matching(i["date_display"])))
+        if phase:
+            printed = phase_ranges.get(name)
+            notes.append(f"CYCLE PHASE NOT RECORDED: {name} ({values}) - {clinic_config.CYCLE_PHASE_NOTE}; shown "
+                         "lab-reported, not scored, no flag. The lab's printed ranges: "
+                         + (printed if printed else "not read from the uploaded pages - see the lab report"))
+        else:
+            notes.append(f"FEMALE RANGE NOT CONFIRMED: {name} ({values}) has no clinic-confirmed female threshold; "
+                         "shown lab-reported with the lab's range and flag, not scored")
+    occurrences[:] = [item for item in occurrences if not any(item is other for other in moved_items)]
+    return notes
+
+
 def latest_draw_block(printed_dates: list, staff_date: str | None, occurrences: list, lab_items: list,
                       parse_exclusions: list) -> str | None:
     """Why the report must not be built, or None: the staff-entered Collected date, or the latest Collected date
@@ -2714,9 +2963,13 @@ def latest_draw_block(printed_dates: list, staff_date: str | None, occurrences: 
 def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             patient_name: str | None = None, audit_root: str | None = None,
             client: Anthropic | None = None, collected_date: str | None = None, age: int | None = None,
-            sex: str | None = None) -> dict:
-    """Parse readable labs and notes deterministically; gate scan transcription; extract DEXA via Claude."""
+            sex: str | None = None, scan_date: str | None = None) -> dict:
+    """Parse readable labs and notes deterministically; gate scan transcription; extract DEXA via Claude.
+    scan_date: the staff-entered Collected date of scanned pages that belong to a different (earlier) draw than
+    the digital report; without it, undated scanned pages are dated only by date_undated_scan_draw."""
     collected_date = scan_collected_date(collected_date) if collected_date else None
+    scan_date = scan_collected_date(scan_date) if scan_date else None
+    undated_scan_date = None  # assigned to undated scanned pages from the dated report's Historical column
     occurrences, unrecognized, lab_review_notes = [], [], []
     row_audit = []
     scan_numbers = []
@@ -2727,6 +2980,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     printed_names = []  # (source, page or None, name as printed) for the staff-notes header
     layout, layout_info = None, {}  # a registered lab layout (lab_layouts) and what its header printed
     draw_info = {}  # per printed Collected date: fasting status and collection time (default table parser)
+    lab_sexes, phase_ranges = set(), {}  # the sex printed on the lab pages; printed cycle-phase ranges (staff notes)
     if labs_pdf:
         with fitz.open(labs_pdf) as document:
             pages = list(document)
@@ -2736,6 +2990,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             scan_numbers = [page.number + 1 for page in scans]
             import lab_layouts
 
+            lab_sexes, phase_ranges = printed_lab_sexes(digital_pages), printed_phase_ranges(digital_pages)
             layout = lab_layouts.select(digital_pages) if digital_pages else None
             if digital_pages and layout is None:
                 import scan_bloodwork
@@ -2764,18 +3019,42 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                 if window := _morning_window(digital_pages):
                     draw_info["morning_window"] = window
             if scans:
+                printed_scan_dates = []
                 scanned, scan_unknown, scan_notes = _extract_scan_bloodwork(
-                    scans, digital_pages, client, row_audit, patient_name, collected_date, dob_sources,
-                    printed_names, scan_row_exclusions)
+                    scans, digital_pages, client, row_audit, patient_name, scan_date or collected_date, dob_sources,
+                    printed_names, scan_row_exclusions, printed_scan_dates)
+                # Scanned pages with no printed date, uploaded with a dated digital report whose own date the staff
+                # entered: they are an earlier draw, dated only by an exact Historical-column match (never guessed).
+                if (not scan_date and collected_date and layout is None and not printed_scan_dates
+                        and (scanned or scan_unknown)
+                        and _normalize_date_for_matching(collected_date) in digital_draw_dates(occurrences,
+                                                                                               unrecognized)):
+                    undated_scan_date, undated_notes = date_undated_scan_draw(
+                        scan_numbers, scanned, scan_unknown, occurrences, unrecognized, row_audit, collected_date)
+                    scan_notes = [note.replace(f"identified by staff-entered patient name and Collected {collected_date}",
+                                               "identified by staff-entered patient name; no Collected date printed")
+                                  .replace(f"Collected={collected_date}", f"Collected={undated_scan_date} (assigned)")
+                                  for note in scan_notes]
+                    lab_review_notes.extend(undated_notes)
                 occurrences = _merge_scan_occurrences(occurrences, scanned, row_audit)
                 unrecognized.extend(scan_unknown)
                 lab_review_notes.extend(scan_notes)
-    scan_summary = _scan_summary(scan_numbers, scan_notes, collected_date) if scan_numbers else []
+    scan_summary = _scan_summary(scan_numbers, scan_notes, scan_date or collected_date,
+                                 undated_scan_date) if scan_numbers else []
     moved_to_lab_reported = {}  # scored test -> dates of results shown lab-reported instead (fasting, assay)
     lab_review_notes.extend(apply_fasting_status(occurrences, unrecognized, draw_info.get("fasting", {}),
                                                  moved_to_lab_reported))
     assay_notes, assay_changed = apply_assay_changes(occurrences, unrecognized, sex, moved_to_lab_reported)
     lab_review_notes.extend(assay_notes)
+    note = parse_provider_note(note_text)
+    lab_sexes |= {{"F": "female", "M": "male"}[layout_info["sex"]]} if layout_info.get("sex") in ("F", "M") else set()
+    female_report = sex == "female" or "female" in lab_sexes
+    if female_report:
+        bhrt = provider_statuses({"provider_note_raw": note["accepted_text"] if note["accepted"] else None,
+                                  "treatment_status": note["treatment_status"]})[0]
+        lab_review_notes.extend(apply_female_ranges(
+            occurrences, unrecognized, bhrt, {item["marker"] for item in note["marker_overrides"]},
+            phase_ranges, moved_to_lab_reported, draw_info))
     lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
     lab_review_notes.extend(lab_notes)
     dexa_exclusions = []  # DEXA pages not attributed to this patient: listed under INCOMPLETE
@@ -2785,7 +3064,6 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                                                                         printed_names, dexa_exclusions, dexa_confirmed,
                                                                         age, dexa_info)
                                               if dexa_pdfs else ([], [], []))
-    note = parse_provider_note(note_text)
     for match in re.finditer(r"^\s*Patient(?: Name)?\s*:\s*(.+?)\s*$", note["accepted_text"] or "", re.I | re.M):
         printed_names.append(("provider note", None, " ".join(match.group(1).split())))
 
@@ -2796,6 +3074,9 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     latest = max(dated, key=lambda occ: _normalize_date_for_matching(occ["date_display"]), default=None)
     single_draw = first is None or (_normalize_date_for_matching(first["date_display"])
                                     == _normalize_date_for_matching(latest["date_display"]))
+    dexa_history, dexa_pairing = pair_dexa_with_bloodwork(dexa_history, latest["date_display"] if latest else None)
+    if dexa_pairing and dexa_pairing["excluded"]:
+        dexa_summary = [*dexa_summary, f"  {dexa_pairing['line']}"]
     extracted = {
         "name": patient_name or "",
         "first_draw_date": "" if single_draw else first["date_display"],
@@ -2819,7 +3100,12 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "dexa_confirmed_pages": dexa_confirmed,
         "dexa_info": dexa_info,
         "dexa_exclusions": dexa_exclusions,
+        "dexa_pairing": dexa_pairing,
         "collected_date": collected_date,
+        "scan_date": scan_date,
+        "undated_scan_date": undated_scan_date,
+        "female_report": female_report,
+        "lab_sexes": sorted(lab_sexes),
         "lab_pages": {"text": lab_text_pages, "scanned": scan_numbers},
         "preflight": preflight_items(parse_exclusions, scan_notes if scan_numbers else [], scan_row_exclusions,
                                      dexa_exclusions, dexa_info, unrecognized) + note_preflight(note),
@@ -2943,12 +3229,15 @@ def _clock_minutes(text: str | None) -> int | None:
     return hour * 60 + minute if hour < 24 and minute < 60 else None
 
 
+_AM_WINDOW_RE = re.compile(r"\bAM\s*\(\s*(\d{1,2})\s*-\s*(\d{1,2})\s*AM\s*\)")  # "AM (6-10 AM) 4.8-19.5 ug/dL"
+
+
 def _morning_window(pages) -> tuple | None:
     """The lab's printed morning window for cortisol ("Morning (6-10 AM): ..."), when exactly one is printed."""
     import access_medical
 
-    windows = {(int(match[1]), int(match[2])) for page in pages
-               for match in access_medical._MORNING_WINDOW_RE.finditer(_page_text(page))}
+    windows = {(int(match[1]), int(match[2])) for page in pages for pattern in
+               (access_medical._MORNING_WINDOW_RE, _AM_WINDOW_RE) for match in pattern.finditer(_page_text(page))}
     return windows.pop() if len(windows) == 1 else None
 
 
@@ -3179,6 +3468,8 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
             log.write("\n".join(scoring_log_lines) + "\n")
 
     record = PatientRecord(
+        draft_label=clinic_config.FEMALE_DRAFT_MARK
+        if extracted.get("female_report") and not clinic_config.FEMALE_RANGES_CONFIRMED else None,
         name=extracted.get("name") or None,
         age=extracted.get("age") or None,
         sex=patient_sex,
@@ -3247,10 +3538,12 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                              f"scanned lab page {item['page']}; not in this report"
                              for item in extracted.get("scan_row_exclusions", []))
     notice.incomplete.extend(extracted.get("dexa_incomplete", []))
-    notice.name_header = name_header(extracted.get("name"), extracted.get("printed_names", []))
+    notice.name_header = name_header(extracted.get("name"), extracted.get("printed_names", []),
+                                     ["scanned lab page"] if extracted.get("lab_pages", {}).get("scanned") else [])
     unrecognized_names = {" ".join(item["raw_name"].split()).casefold()
                           for item in extracted.get("unrecognized_markers", [])}
-    notice.other_notes[:0] = coverage_gaps(extracted.get("source_rows", []), record, unrecognized_names)
+    notice.other_notes[:0] = coverage_gaps(extracted.get("source_rows", []), record, unrecognized_names,
+                                           set(extracted.get("moved_to_lab_reported") or {}))
     notice.staff_check = staff_check_block(extracted, record, notice)
     return record, notice
 
@@ -3350,8 +3643,10 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
     scan_excluded = sorted({int(m[1]) for note in extracted.get("other_notes", [])
                             if (m := _SCAN_PAGE_EXCLUDED_RE.match(note))})
     ages = sorted({age for _, age in info.get("accepted", []) if age}, key=float)
-    lines = ["STAFF CHECK - confirm before sending this report",
-             f"  Patient name (entered): {extracted.get('name') or '(none entered)'}",
+    lines = [clinic_config.FEMALE_RANGES_STAFF_CHECK_LINE] if (
+        extracted.get("female_report") and not clinic_config.FEMALE_RANGES_CONFIRMED) else []
+    lines += ["STAFF CHECK - confirm before sending this report",
+              f"  Patient name (entered): {extracted.get('name') or '(none entered)'}",
              f"  Bloodwork Collected date (entered): {extracted.get('collected_date') or '(none entered)'}"
              + (f"; lab header prints Coll. Date {extracted['lab_header']['collected']}"
                 if (extracted.get("lab_header") or {}).get("collected") else "")]
@@ -3372,6 +3667,8 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
         lines.append(f"  DEXA EXCLUDED file {key[0]} page {key[1]}: could not be read ({reason})")
     if record.dexa_history:
         lines.append(f"  {dexa_bloodwork_gap(record.dexa_history, extracted.get('latest_draw_date'))}")
+        if extracted.get("dexa_pairing"):
+            lines.append(f"  {extracted['dexa_pairing']['line']}")
     if lab["text"] or lab["scanned"]:
         kept_text = [page for page in lab["text"] if page not in lab_excluded]
         kept_scan = [page for page in lab["scanned"] if page not in scan_excluded]
@@ -3398,6 +3695,51 @@ def staff_check_block(extracted: dict, record: PatientRecord, notice: Extraction
     mismatches += [note for note in [*notice.other_notes, *notice.dexa_summary] if "NAME MISMATCH" in note]
     lines += [f"  {line.strip()}" for line in mismatches] or ["  Name mismatches: none"]
     return [*lines, STAFF_CHECK_END]
+
+
+def pair_dexa_with_bloodwork(dexa_history: list, latest_draw: str | None) -> tuple[list, dict | None]:
+    """The scan paired with the latest bloodwork: of the scans with body composition, the one nearest the latest
+    bloodwork Collected date within clinic_config.DEXA_PAIRING_WINDOW_DAYS either side (a tie goes to the earlier
+    scan) is the current scan; earlier scans are history; scans dated after it (more than the window after the
+    bloodwork, or later than the chosen scan) are left out of the report, never blended, with a staff note.
+    With no scan inside the window nothing changes. Returns (history, pairing or None)."""
+    draw_day = _normalize_date_for_matching(latest_draw or "")
+    if not dexa_history or not isinstance(draw_day, tuple):
+        return dexa_history, None
+
+    def offset(reading):  # days from the bloodwork to the scan (negative: the scan came first)
+        day = _normalize_date_for_matching(reading.get("date_display") or "")
+        return (date(*day) - date(*draw_day)).days if isinstance(day, tuple) else None
+
+    def composition(reading):
+        return reading.get("body_fat_pct") is not None or None not in (
+            reading.get("total_mass_lb"), reading.get("fat_mass_lb"), reading.get("lean_mass_lb"))
+
+    window = clinic_config.DEXA_PAIRING_WINDOW_DAYS
+    candidates = [(abs(days), days, reading) for reading in dexa_history
+                  if composition(reading) and (days := offset(reading)) is not None and abs(days) <= window]
+    if not candidates:
+        return dexa_history, None
+    _, current_days, current = min(candidates, key=lambda item: (item[0], item[1]))
+    kept, excluded = [], []
+    for reading in dexa_history:
+        days = offset(reading)
+        (excluded if days is not None and days > current_days else kept).append(reading)
+
+    def when(days):
+        return f"{abs(days)} days {'before' if days <= 0 else 'after'}"
+
+    line = (f"DEXA PAIRING: current scan {current['date_display']} ({when(current_days)} the latest bloodwork, "
+            f"{latest_draw}; window {window} days either side)")
+    history = [reading["date_display"] for reading in kept if reading is not current]
+    if history:
+        line += f"; history: {', '.join(history)}"
+    if excluded:
+        line += ("; excluded, not in this report (dated after the paired scan, never blended): "
+                 + ", ".join(f"{reading['date_display']} ({when(offset(reading))} the bloodwork)"
+                             for reading in excluded))
+    return kept, {"current": current["date_display"], "excluded": [r["date_display"] for r in excluded],
+                  "line": line}
 
 
 def dexa_bloodwork_gap(dexa_history: list, latest_draw: str | None) -> str:
@@ -3449,9 +3791,10 @@ def dexa_score_notes(record: PatientRecord) -> list[str]:
             f"{latest.date_display} ({'; '.join(missing)}); the Structure score is left out of the overall score"]
 
 
-def name_header(staff_name: str | None, printed: list) -> list[str]:
+def name_header(staff_name: str | None, printed: list, uploaded: list = ()) -> list[str]:
     """'This report is for <staff-entered name>' and the name each source printed, flagging mismatches.
-    Only names are listed; no date of birth or ID is read into it."""
+    Only names are listed; no date of birth or ID is read into it. A source in `uploaded` that prints no name
+    (scanned lab pages) asks staff to confirm the pages are this patient's."""
     import scan_bloodwork
 
     lines = [f"This report is for {staff_name or '(no name entered)'} (staff-entered)"]
@@ -3459,7 +3802,7 @@ def name_header(staff_name: str | None, printed: list) -> list[str]:
     for source in sources:
         entries = [(where, name) for kind, where, name in printed if kind == source]
         if not entries:
-            lines.append(f"  {source}: no name printed")
+            lines.append(f"  {source}: no name printed" + (" - confirm" if source in uploaded else ""))
             continue
         by_name = {}
         for where, name in entries:
@@ -3473,10 +3816,12 @@ def name_header(staff_name: str | None, printed: list) -> list[str]:
     return lines
 
 
-def coverage_gaps(source_rows: list[dict], record: PatientRecord, unrecognized_names: set[str]) -> list[str]:
-    """Every printed result row must reach the patient report or the staff notes; never vanish."""
+def coverage_gaps(source_rows: list[dict], record: PatientRecord, unrecognized_names: set[str],
+                  moved: set = frozenset()) -> list[str]:
+    """Every printed result row must reach the patient report or the staff notes; never vanish. moved: library
+    markers whose results were moved to lab-reported under another shown name (e.g. "Cortisol, Total")."""
     scored = {marker.name for marker in record.markers}
-    shown = {item.name for item in record.lab_reported}
+    shown = {item.name for item in record.lab_reported} | set(moved)
     gaps = []
     for row in source_rows:
         # A scored test's result moved to lab-reported (not fasting, a different assay) is shown there.
@@ -3553,10 +3898,11 @@ def resolve_age(extracted: dict, staff_age: int | None) -> int | None:
 
 
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitality_index=None,
-        collected_date=None, confirm=None):
+        collected_date=None, confirm=None, scan_collected_date=None):
     """Build the patient report and staff notes. confirm(items) is called after the documents are read and
     before anything is built, only when pages or rows were left out; returning False stops the run
-    (GenerationAborted) so staff can fix the inputs instead of sending a report with gaps."""
+    (GenerationAborted) so staff can fix the inputs instead of sending a report with gaps. scan_collected_date:
+    the staff-entered date of scanned pages that are an earlier draw than the digital report."""
     raw_lab_text = _pdf_row_text(labs_pdf)
     raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
     client = Anthropic(
@@ -3567,7 +3913,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
 
     print("Step 1/3: parsing source documents...")
     extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client,
-                        collected_date=collected_date, age=age, sex=sex)
+                        collected_date=collected_date, age=age, sex=sex, scan_date=scan_collected_date)
     if extracted.get("blocked"):
         print("generation blocked: the latest bloodwork draw has no accepted result")  # value-free
         raise LatestDrawNotAccepted(extracted["blocked"])
