@@ -222,3 +222,15 @@ def test_the_upload_form_passes_the_scanned_pages_date(staff_client, tmp_path, m
                 break
             time.sleep(0.01)
     assert captured["scan_collected_date"] == "06/10/2025" and captured["collected_date"] == "05/12/2026"
+
+
+def test_a_scanned_name_misread_with_lookalike_letters_is_matched_once_and_noted(tmp_path, monkeypatch):
+    reads = fc.scan_reads()
+    reads[2]["rows"].append({"name": "Trilodothyronine (T3), Total", "result_text": "118", "flag": None,
+                             "reference_range": "80-200", "lab_code": None, "column": "in_range", "page": 0,
+                             "illegible": False, "section": "THYROID FUNCTION"})
+    record, review, _ = _run(tmp_path, monkeypatch, scan_reads=reads)
+    assert _values(record)[("Total T3", fc.EARLIER)] == {"118"}
+    assert "Trilodothyronine" not in {item.name for item in record.lab_reported}
+    assert "STAFF REVIEW - name matched after OCR folding: scanned page 2 prints 'Trilodothyronine (T3), Total', " \
+           "read as Total T3" in review

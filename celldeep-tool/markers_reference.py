@@ -23,6 +23,8 @@ not the original invented thresholds):
   - Insulin Resistance Score: moderate ceiling corrected to 66
 """
 
+import re
+
 # kind: "bounded" (optimal/moderate cutoffs + direction) | "range" (lo/hi reference band) | "categorical" (pass/fail)
 # aliases: alternate names/spellings this marker might appear under in a different lab's PDF —
 #          extraction matches against these case-insensitively before giving up.
@@ -55,31 +57,33 @@ MARKER_LIBRARY = {
 
     # ---- Lipids ----
     "Total Cholesterol": dict(category="Lipids", unit="mg/dL", kind="bounded",
-        direction="lower", optimal=200, moderate=240, disp_range="optimal <200",
+        direction="lower", optimal=200, moderate=240, inclusive=False, disp_range="optimal <200",
         aliases=["total cholesterol", "cholesterol, total"]),
     "HDL Cholesterol": dict(category="Lipids", unit="mg/dL", kind="bounded",
         direction="higher", optimal=50, moderate=40, disp_range="optimal \u226550",
         aliases=["hdl", "hdl cholesterol", "hdl-c"]),
     "Triglycerides": dict(category="Lipids", unit="mg/dL", kind="bounded",
-        direction="lower", optimal=150, moderate=200, disp_range="optimal <150",
+        direction="lower", optimal=150, moderate=200, inclusive=False, moderate_inclusive=False,
+        disp_range="optimal <150",
         aliases=["triglycerides", "trig"]),
     "LDL Cholesterol": dict(category="Lipids", unit="mg/dL", kind="bounded",
-        direction="lower", optimal=100, moderate=129, disp_range="optimal <100",
+        direction="lower", optimal=100, moderate=129, inclusive=False, disp_range="optimal <100",
         aliases=["ldl", "ldl cholesterol", "ldl-c", "ldl (calc)", "LDL-CHOLESTEROL"]),
     "Non-HDL Cholesterol": dict(category="Lipids", unit="mg/dL", kind="bounded",
-        direction="lower", optimal=130, moderate=190, disp_range="optimal <130",
+        direction="lower", optimal=130, moderate=190, inclusive=False, moderate_inclusive=False,
+        disp_range="optimal <130",
         aliases=["non-hdl cholesterol", "non hdl", "non-hdl-c", "NON HDL CHOLESTEROL"]),
     "LDL-P (particle count)": dict(category="Lipids", unit="nmol/L", kind="bounded",
-        direction="lower", optimal=935, moderate=1816, disp_range="optimal <935",
+        direction="lower", optimal=935, moderate=1816, inclusive=False, disp_range="optimal <935",
         aliases=["ldl-p", "ldl particle number", "ldl particle count"]),
     "HDL-P": dict(category="Lipids", unit="\u00b5mol/L", kind="bounded",
-        direction="higher", optimal=32.8, moderate=29.2, disp_range="optimal >32.8",
+        direction="higher", optimal=32.8, moderate=29.2, inclusive=False, disp_range="optimal >32.8",
         aliases=["hdl-p", "hdl particle number"]),
     "Apolipoprotein B": dict(category="Lipids", unit="mg/dL", kind="bounded",
-        direction="lower", optimal=90, moderate=129, disp_range="optimal <90",
+        direction="lower", optimal=90, moderate=129, inclusive=False, disp_range="optimal <90",
         aliases=["apob", "apolipoprotein b", "apo b"]),
     "Lipoprotein(a)": dict(category="Lipids", unit="nmol/L", kind="bounded",
-        direction="lower", optimal=75, moderate=125, disp_range="optimal <75",
+        direction="lower", optimal=75, moderate=125, inclusive=False, disp_range="optimal <75",
         aliases=["lp(a)", "lipoprotein (a)", "lipoprotein a"]),
 
     # ---- Metabolic ----
@@ -150,7 +154,7 @@ MARKER_LIBRARY = {
     "Total T4": dict(category="Thyroid", unit="\u00b5g/dL", kind="range",
         lo=4.5, hi=11.7, disp_range="4.5\u201311.7",
         aliases=["total t4", "t4 total", "t4, total", "thyroxine, total", "total thyroxine",
-                 "T4 (Thyroxine), Total"]),
+                 "T4 (Thyroxine), Total", "Thyroxine (T4), Total"]),
     "Free T3": dict(category="Thyroid", unit="pg/mL", kind="range",
         lo=3.0, hi=4.5, disp_range="3.0\u20134.5",
         aliases=["free t3", "t3, free", "ft3", "free triiodothyronine"]),
@@ -345,17 +349,40 @@ CATEGORY_TAGLINES = {
 }
 
 
+def name_key(text: str | None) -> str:
+    """The one spelling every alias comparison uses: case folded, whitespace and line breaks collapsed, and a name
+    wrapped at a hyphen or inside parentheses rejoined ("TMAO (Trimethylamine N-\noxide)" == "...N-oxide)").
+    Letters and digits are never changed."""
+    key = " ".join((text or "").split()).casefold()
+    key = re.sub(r"-\s+(?=\w)", "-", key)
+    return re.sub(r"\(\s+", "(", re.sub(r"\s+\)", ")", key))
+
+
+_OCR_FOLD = str.maketrans({"i": "l", "1": "l", "|": "l", "0": "o"})
+
+
+def ocr_folded_key(text: str | None) -> str:
+    """name_key with the lookalike characters a page image is misread with treated alike (I / l / 1, O / 0). Used
+    only for names read from scanned pages, and only when exactly one alias matches."""
+    return name_key(text).translate(_OCR_FOLD)
+
+
 def lookup_marker(raw_name: str):
-    """Case-insensitive match against canonical names + aliases. Returns (canonical_name, config) or None.
+    """Exact match (name_key) against canonical names + aliases. Returns (canonical_name, config) or None.
     Extraction calls this for every marker it finds in a source document — a miss here means the marker
     goes through the unknown-marker policy, not a guess."""
-    q = raw_name.strip().lower()
+    q = name_key(raw_name)
     for canonical, cfg in MARKER_LIBRARY.items():
-        if q == canonical.lower():
-            return canonical, cfg
-        if q in [a.lower() for a in cfg.get("aliases", [])]:
+        if q == name_key(canonical) or q in {name_key(a) for a in cfg.get("aliases", [])}:
             return canonical, cfg
     return None
+
+
+def ocr_folded_matches(raw_name: str) -> set:
+    """Canonical markers whose name or an alias equals raw_name once lookalike characters are folded."""
+    q = ocr_folded_key(raw_name)
+    return {canonical for canonical, cfg in MARKER_LIBRARY.items()
+            if q in {ocr_folded_key(alias) for alias in [canonical, *cfg.get("aliases", [])]}}
 
 
 # Sex values seen in practice from extraction/CLI/form input - normalizes case and common

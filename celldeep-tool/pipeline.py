@@ -1211,8 +1211,24 @@ def _clean_row_name(text: str, lab_codes: set[str]) -> str:
     return " ".join(text.split())
 
 
+def _ocr_folded_name(name: str, heading: str | None) -> str | None:
+    """A scanned-page name that matches no alias exactly but exactly one library marker once lookalike characters
+    (I / l / 1, O / 0) are folded: that marker's canonical name. None otherwise (never a guess between several)."""
+    from markers_reference import ocr_folded_matches
+
+    try:
+        if _match_row_name(name, heading) is not None or lab_reported.lookup(name, heading) is not None:
+            return None
+    except BloodworkParseError:
+        return None
+    matches = ocr_folded_matches(name)
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
 def _match_row_name(name: str, heading: str | None):
-    query = name.casefold()
+    from markers_reference import name_key
+
+    query = name_key(name)
     namespaces = {canonical.split(" \u2014 ")[0] for canonical in MARKER_LIBRARY if " \u2014 " in canonical}
     namespace = next((item for item in namespaces if item.casefold() == (heading or "").casefold()), None)
     candidates = {}
@@ -1221,7 +1237,7 @@ def _match_row_name(name: str, heading: str | None):
             continue
         aliases = [canonical, *config.get("aliases", [])]
         for alias in aliases:
-            if query == " ".join(alias.split()).casefold():
+            if query == name_key(alias):
                 candidates[canonical] = config
     if not candidates:
         return None
@@ -2217,6 +2233,11 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
     for row in accepted:
         section = {"order_id": None, "dates": [row["date"]], "heading": row["section"]}
         name = _clean_row_name(row["name"], lab_codes)
+        if (folded := _ocr_folded_name(name, row["section"])) is not None:
+            notes.append(f"STAFF REVIEW - name matched after OCR folding: scanned page {row['page']} prints "
+                         f"{name!r}, read as {folded} (the only test whose name matches when I/l/1 and O/0 are "
+                         "treated alike) - confirm")
+            name = folded
         value = row["result_text"]
         words = [(220, 120, 240, 130, value)]
         if row["reference_range"]:
@@ -2931,6 +2952,34 @@ def apply_female_ranges(occurrences: list, unrecognized: list, postmenopausal_bh
     return notes
 
 
+def drop_duplicate_lab_reported(lab_items: list, occurrences: list) -> list[str]:
+    """One test, one value per draw date: a lab-reported result whose printed name is a library marker that already
+    has a result on the same date (e.g. one page printing "Thyroxine (T4), Total" while another prints "Total T4")
+    is not shown a second time; staff notes say so. Returns staff notes."""
+    from markers_reference import lookup_marker
+
+    shown = {(o["name"], _normalize_date_for_matching(o["date_display"])) for o in occurrences
+             if o["value"] is not None or o["disp_value"]}
+    notes = []
+    for item in lab_items:
+        if item["group"] == lab_reported.URINALYSIS or any(
+                lab_reported.lookup(name, item["group"]) for name in item.get("printed_names", [])):
+            continue  # a urinalysis or other lab-reported test of its own (urine "Glucose" is not blood glucose)
+        canonicals = {match[0] for name in item.get("printed_names", []) if (match := lookup_marker(name))}
+        kept = []
+        for result in item["results"]:
+            date = _normalize_date_for_matching(result["date_display"])
+            same = next((c for c in canonicals if (c, date) in shown), None)
+            if same:
+                notes.append(f"DUPLICATE NOT SHOWN: {item['name']} {result['disp_value']!r} on {result['date_display']} "
+                             f"is the same test as {same} on that date, which is shown once")
+                continue
+            kept.append(result)
+        item["results"] = kept
+    lab_items[:] = [item for item in lab_items if item["results"]]
+    return notes
+
+
 def latest_draw_block(printed_dates: list, staff_date: str | None, occurrences: list, lab_items: list,
                       parse_exclusions: list) -> str | None:
     """Why the report must not be built, or None: the staff-entered Collected date, or the latest Collected date
@@ -3057,6 +3106,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             phase_ranges, moved_to_lab_reported, draw_info))
     lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
     lab_review_notes.extend(lab_notes)
+    lab_review_notes.extend(drop_duplicate_lab_reported(lab_items, occurrences))
     dexa_exclusions = []  # DEXA pages not attributed to this patient: listed under INCOMPLETE
     dexa_confirmed = []  # (file, page) keys confirmed as this patient's
     dexa_info = {}  # pages that could not be read, ages of accepted pages
@@ -3425,6 +3475,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 disp_range=cfg["disp_range"],
                 optimal=cfg.get("optimal"), moderate=cfg.get("moderate"), direction=cfg.get("direction"),
                 inclusive=cfg.get("inclusive", True),
+                moderate_inclusive=cfg.get("moderate_inclusive", True),
                 lo=cfg.get("lo"), hi=cfg.get("hi"),
                 suppress_low_on_trt=cfg.get("suppress_low_on_trt", False),
                 unscored_reason="missing_threshold" if missing_threshold else None,

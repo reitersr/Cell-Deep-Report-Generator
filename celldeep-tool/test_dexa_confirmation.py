@@ -169,3 +169,32 @@ def test_mass_balance_never_picks_when_both_candidates_fit_or_the_others_are_uns
     history, _, _ = _run(tmp_path, ["a", "b"], {"a": _same(whole), "b": _same(unsettled)}, name="second.pdf")
     scan = _by_date(history)["06/02/2025"]
     assert scan["fat_mass_lb"] is None and scan["total_mass_lb"] is None
+
+
+def test_a_printed_body_fat_the_masses_confirm_is_kept_as_printed_not_computed(tmp_path):
+    """One page prints the whole-body %Fat, another the android %Fat for the same date (read into body fat): the
+    pages disagree 1 to 1. The printed value equal to fat / (fat + lean) (45.5 / 177.5 = 25.6%) is the whole-body
+    one: it is shown as printed, never labelled computed, and the other value is not used."""
+    whole = fx.scan(LATER["date"], LATER["total_mass"], LATER["fat_mass"], LATER["lean_mass"], "25.6")
+    regional = fx.scan(LATER["date"], body_fat="18.2")
+    history, notes, _ = _run(tmp_path, ["summary", "abdomen"], {"summary": _same(whole), "abdomen": _same(regional)})
+    scan = _by_date(history)["10/06/2025"]
+    assert scan["body_fat_pct"] == "25.6%" and not scan.get("computed")
+    assert any("25.6 is the one the scan's printed fat and lean mass confirm" in note and "18.2 not used" in note
+               for note in notes)
+
+
+def test_reads_that_disagree_on_body_fat_keep_the_printed_value_the_masses_confirm(tmp_path):
+    whole = fx.scan(LATER["date"], LATER["total_mass"], LATER["fat_mass"], LATER["lean_mass"], "25.6")
+    misread = dict(whole, body_fat_pct="18.2")
+    history, _, _ = _run(tmp_path, ["summary"], {"summary": (fx.read([whole]), fx.read([misread]))})
+    scan = _by_date(history)["10/06/2025"]
+    assert scan["body_fat_pct"] == "25.6%" and not scan.get("computed")
+
+
+def test_body_fat_no_printed_value_matches_stays_computed(tmp_path):
+    whole = fx.scan(LATER["date"], LATER["total_mass"], LATER["fat_mass"], LATER["lean_mass"], "27.0")
+    other = fx.scan(LATER["date"], body_fat="18.2")
+    history, _, _ = _run(tmp_path, ["a", "b"], {"a": _same(whole), "b": _same(other)})
+    scan = _by_date(history)["10/06/2025"]
+    assert scan["body_fat_pct"] == "25.6%" and scan["computed"] == ["body_fat_pct"]  # neither printed value fits
