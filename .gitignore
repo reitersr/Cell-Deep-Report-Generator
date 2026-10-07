@@ -5,3 +5,5 @@ celldeep-tool/synthetic_fixtures/out/
 # Generated code exports and archives may embed patient data; never commit them.
 claude_review_export.md
 *.zip
+# Real patient source files for local debugging only - never committed (also ignored under celldeep-tool/).
+real_fixtures/

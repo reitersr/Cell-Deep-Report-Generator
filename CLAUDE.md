@@ -49,6 +49,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/test_*.py` | Test suite (pytest). |
 | `calibration_baselines/` | Synthetic calibration snapshots. |
 | `celldeep-tool/ranges_audit.py` | Read-only audit of each marker's threshold source; `--write` regenerates `docs/ranges_audit.md` (a test keeps it in sync). |
+| `celldeep-tool/synthetic_fixtures/column_roles.py` | Synthetic pages in a real multi-draw layout's table geometry (`test_column_roles.py`). |
 | `celldeep-tool/synthetic_fixtures/chl_multi_draw.py` | Three-draw Cleveland HeartLab-style lab PDF (`test_chl_round1.py`). |
 | `celldeep-tool/synthetic_fixtures/scenarios.py` | End-to-end synthetic scenarios with a scripted vision model (smoke test, `test_scenarios.py`). |
 | `scripts/smoke_test.py` | Generates reports from synthetic fixtures and prints PASS/FAIL (no API key, no network, under a minute). |
@@ -103,7 +104,15 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      the printed unit; word results
      and assays that differ from the CellDeep range basis are lab-reported; units are never filled in). Otherwise
      `_parse_bloodwork_tables` reads rows by printed column position
-     under each page's own Current/Historical or In Range/Out of Range header. Names match
+     under each page's own Current/Historical or In Range/Out of Range header. Column-role model: the "Test Name"
+     line (`_bloodwork_header`) and every header line printed under it (`_refine_header`: risk-tier labels, Units,
+     Lab, Flag, Current sub-labels such as Optimal/Non-Optimal or In Range/Out of Range, Historical dates and empty
+     "/ /" slots) give each column one role by x-position: name, current, historical (one column per printed date;
+     a "/ /" slot holds nothing), reference range, risk threshold, units, lab code, flag, comments. Only current and
+     historical columns hold results; thresholds such as ">123" never are. A header date under no Historical
+     column leaves out only that table, with a notice. Lab progress/trend summary pages (and their continuation
+     pages with dates on the "Test Name" line) restate other reports and are not read ("TREND PAGES NOT READ"
+     staff note). The Symbol font's mis-mapped "!"/"∀" glyphs read as "≥"/"≤" (`_SYMBOL_FONT_GLYPHS`). Names match
      the marker library by exact alias only; anything else becomes an unrecognized-marker
      review item (and, when it prints a value and the lab's unit or range, is also shown lab-reported under the
      lab's own section heading). A cell that cannot be read (digits run together, a range where a scored result
