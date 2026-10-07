@@ -354,8 +354,8 @@ def test_unaliased_rows_are_lab_reported_under_the_labs_heading(extracted, repor
     assert {"LDL Size", "Apolipoprotein A1"} <= staff  # still on the staff list
     text, review = report
     assert "LDL Size 20.5-23.0 — 21.2 nm March 10, 2026" in text
-    assert "Unrecognized marker \"LDL Size\" (21.2 nm), reference range on source: 20.5-23.0 — shown in the report " \
-           "as lab-reported" in review
+    assert "Unrecognized marker \"LDL Size\" (21.2 nm on 03/10/2026), reference range on source: 20.5-23.0 — shown in " \
+           "the report as lab-reported" in review
 
 
 def test_an_unaliased_row_under_a_lab_heading_uses_that_heading():

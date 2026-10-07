@@ -48,6 +48,10 @@
   "M | PSA Total | 08/07/2026 | 0.6 |  | optimal",
   "M | SHBG | 08/07/2026 | 38 |  | optimal",
   "M | Testosterone, Total | 08/07/2026 | 612 |  | optimal",
-  "M | eGFR | 08/07/2026 | 98 |  | optimal"
+  "M | eGFR | 08/07/2026 | 98 |  | optimal",
+  "O | overall now 62 | first visit ",
+  "S | Drive | optimal 3 | moderate 1 | flag 0 | not scored 1 | score 91 | moderate",
+  "S | Reserves | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal",
+  "S | Structure | score 50 | moderate"
  ]
 }

@@ -28,6 +28,13 @@
   "M | Testosterone, Total | 04/14/2026 | 812 |  | optimal",
   "M | Testosterone, Total | 11/20/2025 | 655 |  | optimal",
   "M | hs-CRP | 03/02/2026 | 1.4 | H | moderate",
-  "M | hs-CRP | 11/20/2025 | 2.2 |  | moderate"
+  "M | hs-CRP | 11/20/2025 | 2.2 |  | moderate",
+  "O | overall now 91 | first visit 79",
+  "S | Drive | optimal 3 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal",
+  "S | Flow | optimal 3 | moderate 0 | flag 0 | not scored 0 | score 89 | optimal",
+  "S | Fuel | optimal 2 | moderate 0 | flag 0 | not scored 0 | score 92 | optimal",
+  "S | Pace | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal",
+  "S | Repair | optimal 0 | moderate 1 | flag 0 | not scored 0 | score 80 | moderate",
+  "S | Reserves | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 94 | optimal"
  ]
 }

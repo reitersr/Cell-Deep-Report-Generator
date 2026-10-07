@@ -90,14 +90,51 @@ def format_review_notice(notice: ExtractionReviewNotice) -> str:
             lines += ["", *block]
     if notice.dexa_summary or notice.scan_summary:
         lines += ["", "OTHER REVIEW ITEMS"]
-    for m in notice.unrecognized_markers:
-        line = f"  - Unrecognized marker \"{m.raw_name}\" ({m.raw_value}{' ' + m.raw_unit if m.raw_unit else ''})"
-        if m.raw_range:
-            line += f", reference range on source: {m.raw_range}"
+    for group in _unrecognized_groups(notice.unrecognized_markers):
+        first = group[0]
+        values = _unrecognized_values(group)
+        line = f"  - Unrecognized marker \"{first.raw_name}\" ({values})"
+        ranges = list(dict.fromkeys(m.raw_range for m in group if m.raw_range))
+        if ranges:
+            line += f", reference range{'s' if len(ranges) > 1 else ''} on source: {' / '.join(ranges)}"
         line += (" — shown in the report as lab-reported, as printed and not scored. Add an alias to score it or "
-                 "group it in future reports." if m.shown_as_lab_reported else
+                 "group it in future reports." if first.shown_as_lab_reported else
                  " — not included in this report. Add to markers_reference.py to include it in future reports.")
         lines.append(line)
     for note in notice.other_notes:
         lines.append(f"  - {note}")
     return "\n".join(lines)
+
+
+def _unrecognized_groups(markers) -> list[list]:
+    """One staff-note line per unrecognized test: the rows a multi-draw file prints for the same name (one per report,
+    each repeating earlier draws in its Historical columns) are listed together, in first-seen order. Rows shown as
+    lab-reported and rows left out stay on separate lines so each line says truthfully where its values went."""
+    groups = {}
+    for m in markers:
+        groups.setdefault((m.raw_name, m.shown_as_lab_reported), []).append(m)
+    return list(groups.values())
+
+
+def _date_key(date: str):
+    month, day, year = (date.split("/") + ["", "", ""])[:3]
+    return (year, month, day) if year else ("", "", date)
+
+
+def _unrecognized_values(group) -> str:
+    """Every value printed for the test with its unit and draw date, oldest first, each (date, value) once. Rows
+    without dated cells keep their value text as printed."""
+    dated, undated = {}, []
+    for m in group:
+        unit = f" {m.raw_unit}" if m.raw_unit else ""
+        cells = [cell for cell in m.cells if cell.get("present", True) and cell.get("disp_value")]
+        if not cells:
+            if m.raw_value and m.raw_value + unit not in undated:
+                undated.append(m.raw_value + unit)
+            continue
+        for cell in cells:
+            value = cell["disp_value"] + (f" {cell['lab_flag']}" if cell.get("lab_flag") else "") + unit
+            dated.setdefault((cell.get("date_display") or "", value), None)
+    parts = [f"{value} on {date}" if date else value for date, value in sorted(dated, key=lambda k: _date_key(k[0]))]
+    return "; ".join(parts + undated)
+

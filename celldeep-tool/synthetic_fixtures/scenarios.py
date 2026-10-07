@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import fitz
 
 import pipeline
-from synthetic_fixtures import access_medical_lab, clinic_dexa
+from synthetic_fixtures import access_medical_lab, chl_extensive, clinic_dexa
 from synthetic_fixtures import deterministic_fixtures as fx
 from synthetic_fixtures import dexa as dexa_fx
 from synthetic_fixtures import layouts
@@ -132,12 +132,19 @@ def build(name, folder):
         if name == "access_medical_other_date":
             options["collected_date"] = "08/14/2026"  # staff entered a different date than the lab header
         return str(labs), [str(dexa)], reads, options
+    if name == "chl_extensive":
+        labs = chl_extensive.write_labs(folder / "labs.pdf")
+        dexa = dexa_fx.write_pdf(folder / "dexa.pdf", chl_extensive.DEXA_LABELS)
+        script = chl_extensive.dexa_pages()
+        reads = {(str(dexa), number): script[label] for number, label in enumerate(chl_extensive.DEXA_LABELS, 1)}
+        return str(labs), [str(dexa)], reads, {"age": chl_extensive.AGE, "patient": chl_extensive.PATIENT,
+                                               "collected_date": chl_extensive.LATEST}
     raise KeyError(name)
 
 
 ACCESS_SCAN_DATE = "07/20/2026"
 SCENARIOS = ["quest_digital", "chl_digital", "labcorp_digital", "scanned", "mixed", "variant", "scanned_noisy",
-             "clinic_dexa", "clinic_dexa_no_age", "access_medical", "access_medical_limited"]
+             "clinic_dexa", "clinic_dexa_no_age", "access_medical", "access_medical_limited", "chl_extensive"]
 
 
 def run_scenario(name, folder, monkeypatch=None):

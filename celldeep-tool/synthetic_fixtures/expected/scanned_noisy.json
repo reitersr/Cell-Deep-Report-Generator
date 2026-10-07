@@ -2,6 +2,9 @@
  "rows": [
   "M | Fasting Insulin | 04/14/2026 | 4.4 |  | optimal",
   "M | HbA1c | 04/14/2026 | 5.2 |  | optimal",
-  "M | TSH | 04/14/2026 | 2.10 |  | optimal"
+  "M | TSH | 04/14/2026 | 2.10 |  | optimal",
+  "O | overall now 65 | first visit ",
+  "S | Fuel | optimal 2 | moderate 0 | flag 0 | not scored 0 | score 92 | optimal",
+  "S | Pace | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal"
  ]
 }

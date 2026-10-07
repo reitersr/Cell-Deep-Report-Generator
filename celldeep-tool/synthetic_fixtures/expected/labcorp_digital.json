@@ -7,6 +7,9 @@
   "L | Other Lab-Flagged Results | Synthetic Assay Y | 03/02/2026 | 0.2 | L | 0.5-2.0",
   "M | Ferritin | 03/02/2026 | 20 | L | optimal",
   "M | HbA1c | 03/02/2026 | 5.4 |  | optimal",
-  "M | Vitamin B12 | 03/02/2026 | 655 |  | optimal"
+  "M | Vitamin B12 | 03/02/2026 | 655 |  | optimal",
+  "O | overall now 64 | first visit ",
+  "S | Fuel | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 89 | optimal",
+  "S | Reserves | optimal 2 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal"
  ]
 }
