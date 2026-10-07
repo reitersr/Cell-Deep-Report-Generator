@@ -5,6 +5,10 @@
   "D | 09/08/2025 | total 171 | fat 40.2 | lean 124.6 | body fat 24.4% (printed) | VAT lb 1.12 | VAT cm2 118",
   "D | 11/17/2025 | total 169.4 | fat 36.1 | lean 126.8 | body fat 22.2% (computed) | VAT lb 1.01 | VAT cm2 109",
   "M | TSH | 06/15/2026 | 1.9 |  | optimal",
-  "M | hs-CRP | 06/15/2026 | 0.4 |  | optimal"
+  "M | hs-CRP | 06/15/2026 | 0.4 |  | optimal",
+  "O | overall now 66 | first visit ",
+  "S | Pace | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal",
+  "S | Repair | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 95 | optimal",
+  "S | Structure | score 73 | moderate"
  ]
 }

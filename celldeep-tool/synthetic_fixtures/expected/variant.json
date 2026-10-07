@@ -2,6 +2,9 @@
  "rows": [
   "L | Other Lab Results | Thyroid Stimulating Hormone Ultra | 04/14/2026 | 2.1 |  | 0.40-4.50",
   "M | TSH | 04/14/2026 | 1.9 |  | optimal",
-  "M | hs-CRP | 04/14/2026 | 0.4 |  | optimal"
+  "M | hs-CRP | 04/14/2026 | 0.4 |  | optimal",
+  "O | overall now 65 | first visit ",
+  "S | Pace | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal",
+  "S | Repair | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 95 | optimal"
  ]
 }

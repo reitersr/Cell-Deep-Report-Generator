@@ -39,3 +39,16 @@ def test_a_changed_value_is_reported_as_a_difference(check, capsys):
 def test_real_fixture_rows_may_leave_a_field_open(check):
     assert check._matches("D | 01/01/2025 | total 1 | *", "D | 01/01/2025 | total 1 | VAT cm2 90")
     assert not check._matches("M | TSH | 03/02/2026 | 1.9 |  | *", "M | TSH | 03/02/2026 | 2.0 |  | optimal")
+
+
+def test_score_outputs_are_part_of_the_checked_report_data(check):
+    rows = check.json.loads((check.EXPECTED / "chl_extensive.json").read_text())["rows"]
+    assert any(row.startswith("S | ") and " | score " in row for row in rows)
+    assert sum(row.startswith("O | overall now ") for row in rows) == 1
+
+
+def test_a_real_fixture_without_its_dexa_read_skips_only_the_rows_that_use_it(check):
+    assert check._uses_dexa("D | 01/01/2025 | total 1 | fat 1 | lean 1 | body fat — (-) | VAT lb  | VAT cm2 ")
+    assert check._uses_dexa("O | overall now 70 | first visit ") and check._uses_dexa("S | Structure | score 50 | moderate")
+    assert not check._uses_dexa("S | Flow | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 90 | optimal")
+    assert not check._uses_dexa("M | TSH | 03/02/2026 | 1.9 |  | optimal")

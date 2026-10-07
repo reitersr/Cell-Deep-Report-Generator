@@ -53,9 +53,10 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/synthetic_fixtures/column_roles.py` | Synthetic pages in a real multi-draw layout's table geometry (`test_column_roles.py`). |
 | `celldeep-tool/synthetic_fixtures/chl_multi_draw.py` | Three-draw Cleveland HeartLab-style lab PDF (`test_chl_round1.py`). |
 | `celldeep-tool/synthetic_fixtures/scenarios.py` | End-to-end synthetic scenarios with a scripted vision model (smoke test, `test_scenarios.py`). |
-| `scripts/regression_check.py` | Runs every fixture (synthetic, and git-ignored `real_fixtures/*.expected.json`) to the report data and diffs it against expected values (`--snapshot`/`--diff` for before/after; `--dexa-reads` replays stored DEXA transcriptions offline); CI runs it on the synthetic fixtures (`test_regression_check.py`). |
+| `scripts/regression_check.py` | Runs every fixture (synthetic, and git-ignored `real_fixtures/*.expected.json`) to the report data (every lab result, DEXA scan, per-system counts and scores, overall score) and diffs it against expected values (`--snapshot`/`--diff` for before/after; `--dexa-reads` replays stored DEXA transcriptions offline; `--record-real` locks a hand-verified real report, compared exactly); CI runs it on the synthetic fixtures (`test_regression_check.py`) and fails on any difference. |
+| `celldeep-tool/synthetic_fixtures/chl_extensive.py` | Synthetic stand-in for the verified Cleveland HeartLab extensive male (thresholds, Historical dates, "/ /", "60L", unknown fasting, changed assay, trend page, three DEXA scans); with `quest_digital` and `access_medical_limited` it covers the three verified patient types (`test_layout_fixtures.py`). |
 | `scripts/smoke_test.py` | Generates reports from synthetic fixtures and prints PASS/FAIL (no API key, no network, under a minute). |
-| `docs/` | Audits, open clinical decisions (`open_decisions.md`), `staff_guide.md`, `what_the_tool_guarantees.md`. |
+| `docs/` | Audits, open clinical decisions (`open_decisions.md`, current decisions first), `supported_layouts.md` (layout matrix, AI fallback status, how to add a layout), `staff_guide.md`, `what_the_tool_guarantees.md`. |
 | `.github/workflows/tests.yml` | CI: full suite offline on every pull request. |
 
 ## Running tests
@@ -218,7 +219,8 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    The summary lists the systems whose current results come from a draw before the headline date
    (`generation_prompt.earlier_draw_systems`).
 7. **Staff notes**: `_write_review_notes` / `format_review_notice` write the staff-only review
-   file, downloadable separately from the report. It opens with the one-screen STAFF CHECK
+   file, downloadable separately from the report. An unrecognized test is listed once, with every value, unit and
+   draw date (`unknown_marker_policy._unrecognized_groups`). It opens with the one-screen STAFF CHECK
    (`pipeline.staff_check_block`: entered name and date, DEXA dates accepted/excluded with ages and body fat
    labels, the current DEXA scan vs the latest draw, lab pages accepted/excluded, provider note status, counts,
    name mismatches), then INCOMPLETE; tests read past it with

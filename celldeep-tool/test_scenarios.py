@@ -21,6 +21,7 @@ EXPECTED_CONFIRMATIONS = {
     "clinic_dexa_no_age": 1,  # the same page without a staff-entered age
     "access_medical": 0,      # every printed test is known ("PSA, Free" maps to Free PSA)
     "access_medical_limited": 0,  # the summary above the column header is ignored silently
+    "chl_extensive": 3,       # one unreadable Historical cell, the draw date it belongs to, unknown test names
 }
 
 

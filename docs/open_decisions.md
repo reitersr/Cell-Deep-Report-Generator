@@ -1,7 +1,21 @@
 # Open clinical and product decisions
 
-Proposals only. Nothing in this document has been implemented; each item needs a clinic or owner
-decision first. Evidence cites the repository as of this branch (`celldeep-tool/` paths).
+The first section below summarizes the clinic decisions that are open now: who decides each one, and what the tool
+does until then. The numbered items after it are the detailed proposals and their history. Some are implemented, as
+their status lines say. Evidence cites the repository as of this branch (`celldeep-tool/` paths).
+
+## Current clinic decisions
+
+| Decision | Owner | What the tool does meanwhile | Details |
+|---|---|---|---|
+| **Missing male thresholds: Cortisol, DHEA-S, FSH, LH** (and Progesterone) | Clinic (medical lead) | No CellDeep threshold. Each is scored against the lab's own printed range when one is printed ("Lab-printed fallback" in `docs/ranges_audit.md`). With no printed range it is shown unscored, and the staff notes say "ERROR: missing threshold for ... - marker retained as unscored". Cortisol on Cleveland HeartLab and Access reports prints no range, so it is unscored. LH and FSH lows are not flagged when the provider note states TRT. | #9 |
+| **Creatinine male range** | Clinic (medical lead) | Scored against the CellDeep range 0.50-0.97 mg/dL for men and women alike (`markers_reference.py`; "CellDeep-calibrated" in the audit). A male value above 0.97 shows as moderate or flagged, even where the lab's male range calls it normal. | #9 |
+| **Female ranges unverified** | Clinic (medical lead) | Female markers without a CellDeep female threshold (Cortisol, DHEA-S, Estradiol, Total / Free / Bioavailable Testosterone, LH, FSH, Progesterone, SHBG) are scored against the lab's printed range. Explicit postmenopausal BHRT in the provider note uses the CellDeep BHRT targets. **Clinic rule until confirmed: a woman's report is for staff review only and is not sent to the patient. The tool does not enforce this.** It builds the report like any other and adds no banner or block, so staff must hold it. Whether the tool should enforce it (for example a STAFF CHECK line or a blocked download for `sex=female`) is part of this decision. | #9 |
+| **Genetic results (ApoE genotype, MTHFR)** | Clinic (medical lead) | Left out of the patient report. No scoring rule exists, and genotype/word results are never interpreted. Each is listed once in the staff notes: `Unrecognized marker "ApoE Genotype" (... on <date>) — not included in this report`. To show them, the clinic decides the wording and whether they belong in the report at all. | `docs/supported_layouts.md` |
+| **Free Testosterone on a changed assay** | Decided (owner); clinic to confirm the clinical wording | The CellDeep range basis is the 46-224 pg/mL assay (`clinic_config.CELLDEEP_RANGE_BASIS`). A draw on another assay (the 35-155 pg/mL dialysis assay) is lab-reported with its own range and flag, never scored and never in a system score. The marker's current scored value is then the previous scored draw. The patient summary discloses it under "Results from earlier draws: ... Drive: Free Testosterone (<date>)", and the staff notes carry "ASSAY OR RANGE CHANGED". To confirm: whether other tests need a basis entry. | #21, #25 |
+| **Interim DEXA body-fat and VAT ranges** | Clinic (medical lead) | `dexa_reference.py` is marked INTERIM. Body fat uses the ACE categories mapped to CellDeep tiers (men: 6-18% optimal, 18-25% borderline; women: 14-25% optimal, 25-32% borderline). VAT area uses the clinical cm² bands (<100 optimal, 100-160 borderline, >160 poor). VAT printed only in in² is never converted, so it is left out of the score. Estimated "(e)" and computed body fat are scored like printed values and labelled (#19). | #4, #14, #19 |
+| **Cortisol label without "(AM)"** | Clinic (medical lead) | "(AM)" is kept only when every shown draw's printed collection time is inside the lab's printed morning window (`pipeline.label_cortisol` / `label_cortisol_draws`). Otherwise the label is "Cortisol, Total", with each draw's time ("time not recorded" for a placeholder 00:01) and a "CORTISOL LABEL" staff note. Reports that print no collection time keep the library name "Cortisol, Total (AM)" (Quest single-draw). To decide: whether to drop "(AM)" whenever no time is printed. | #1, #25 |
+
 
 | # | Decision | Owner | Blocks |
 |---|---|---|---|
@@ -55,7 +69,8 @@ cortisol have different expected values. That is an inference the source does no
 
 > **Status: implemented for the Access Medical layout** (`pipeline.label_cortisol`): "(AM)" is kept only when the
 > printed Coll. Time is inside the lab's printed morning window, and the collection time is shown next to the value.
-> Quest and Cleveland HeartLab reports print no collection time and are unchanged.
+> Extended to Cleveland HeartLab multi-draw files (#25): every shown draw must be inside the window. Reports that
+> print no collection time keep the library name.
 Cortisol also has no CellDeep threshold today (item 9), so it is scored only against the printed
 lab range.
 

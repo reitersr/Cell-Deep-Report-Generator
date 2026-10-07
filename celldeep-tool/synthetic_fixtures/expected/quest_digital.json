@@ -11,6 +11,10 @@
   "M | Ferritin | 03/02/2026 | 20 | L | optimal",
   "M | Glucose (fasting) | 03/02/2026 | 82 |  | optimal",
   "M | TSH | 03/02/2026 | 1.90 |  | optimal",
-  "M | Vitamin D | 03/02/2026 | 48 |  | moderate"
+  "M | Vitamin D | 03/02/2026 | 48 |  | moderate",
+  "O | overall now 71 | first visit ",
+  "S | Fuel | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal",
+  "S | Pace | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal",
+  "S | Reserves | optimal 1 | moderate 1 | flag 0 | not scored 0 | score 84 | moderate"
  ]
 }

@@ -5,16 +5,22 @@ result with its expected-values file, so a fix for one report cannot silently ch
     python scripts/regression_check.py --record        rewrite the synthetic expected files from the current output
     python scripts/regression_check.py --snapshot DIR  write every fixture's current rows to DIR (before/after diffs)
     python scripts/regression_check.py --diff A B      diff two snapshot directories
+    python scripts/regression_check.py --record-real real:NAME   lock a hand-verified real report (local only)
 
 Fixtures:
 - every synthetic scenario (synthetic_fixtures/scenarios.py, scripted vision reads, no network); expected rows in
   synthetic_fixtures/expected/<scenario>.json, compared exactly. CI runs this through test_regression_check.py.
 - every real_fixtures/<name>.expected.json (git-ignored, never committed: it holds a real report's values). It names
-  its lab PDF and DEXA PDF(s) in real_fixtures/ and the staff entries, and lists the rows that must appear; real
-  DEXA pages are read by the vision model, so they are checked only with CELLDEEP_LIVE_VISION=1 and an API key,
-  otherwise reported as SKIPPED (never silently passed).
+  its lab PDF and DEXA PDF(s) in real_fixtures/ and the staff entries ("labs", "dexa", "patient", "age", "sex",
+  "collected_date", optional "dexa_reads"), and lists the report's rows: "mode": "exact" (written by --record-real)
+  compares every row; without it the list is a subset that may leave fields open with "*". Real DEXA pages are read by the vision model (CELLDEEP_LIVE_VISION=1 and an API
+  key) or replayed from a stored transcription ("dexa_reads"); without either, the DEXA rows and the scores that use
+  them are reported as SKIPPED (never silently passed). --record-real fills "rows" from the current output once the
+  report has been verified by hand.
 
-Each row is one line: a scored-or-not marker result (M), a lab-reported result (L) or a DEXA scan (D).
+Each row is one line: a scored-or-not marker result (M), a lab-reported result (L), a DEXA scan (D), a system's score
+outputs (S: optimal / moderate / flag / not-scored counts, score, color; S | Structure: the DEXA score) or the overall
+score (O: now and at the first visit).
 """
 
 import argparse
@@ -43,10 +49,33 @@ def _num(value):
     return "" if value is None else f"{value:g}" if isinstance(value, float) else str(value)
 
 
-def rows(record) -> list[str]:
-    """The report data that must not change by accident: every marker result with its flag and whether it is
-    scored, every lab-reported result with its printed range, every DEXA scan's measurements and labels."""
+def score_rows(record, copy) -> list[str]:
+    """The score outputs as the report computes them (template.build_rollups, read only): per system, how many
+    scored markers are optimal / moderate / flagged, the system score and its color; the DEXA (Structure) score;
+    the overall score now and at the first visit."""
+    roll, _, overall_now, overall_then, has_dexa = pipeline.template.build_rollups(
+        record, copy.get("structure_score_now"), copy.get("structure_score_then"), copy.get("structure_improved", False))
     out = []
+    for system, rollup in roll.items():
+        if system == "Structure":
+            continue
+        tiers = [m.now_tier for m in pipeline.template.markers_for_category(record, system)]
+        if not tiers:
+            continue  # a system with no markers is not shown in the report
+        counts = " | ".join(f"{tier} {tiers.count(tier)}" for tier in TIERS)
+        out.append(f"S | {system} | {counts} | not scored {sum(t not in TIERS for t in tiers)} | score "
+                   f"{rollup['now']} | {rollup['now_zone']}")
+    if has_dexa:
+        out.append(f"S | Structure | score {_num(roll['Structure']['now'])} | {roll['Structure']['now_zone']}")
+    out.append(f"O | overall now {overall_now} | first visit {_num(overall_then)}")
+    return out
+
+
+def rows(record, copy=None) -> list[str]:
+    """The report data that must not change by accident: every marker result with its flag and whether it is
+    scored, every lab-reported result with its printed range, every DEXA scan's measurements and labels, and the
+    score outputs (score_rows)."""
+    out = score_rows(record, copy) if copy is not None else []
     for m in record.markers:
         name = m.display_name or m.name
         points = [(m.then_date_display, m.disp_then, m.lab_flag_then, m.then_tier),
@@ -81,7 +110,7 @@ def _capture(run):
             run()
     finally:
         pipeline.template.render = original
-    return captured["record"]
+    return captured["record"], captured["copy"]
 
 
 def synthetic_rows(name, folder) -> list[str]:
@@ -95,7 +124,7 @@ def synthetic_rows(name, folder) -> list[str]:
     pipeline._diagnostic_path_prefix = lambda _name: str(folder / "diag")
     try:
         patient = options.get("patient") or (scenarios.clinic_dexa.PATIENT if dexa else scenarios.layouts.PATIENT)
-        return rows(_capture(lambda: pipeline.run(
+        return rows(*_capture(lambda: pipeline.run(
             labs, dexa, options.get("note"), patient, options.get("age"), "male", str(folder / "report.pdf"),
             collected_date=options.get("collected_date"), confirm=lambda items: True)))
     finally:
@@ -144,13 +173,13 @@ def real_rows(spec, folder, reads_file=None) -> tuple[list[str], list[str]]:
     pipeline._review_notes_path = lambda _name: str(folder / "review.txt")
     pipeline._diagnostic_path_prefix = lambda _name: str(folder / "diag")
     try:
-        record = _capture(lambda: pipeline.run(
+        record, copy = _capture(lambda: pipeline.run(
             str(REAL / spec["labs"]), dexa, None, spec.get("patient"), spec.get("age"), spec.get("sex", "male"),
             str(folder / "report.pdf"), collected_date=spec.get("collected_date"), confirm=lambda items: True))
     finally:
         pipeline._review_notes_path, pipeline._diagnostic_path_prefix = saved
         pipeline.Anthropic = saved_client
-    return rows(record), skipped
+    return rows(record, copy), skipped
 
 
 def current(selected=None) -> dict[str, dict]:
@@ -175,8 +204,17 @@ def current(selected=None) -> dict[str, dict]:
                 continue
             got, skipped = real_rows(spec, Path(tmp) / spec_file.stem, DEXA_READS_OVERRIDE)
             dexa_checked = not any(note.startswith("DEXA rows SKIPPED") for note in skipped)
-            expected = [row for row in spec["rows"] if dexa_checked or not row.startswith("D |")]
-            results[name] = {"rows": got, "expected": expected, "mode": "subset", "skipped": skipped}
+            # Without the DEXA read, its rows and the scores that use it (Structure, overall) cannot be checked;
+            # they are reported as skipped above, never passed.
+            expected = [row for row in spec["rows"] if dexa_checked or not _uses_dexa(row)]
+            got = [row for row in got if dexa_checked or not _uses_dexa(row)]
+            results[name] = {"rows": got, "expected": expected, "mode": spec.get("mode", "subset"),
+                             "skipped": skipped, "dexa_checked": dexa_checked, "spec_file": spec_file}
+    return results
+
+
+def _uses_dexa(row) -> bool:
+    return row.startswith(("D |", "O |", "S | Structure"))
     return results
 
 
@@ -243,6 +281,10 @@ def main():
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--snapshot", type=Path)
     parser.add_argument("--diff", nargs=2, type=Path)
+    parser.add_argument("--record-real", action="store_true",
+                        help="write every current row into the selected real_fixtures/*.expected.json files (after "
+                             "the report has been verified by hand); needs the DEXA read (stored transcription or "
+                             "CELLDEEP_LIVE_VISION=1)")
     parser.add_argument("--dexa-reads", help="use this stored transcription (in real_fixtures/) for real DEXA files")
     parser.add_argument("fixtures", nargs="*", help="limit to these fixture names")
     args = parser.parse_args()
@@ -264,6 +306,20 @@ def main():
                                                                   ensure_ascii=False) + "\n", encoding="utf-8")
         print(f"recorded {sum(not n.startswith('real:') for n in results)} synthetic expected file(s)")
         return 0
+    if args.record_real:
+        recorded = 0
+        for name, result in results.items():
+            if not name.startswith("real:") or "spec_file" not in result:
+                continue
+            if not result["dexa_checked"]:
+                print(f"{name}: NOT recorded - its DEXA was not read ({'; '.join(result['skipped'])})")
+                continue
+            spec = json.loads(result["spec_file"].read_text())
+            spec.update(rows=result["rows"], mode="exact")
+            result["spec_file"].write_text(json.dumps(spec, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+            recorded += 1
+            print(f"{name}: recorded {len(result['rows'])} rows")
+        return 0 if recorded else 1
     failures = compare(results)
     print("PASS" if not failures else f"FAIL - {failures} fixture(s) differ")
     return 1 if failures else 0

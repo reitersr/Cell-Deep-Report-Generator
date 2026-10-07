@@ -10,6 +10,11 @@
   "M | Folate | 04/14/2026 | 8.2 |  | optimal",
   "M | HbA1c | 04/14/2026 | 5.2 |  | optimal",
   "M | TSH | 04/14/2026 | 2.10 |  | optimal",
-  "M | Testosterone, Total | 04/14/2026 | 812 |  | optimal"
+  "M | Testosterone, Total | 04/14/2026 | 812 |  | optimal",
+  "O | overall now 80 | first visit ",
+  "S | Drive | optimal 2 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal",
+  "S | Fuel | optimal 2 | moderate 0 | flag 0 | not scored 0 | score 92 | optimal",
+  "S | Pace | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 96 | optimal",
+  "S | Reserves | optimal 1 | moderate 0 | flag 0 | not scored 0 | score 94 | optimal"
  ]
 }
