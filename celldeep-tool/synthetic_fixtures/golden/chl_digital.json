@@ -155,6 +155,7 @@
   "staff_unrecognized": [],
   "scan_summary": [],
   "staff_notes": [
-    "ERROR: missing threshold for LH / male - using printed lab range"
+    "ERROR: missing threshold for LH / male - using printed lab range",
+    "SEX NOT KNOWN: no sex was selected on the upload form and the lab report prints none; sex-specific CellDeep ranges and the DEXA score could not be used - select the patient's sex and generate again"
   ]
 }

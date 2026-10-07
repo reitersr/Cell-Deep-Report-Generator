@@ -231,7 +231,10 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    provider note; "Not Assessed" (the form default) is no answer. A form/note disagreement leaves the domain
    out (staff note). With no answer the box shows `clinic_config.VITALITY_NOT_PROVIDED_LABEL`, never "No
    Concern", and the symptom score is left out of the overall score. The STAFF CHECK names each answer's source.
-4a. **Identity**: age comes from the printed date of birth and collection date when printed
+4a. **Identity**: sex is the form's; when the form says "Not specified", the one sex the lab report prints
+   ("Gender: Male", "Sex: M") is used (staff note "SEX: ... - confirm"), so sex-specific markers are always scored on the
+   CellDeep thresholds, never the lab's printed range; with neither, a "SEX NOT KNOWN" staff note. Age comes from the
+   printed date of birth and collection date when printed
    (`_age_from_dob`; DOB never stored, disagreeing DOBs give no age); `name_header` lists the name
    each source printed at the top of the staff notes.
 5. **Scoring** (`score_and_build_record`): reconciles occurrences into `Marker`s, scores with
