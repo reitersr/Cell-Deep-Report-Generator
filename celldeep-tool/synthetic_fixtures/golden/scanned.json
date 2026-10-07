@@ -181,6 +181,7 @@
     "source=scan page 2 accepted 'ESTRADIOL': '31', flag=None, Collected=04/14/2026",
     "source=scan page 2 accepted 'GLUCOSE': 'NEGATIVE', flag=None, Collected=04/14/2026",
     "source=scan page 2 accepted 'KETONES': '1+', flag=None, Collected=04/14/2026",
+    "SEX NOT KNOWN: no sex was selected on the upload form and the lab report prints none; sex-specific CellDeep ranges and the DEXA score could not be used - select the patient's sex and generate again",
     "ASSAY OR RANGE CHANGED: Free Testosterone '190.0' on 04/14/2026 prints 35.0-155.0 pg/mL, not the CellDeep range basis 46-224 pg/mL; shown lab-reported with the lab's range and flag, not scored"
   ]
 }

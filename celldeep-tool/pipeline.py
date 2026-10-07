@@ -3086,7 +3086,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                 # A registered lab layout reads its own header (patient, DOB, age, Coll. Date) and table.
                 occurrences, unrecognized, layout_info = layout.parse(
                     digital_pages, row_audit=row_audit, review_notes=lab_review_notes,
-                    exclusions=parse_exclusions, sex=sex)
+                    exclusions=parse_exclusions,
+                    sex=sex if sex in ("male", "female") or len(lab_sexes) != 1 else next(iter(lab_sexes)))
                 if layout_info.get("patient"):
                     printed_names.append(("lab PDF text pages", None, layout_info["patient"]))
                 if (dob := _printed_dob(layout_info.get("dob"))) is not None:
@@ -3123,13 +3124,25 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                 lab_review_notes.extend(scan_notes)
     scan_summary = _scan_summary(scan_numbers, scan_notes, scan_date or collected_date,
                                  undated_scan_date) if scan_numbers else []
+    lab_sexes |= {{"F": "female", "M": "male"}[layout_info["sex"]]} if layout_info.get("sex") in ("F", "M") else set()
+    if sex not in ("male", "female"):
+        # A marker with a CellDeep threshold is scored against it, and those thresholds are sex-specific: with no sex on
+        # the form, the one sex the lab report itself prints is used (printed, never guessed).
+        if len(lab_sexes) == 1:
+            sex = next(iter(lab_sexes))
+            lab_review_notes.append(f"SEX: {sex} - not selected on the upload form; the lab report prints it, so the "
+                                    f"CellDeep {sex} ranges are used - confirm")
+        else:
+            lab_review_notes.append("SEX NOT KNOWN: no sex was selected on the upload form and the lab report "
+                                    + ("prints more than one" if lab_sexes else "prints none")
+                                    + "; sex-specific CellDeep ranges and the DEXA score could not be used - select the "
+                                      "patient's sex and generate again")
     moved_to_lab_reported = {}  # scored test -> dates of results shown lab-reported instead (fasting, assay)
     lab_review_notes.extend(apply_fasting_status(occurrences, unrecognized, draw_info.get("fasting", {}),
                                                  moved_to_lab_reported))
     assay_notes, assay_changed = apply_assay_changes(occurrences, unrecognized, sex, moved_to_lab_reported)
     lab_review_notes.extend(assay_notes)
     note = parse_provider_note(note_text)
-    lab_sexes |= {{"F": "female", "M": "male"}[layout_info["sex"]]} if layout_info.get("sex") in ("F", "M") else set()
     female_report = sex == "female" or "female" in lab_sexes
     if female_report:
         bhrt = provider_statuses({"provider_note_raw": note["accepted_text"] if note["accepted"] else None,
@@ -3195,6 +3208,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "undated_scan_date": undated_scan_date,
         "female_report": female_report,
         "lab_sexes": sorted(lab_sexes),
+        "resolved_sex": sex,  # the form's sex, else the one sex the lab report prints (see SexNotEntered)
         "lab_pages": {"text": lab_text_pages, "scanned": scan_numbers},
         "preflight": preflight_items(parse_exclusions, scan_notes if scan_numbers else [], scan_row_exclusions,
                                      dexa_exclusions, dexa_info, unrecognized) + note_preflight(note),
@@ -4018,7 +4032,7 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
         raise GenerationAborted("stopped by staff at the confirmation step")
     extracted["name"] = patient_name
     extracted["age"] = resolve_age(extracted, age)
-    extracted["sex"] = sex
+    extracted["sex"] = sex if sex in ("male", "female") else extracted.get("resolved_sex")
     extracted["vitality_index"], extracted["vitality_sources"], vitality_notes = resolve_vitality(
         vitality_index, extracted.get("vitality_index"))
     extracted.setdefault("other_notes", []).extend(vitality_notes)

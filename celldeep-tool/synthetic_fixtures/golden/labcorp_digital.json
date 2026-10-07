@@ -133,6 +133,7 @@
   ],
   "scan_summary": [],
   "staff_notes": [
-    "LAB FLAG DIFFERS FROM CELLDEEP STATUS: Ferritin '20' (lab flag L, CellDeep optimal)"
+    "LAB FLAG DIFFERS FROM CELLDEEP STATUS: Ferritin '20' (lab flag L, CellDeep optimal)",
+    "SEX NOT KNOWN: no sex was selected on the upload form and the lab report prints none; sex-specific CellDeep ranges and the DEXA score could not be used - select the patient's sex and generate again"
   ]
 }

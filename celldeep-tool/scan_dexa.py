@@ -39,7 +39,9 @@ DEXA_PROMPT = """Transcribe this DEXA body composition report page literally. Ne
 convert, correct, or complete anything. Return only the supplied JSON schema.
 For every scan date printed on this page (each row of a results or trend table, or the single scan
 date of a summary page) return one entry in scans with the date exactly as printed and these
-measurements exactly as printed for that date, including any "(e)" estimate marker:
+measurements exactly as printed for that date, including any "(e)" estimate marker. An "(e)" printed in front of
+a row label or a date (such as "(e) Total" or "(e) 01/15/2026") marks every value of that row: copy each of them
+with " (e)" after the number:
 total_mass, fat_mass and lean_mass in pounds (lb); body_fat_pct (percent body fat, total body);
 vat_mass (visceral adipose tissue mass in lb); vat_area (visceral adipose tissue area in cm2).
 A VAT trend table (rows by scan date with columns such as "VAT Mass (lbs)", "VAT Volume", "VAT Area (cm²)" or
