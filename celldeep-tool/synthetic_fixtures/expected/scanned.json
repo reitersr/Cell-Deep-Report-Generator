@@ -1,0 +1,15 @@
+{
+ "rows": [
+  "L | Complete Blood Count | Absolute Lymphocytes | 04/14/2026 | 790 | L | 850-3900",
+  "L | Complete Blood Count | White Blood Cell Count | 04/14/2026 | 5.1 |  | 3.8-10.8",
+  "L | Hormones | Free Testosterone | 04/14/2026 | 190.0 | H | 35.0-155.0 pg/mL",
+  "L | Urinalysis | Urinalysis — Glucose | 04/14/2026 | NEGATIVE |  | NEGATIVE",
+  "L | Urinalysis | Urinalysis — Ketones | 04/14/2026 | 1+ |  | NEGATIVE",
+  "M | Estradiol | 04/14/2026 | 31 |  | optimal",
+  "M | Fasting Insulin | 04/14/2026 | 4.4 |  | optimal",
+  "M | Folate | 04/14/2026 | 8.2 |  | optimal",
+  "M | HbA1c | 04/14/2026 | 5.2 |  | optimal",
+  "M | TSH | 04/14/2026 | 2.10 |  | optimal",
+  "M | Testosterone, Total | 04/14/2026 | 812 |  | optimal"
+ ]
+}

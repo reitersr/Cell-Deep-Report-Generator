@@ -45,6 +45,9 @@ vat_mass (visceral adipose tissue mass in lb); vat_area (visceral adipose tissue
 A VAT trend table (rows by scan date with columns such as "VAT Mass (lbs)", "VAT Volume", "VAT Area (cm²)" or
 "Est. VAT Area") is a results table too: return one entry per row with its date and that row's vat_mass and
 vat_area exactly as printed.
+total_mass, fat_mass, lean_mass and body_fat_pct are whole-body values only: copy them from a whole-body
+results/history table or its "Total" row, never from a regional table (arms, legs, trunk, android, gynoid,
+abdomen, VAT/SAT); a regional table's mass or %fat columns are null in its entries.
 A measurement that is not printed for that date, or is printed only in other units, is null.
 Never copy a value from one date to another. Copy the patient name, date of birth and the patient's
 age exactly as printed on the page, or null when not printed. When an age is printed for a scan row,
@@ -253,7 +256,43 @@ def attribute_pages(pages, patient_name, staff_age=None):
     return accepted, sorted(unnamed_ok), sorted(excluded)
 
 
-def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, staff_age=None):
+def _printed_numbers(lines) -> set:
+    """Every number printed on a page's text layer ("52.1", "28.3" from "28.3%" or "28.3(e)")."""
+    return {match for line in lines for token in line for match in re.findall(r"\d+(?:\.\d+)?", token)}
+
+
+def _merge_same_date(scans):
+    """One read may list the same scan date in several tables on a page (a composition table and a VAT trend table).
+    Merge them field by field: a field printed in only one of them, or identically, is kept; a field printed
+    differently within the read is ambiguous for that read (marked, so it is excluded, never guessed)."""
+    merged, ambiguous = dict(scans[0]), set()
+    for scan in scans[1:]:
+        for field in FIELDS:
+            if scan.get(field) is None:
+                continue
+            if merged.get(field) is None:
+                merged[field] = scan[field]
+            elif measure_or_none(merged[field]) != measure_or_none(scan[field]):
+                ambiguous.add(field)
+        if merged.get("age") is None and scan.get("age") is not None:
+            merged["age"] = scan["age"]
+    for field in ambiguous:
+        merged[field] = _AMBIGUOUS
+    return merged
+
+
+_AMBIGUOUS = "\u0000ambiguous"
+
+
+def measure_or_none(text):
+    try:
+        found = measure(text)
+    except ValueError:
+        return text
+    return found[0] if found else None
+
+
+def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, staff_age=None, page_text=None):
     """pages: [((file, page), [read1, read2])]; failures: [((file, page), partial_reads, reason)].
     Returns (history, staff_notes, summary_lines). history is sorted oldest first and is a list of
     DexaReading-shaped dicts with an extra 'estimated' list of DexaReading field names.
@@ -264,6 +303,8 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
     estimate_notes = []  # values kept and shown as estimated because only some reads/pages print "(e)"
     candidates = {}  # date -> field -> {(value, text, estimated): [page labels]}
     contested = set()  # (date, field) printed on an accepted page but excluded there
+    single_reads = {}  # date -> field -> {(value, text, estimated): {page labels}}: values one read printed
+    page_text = page_text or {}
 
     def label_of(key):
         return f"DEXA file {key[0]} page {key[1]}"
@@ -312,17 +353,24 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
             by_date.append(dates)
         page_excluded = 0
         kept_dates = []
+        printed = _printed_numbers(page_text[key]) if page_text.get(key) else None
         for day in sorted(set(by_date[0]) | set(by_date[1])):
             first, second = by_date[0].get(day, []), by_date[1].get(day, [])
-            if len(first) != 1 or len(second) != 1:
-                reason = ("date gate: scan date printed in only one read or read differently; whole scan excluded"
-                          if not first or not second else "date gate: scan date appears twice in one read; "
-                                                          "whole scan excluded")
+            if not first or not second:
+                reason = "date gate: scan date printed in only one read or read differently; whole scan excluded"
                 notes.append(f"{label}: scan {_display(day)} excluded - {reason}")
                 page_excluded += 1
                 continue
+            # The same date in several tables of one page (composition and VAT trend): merged field by field.
+            first, second = [_merge_same_date(first)], [_merge_same_date(second)]
             kept_fields = 0
             for field, (_, field_label) in FIELDS.items():
+                if _AMBIGUOUS in (first[0].get(field), second[0].get(field)):
+                    notes.append(f"{label}: scan {_display(day)} {field_label} excluded - printed with different "
+                                 "values in two tables of this page")
+                    contested.add((day, field))
+                    page_excluded += 1
+                    continue
                 try:
                     a, b = measure(first[0][field]), measure(second[0][field])
                 except ValueError:
@@ -330,6 +378,15 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                     contested.add((day, field))
                     page_excluded += 1
                     continue
+                if printed is not None:
+                    # A page with a usable text layer: the text decides. A value no read can match to the page's
+                    # printed numbers is not taken; when the reads differ, the one the page prints stands.
+                    a = a if a is None or a[1] in printed else None
+                    b = b if b is None or b[1] in printed else None
+                    if a is None and b is not None or b is None and a is not None:
+                        a = b = a or b
+                        notes.append(f"{label}: scan {_display(day)} {field_label} {a[1]} - the reads differed; the "
+                                     "page's text layer prints this value")
                 if a is None and b is None:
                     continue
                 if a is None or b is None:
@@ -347,6 +404,11 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
                         (a[0], text, a[2] or b[2]), []).append(label)
                     kept_fields += 1
                     continue
+                # Kept aside: a value one read printed here can still be confirmed by another page (merge step).
+                for one in (a, b):
+                    if one is not None:
+                        single_reads.setdefault(day, {}).setdefault(field, {}).setdefault(
+                            (one[0], one[1], one[2]), set()).add(label)
                 notes.append(f"{label}: scan {_display(day)} {field_label} excluded - {reason}")
                 contested.add((day, field))
                 page_excluded += 1
@@ -375,17 +437,43 @@ def gate(pages, patient_name, failures=(), dob_sink=None, excluded_sink=None, st
             options = candidates[day].get(field, {})
             values = {value for value, _, _ in options}
             if len(values) > 1:
+                # Pages print different values: the value confirmed on the most independent pages stands when at
+                # least two pages confirm it and no other value is confirmed as often; otherwise it is withheld.
+                pages_by_value = {}
+                for (value, _, _), labels in options.items():
+                    pages_by_value.setdefault(value, set()).update(labels)
+                ranked = sorted(pages_by_value.items(), key=lambda item: -len(item[1]))
                 pages_listed = sorted({page for labels in options.values() for page in labels})
-                notes.append(f"DEXA scan {_display(day)} {field_label} excluded - pages {', '.join(pages_listed)} "
-                             "print different values")
-                reading[target] = None
-                reading["withheld"].append(target)
-                continue
-            if not options:
-                reading[target] = None
-                if (day, field) in contested:
+                if len(ranked[0][1]) >= 2 and len(ranked[0][1]) > len(ranked[1][1]):
+                    winner = ranked[0][0]
+                    notes.append(f"DEXA scan {_display(day)} {field_label}: pages {', '.join(pages_listed)} print "
+                                 f"different values; {winner:g} is confirmed on {len(ranked[0][1])} pages and is used")
+                    options = {option: labels for option, labels in options.items() if option[0] == winner}
+                else:
+                    notes.append(f"DEXA scan {_display(day)} {field_label} excluded - pages {', '.join(pages_listed)} "
+                                 "print different values")
+                    reading[target] = None
                     reading["withheld"].append(target)
-                continue
+                    continue
+            if not options:
+                # No page's two reads agree: a value read on at least two independent pages (and no rival value read
+                # as often) is confirmed by the other location; otherwise the field stays empty.
+                singles = single_reads.get(day, {}).get(field, {})
+                by_value = {}
+                for (value, text, estimated), labels in singles.items():
+                    by_value.setdefault(value, [set(), text, estimated])[0].update(labels)
+                ranked = sorted(by_value.items(), key=lambda item: -len(item[1][0]))
+                if ranked and len(ranked[0][1][0]) >= 2 and (len(ranked) == 1 or len(ranked[0][1][0]) >
+                                                             len(ranked[1][1][0])):
+                    value, (labels, text, estimated) = ranked[0]
+                    notes.append(f"DEXA scan {_display(day)} {field_label} {text}: no page's two reads agreed, but "
+                                 f"{len(labels)} independent pages read this value; it is used")
+                    options = {(value, text, estimated): sorted(labels)}
+                else:
+                    reading[target] = None
+                    if (day, field) in contested:
+                        reading["withheld"].append(target)
+                    continue
             value, text, _ = min(options, key=lambda option: (len(option[1]), option[1]))
             # The same number on several pages, marked "(e)" on some of them: it is an estimate wherever shown.
             estimated = any(marked for _, _, marked in options)

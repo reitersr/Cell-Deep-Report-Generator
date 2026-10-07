@@ -1,0 +1,33 @@
+{
+ "rows": [
+  "L | Cardiovascular | Homocysteine | 03/02/2026 | 9.8 |  | ",
+  "L | Cardiovascular | Homocysteine | 11/20/2025 | 11.2 |  | ",
+  "L | Complete Blood Count | Absolute Lymphocytes | 04/14/2026 | 790 | L | 850-3900",
+  "L | Complete Blood Count | White Blood Cell Count | 04/14/2026 | 5.1 |  | 3.8-10.8",
+  "L | Hormones | Free Testosterone | 04/14/2026 | 190.0 | H | 35.0-155.0 pg/mL",
+  "L | Urinalysis | Urinalysis — Glucose | 04/14/2026 | NEGATIVE |  | NEGATIVE",
+  "L | Urinalysis | Urinalysis — Ketones | 04/14/2026 | 1+ |  | NEGATIVE",
+  "M | Apolipoprotein B | 03/02/2026 | 71 |  | optimal",
+  "M | Apolipoprotein B | 11/20/2025 | 88 |  | optimal",
+  "M | Estradiol | 04/14/2026 | 31 |  | optimal",
+  "M | Fasting Insulin | 03/02/2026 | 6.1 |  | history",
+  "M | Fasting Insulin | 04/14/2026 | 4.4 |  | optimal",
+  "M | Fasting Insulin | 11/20/2025 | 8.4 |  | optimal",
+  "M | Folate | 04/14/2026 | 8.2 |  | optimal",
+  "M | HbA1c | 03/02/2026 | 5.3 |  | history",
+  "M | HbA1c | 04/14/2026 | 5.2 |  | optimal",
+  "M | HbA1c | 11/20/2025 | 5.5 |  | optimal",
+  "M | LDL Cholesterol | 03/02/2026 | 96 |  | optimal",
+  "M | LDL Cholesterol | 11/20/2025 | 121 |  | moderate",
+  "M | LH | 03/02/2026 | 4.1 |  | optimal",
+  "M | LH | 11/20/2025 | 3.9 |  | optimal",
+  "M | Lp-PLA2 Activity | 03/02/2026 | 118 |  | optimal",
+  "M | Lp-PLA2 Activity | 11/20/2025 | 131 |  | flag",
+  "M | TSH | 04/14/2026 | 2.10 |  | optimal",
+  "M | Testosterone, Total | 03/02/2026 | 702 |  | history",
+  "M | Testosterone, Total | 04/14/2026 | 812 |  | optimal",
+  "M | Testosterone, Total | 11/20/2025 | 655 |  | optimal",
+  "M | hs-CRP | 03/02/2026 | 1.4 | H | moderate",
+  "M | hs-CRP | 11/20/2025 | 2.2 |  | moderate"
+ ]
+}

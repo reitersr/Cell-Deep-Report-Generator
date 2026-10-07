@@ -123,9 +123,11 @@ def test_scanned_flags_reach_the_lab_reported_section(tmp_path):
     assert items["Absolute Lymphocytes"]["results"][0]["lab_flag"] == "L"
     flagged = {name for name, _, flag, _ in GOLDEN if flag}
     shown = {name.casefold() for item in extracted["lab_reported"] for name in item["printed_names"]}
+    scored_names = {item["name"] for item in extracted["lab_reported"]}  # scored tests moved to lab-reported
     scored = {item["name"] for item in extracted["marker_occurrences"]}
     for name in flagged:
-        assert name.casefold() in shown or pipeline._match_row_name(name, "ROUTINE PANELS")[0] in scored, name
+        canonical = pipeline._match_row_name(name, "ROUTINE PANELS")
+        assert name.casefold() in shown or canonical and (canonical[0] in scored or canonical[0] in scored_names), name
 
 
 def test_all_caps_text_result_row_is_not_mistaken_for_a_section_heading(tmp_path):

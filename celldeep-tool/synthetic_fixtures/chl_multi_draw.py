@@ -9,7 +9,7 @@ reproduce a layout pattern from the clinic's first multi-draw run:
 - one unreadable Historical cell (digits run together) on the newest draw's page;
 - "Fasting: Y" on one draw and "Fasting: Unknown" on the newest;
 - a placeholder collection time (00:01) on the newest draw and a printed morning window for cortisol;
-- Free Testosterone printed with a different reference range (another assay) in each draw;
+- Free Testosterone on the CellDeep basis assay (46-224) in one draw and the dialysis assay (35-155) in the newest;
 - testosterone-panel ALBUMIN / GLOB under lab code AMD beside chemistry ALBUMIN under Z4M;
 - tests with no CellDeep alias (LDL Size, Apolipoprotein A1) printed with the lab's unit and range.
 """
@@ -41,7 +41,7 @@ def _column_header_row(y, text):
     return [(X["current"] + 26 * index, y, word) for index, word in enumerate(words)]
 
 
-def latest_page(free_t_range="46-224"):
+def latest_page(free_t_range="35-155"):
     y = iter(range(150, 800, 14))
     rows = [
         *_column_header_row(next(y), "Optimal Moderate High Units Optimal Non-Optimal / / / /"),
@@ -71,7 +71,7 @@ def latest_page(free_t_range="46-224"):
             + _header(120, (SECOND, FIRST)) + rows)
 
 
-def second_page(free_t_range="35-155"):
+def second_page(free_t_range="46-224"):
     y = iter(range(150, 800, 14))
     rows = [
         *_column_header_row(next(y), "In Range Out of Range / / / /"),

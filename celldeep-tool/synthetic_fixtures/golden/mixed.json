@@ -165,22 +165,6 @@
       "history": []
     },
     {
-      "name": "Free Testosterone",
-      "then": null,
-      "then_date": "",
-      "now": "190.0",
-      "now_date": "04/14/2026",
-      "then_tier": null,
-      "now_tier": "moderate",
-      "celldeep_range": "100–180",
-      "range_source": "celldeep",
-      "unscored": null,
-      "lab_range_now": "35.0-155.0 pg/mL",
-      "lab_flag_then": null,
-      "lab_flag_now": "H",
-      "history": []
-    },
-    {
       "name": "Folate",
       "then": null,
       "then_date": "",
@@ -258,6 +242,19 @@
       ]
     },
     {
+      "name": "Free Testosterone",
+      "group": "Hormones",
+      "results": [
+        {
+          "date_display": "04/14/2026",
+          "disp_value": "190.0",
+          "lab_flag": "H",
+          "lab_range": "35.0-155.0 pg/mL",
+          "note": "assay or range changed - not directly comparable"
+        }
+      ]
+    },
+    {
       "name": "Urinalysis — Glucose",
       "group": "Urinalysis",
       "results": [
@@ -301,6 +298,7 @@
     "source=scan page 3 accepted 'HEMOGLOBIN A1c': '5.2', flag=None, Collected=04/14/2026",
     "source=scan page 3 accepted 'ESTRADIOL': '31', flag=None, Collected=04/14/2026",
     "source=scan page 3 accepted 'GLUCOSE': 'NEGATIVE', flag=None, Collected=04/14/2026",
-    "source=scan page 3 accepted 'KETONES': '1+', flag=None, Collected=04/14/2026"
+    "source=scan page 3 accepted 'KETONES': '1+', flag=None, Collected=04/14/2026",
+    "ASSAY OR RANGE CHANGED: Free Testosterone '190.0' on 04/14/2026 prints 35.0-155.0 pg/mL, not the CellDeep range basis 46-224 pg/mL; shown lab-reported with the lab's range and flag, not scored"
   ]
 }

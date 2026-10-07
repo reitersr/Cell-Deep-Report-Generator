@@ -1,0 +1,16 @@
+{
+ "rows": [
+  "L | Chemistry | ALT | 03/02/2026 | 61 | H | 9-46",
+  "L | Chemistry | Sodium | 03/02/2026 | 140 |  | 135-146",
+  "L | Complete Blood Count | Hemoglobin | 03/02/2026 | 17.6 | H | 13.2-17.1",
+  "L | Complete Blood Count | Platelet Count | 03/02/2026 | 250 |  | 140-400",
+  "L | Inflammation | C-Reactive Protein | 03/02/2026 | 2.1 |  | <8.0",
+  "L | Other Lab-Flagged Results | SYNTHETIC ASSAY X | 03/02/2026 | 9.9 | H | 1.0-5.0",
+  "L | Urinalysis | Urinalysis — Color | 03/02/2026 | YELLOW |  | YELLOW",
+  "L | Urinalysis | Urinalysis — Glucose | 03/02/2026 | NEGATIVE |  | NEGATIVE",
+  "M | Ferritin | 03/02/2026 | 20 | L | optimal",
+  "M | Glucose (fasting) | 03/02/2026 | 82 |  | optimal",
+  "M | TSH | 03/02/2026 | 1.90 |  | optimal",
+  "M | Vitamin D | 03/02/2026 | 48 |  | moderate"
+ ]
+}

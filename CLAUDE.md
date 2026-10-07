@@ -53,6 +53,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/synthetic_fixtures/column_roles.py` | Synthetic pages in a real multi-draw layout's table geometry (`test_column_roles.py`). |
 | `celldeep-tool/synthetic_fixtures/chl_multi_draw.py` | Three-draw Cleveland HeartLab-style lab PDF (`test_chl_round1.py`). |
 | `celldeep-tool/synthetic_fixtures/scenarios.py` | End-to-end synthetic scenarios with a scripted vision model (smoke test, `test_scenarios.py`). |
+| `scripts/regression_check.py` | Runs every fixture (synthetic, and git-ignored `real_fixtures/*.expected.json`) to the report data and diffs it against expected values (`--snapshot`/`--diff` for before/after); CI runs it on the synthetic fixtures (`test_regression_check.py`). |
 | `scripts/smoke_test.py` | Generates reports from synthetic fixtures and prints PASS/FAIL (no API key, no network, under a minute). |
 | `docs/` | Audits, open clinical decisions (`open_decisions.md`), `staff_guide.md`, `what_the_tool_guarantees.md`. |
 | `.github/workflows/tests.yml` | CI: full suite offline on every pull request. |
@@ -127,7 +128,9 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      from "Fasting: Y" draws; others ("N", "Unknown", blank, none) are lab-reported "Glucose/Insulin
      (non-fasting)" with a note. `apply_assay_changes`: a scored test whose printed range differs between draws
      keeps each draw's own range and `clinic_config.ASSAY_CHANGED_NOTE`; a draw not on the CellDeep range basis
-     (`CELLDEEP_RANGE_BASIS`, else `LAB_RANGE_BASIS_RATIO`) is lab-reported. A scored test whose newer result was
+     (`CELLDEEP_RANGE_BASIS`, Free Testosterone 46-224 pg/mL; else `LAB_RANGE_BASIS_RATIO`) is lab-reported, and with a
+     configured basis any draw printing another range is lab-reported even when every draw prints it; the note is
+     shown only on results not scored on a CellDeep range (never on SHBG). A scored test whose newer result was
      moved to lab-reported is never called "not retested". Testosterone-panel ALBUMIN/GLOB under lab code AMD
      are separate lab-reported results (`lab_reported.PANEL_SCOPED`).
    - Image-only pages: `_extract_scan_bloodwork` renders each page and reads it twice with the vision model
@@ -162,7 +165,12 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
      duplicate results, one Order ID with two Collected dates) still stops the job.
 3. **DEXA**: `_extract_dexa_with_claude` renders every DEXA page and `scan_dexa` reads it twice; a
    measurement is kept only when both reads agree, a scan date the reads disagree on drops the
-   whole scan, and `scan_dexa.attribute_pages` decides which pages are the patient's: a page printing a
+   whole scan (one date listed in two tables of a page, e.g. composition and VAT trend, is merged field by field;
+   only a field the tables print differently is left out). The same measurement printed on several pages is
+   accepted from the value confirmed on the most independent pages (at least two, no tie); with no page's reads
+   agreeing, a value read on two independent pages is accepted; otherwise it stays empty. A page with a usable text
+   layer is verified against it: a value the page does not print is not taken, and when the reads differ the one
+   the page prints stands. Whole-body fields come only from whole-body tables (prompt), and `scan_dexa.attribute_pages` decides which pages are the patient's: a page printing a
    different name is always dropped; a page printing the patient's name is validated; an unnamed page
    printing an age (header or scan rows, decimals allowed, both reads agreeing) is validated when the age
    is within `clinic_config.DEXA_AGE_TOLERANCE_YEARS` of the median age across the pages (a clear cluster)
@@ -242,6 +250,10 @@ Standing instruction from the owner for every PR Claude opens:
    comments; never push to `main` directly; never merge with failing checks.
 
 ## Working rules
+
+- Before changing report behaviour, run `python scripts/regression_check.py --snapshot <before>`; after, snapshot
+  again and `--diff` them: only the lines the change intends may differ. Re-record synthetic expected files
+  (`--record`) only for intended differences; never weaken a safeguard to make a diff go away.
 
 - Every production failure becomes a synthetic fixture and a failing test before it is fixed.
 - Keep exclusions explicit: when data cannot be trusted, drop it and say why in staff notes.

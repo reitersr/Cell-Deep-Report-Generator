@@ -58,8 +58,12 @@ def _extract(mixed_pdf, tmp_path, reads):
 
 
 def _latest(extracted):
-    return {item["name"]: item["disp_value"] for item in extracted["marker_occurrences"]
-            if item["date_display"] == DATE}
+    """Values kept for the scanned draw, scored or lab-reported (a Free Testosterone printed with the dialysis range is
+    lab-reported: clinic_config.CELLDEEP_RANGE_BASIS)."""
+    found = {item["name"]: item["disp_value"] for item in extracted["marker_occurrences"] if item["date_display"] == DATE}
+    found.update({item["name"]: result["disp_value"] for item in extracted["lab_reported"]
+                  for result in item["results"] if result["date_display"] == DATE and item["name"] == "Free Testosterone"})
+    return found
 
 
 EXPECTED = {"Testosterone, Total": "1193", "Free Testosterone": "210.0", "Folate": "6.9",

@@ -1,0 +1,12 @@
+{
+ "rows": [
+  "L | Chemistry | Potassium | 03/02/2026 | 5.6 | H | 3.5-5.2",
+  "L | Complete Blood Count | Hematocrit | 03/02/2026 | 52.3 | H | 37.5-51.0",
+  "L | Complete Blood Count | Hemoglobin | 03/02/2026 | 17.6 | H | 13.0-17.0",
+  "L | Complete Blood Count | Platelet Count | 03/02/2026 | 250 |  | 150-450",
+  "L | Other Lab-Flagged Results | Synthetic Assay Y | 03/02/2026 | 0.2 | L | 0.5-2.0",
+  "M | Ferritin | 03/02/2026 | 20 | L | optimal",
+  "M | HbA1c | 03/02/2026 | 5.4 |  | optimal",
+  "M | Vitamin B12 | 03/02/2026 | 655 |  | optimal"
+ ]
+}
