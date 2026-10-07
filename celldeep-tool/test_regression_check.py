@@ -71,3 +71,33 @@ def test_the_vitality_index_is_a_fixed_input_of_every_checked_case(check, monkey
         check.spec_vitality({"vitality_index": {"Energy": "Fine"}})
     with pytest.raises(ValueError):
         check.spec_vitality({"vitality_index": {"Stamina": "No Concern"}})
+
+
+def test_absent_real_fixtures_are_reported_as_not_checked_never_passed(check, monkeypatch, capsys):
+    monkeypatch.setattr(check, "REAL", Path("/nonexistent"))  # as in CI: real_fixtures/ is git-ignored
+    locked = [name for name, case in check.REAL_CASES.items() if case["locked"]]
+    assert check.real_missing() == locked
+    assert check.missing_note(locked).startswith(f"real fixtures not present: {len(locked)} cases not checked")
+    monkeypatch.setattr(check.sys, "argv", ["regression_check.py", "--real"])
+    assert check.main() == 0
+    assert f"real fixtures not present: {len(locked)} cases not checked" in capsys.readouterr().out
+
+
+def test_every_locked_real_report_matches_when_present(check, capsys):
+    # Locally (real_fixtures/ present) every locked real report is checked; in CI this skips with the count.
+    present = {f"real:{name}" for name, case in check.REAL_CASES.items()
+               if case["locked"] and (check.REAL / f"{name}.expected.json").is_file()}
+    if not present:
+        pytest.skip(check.missing_note(check.real_missing()))
+    failures = check.compare(check.current(present))
+    assert failures == 0, capsys.readouterr().out
+
+
+def test_regression_status_doc_lists_every_real_case(check):
+    doc = (SCRIPT.parent.parent / "docs" / "regression_status.md").read_text(encoding="utf-8")
+    rows = {cells[0].strip("` "): cells for line in doc.splitlines() if line.startswith("| `")
+            for cells in [[cell.strip() for cell in line.strip("|").split("|")]]}
+    real_rows = {name: cells for name, cells in rows.items() if name in check.REAL_CASES}
+    assert set(real_rows) == set(check.REAL_CASES)
+    for name, case in check.REAL_CASES.items():
+        assert ("yes" if case["locked"] else "no") in [cell.casefold() for cell in real_rows[name]], name

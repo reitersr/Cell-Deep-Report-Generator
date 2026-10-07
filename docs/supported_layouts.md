@@ -169,10 +169,11 @@ request.
    - `dexa_reads` (optional): a stored transcription, so the check runs offline;
    - `"rows": []`.
 5. **Lock.** Run `python scripts/regression_check.py --record-real real:<name>`, then
-   `python scripts/regression_check.py real:<name>`, which must print `OK`.
+   `python scripts/regression_check.py real:<name>`, which must print `OK`. Add the case to `REAL_CASES` in
+   `scripts/regression_check.py` and to `docs/regression_status.md` (locked: yes).
 6. **Synthetic stand-in.** Add or extend a synthetic fixture that reproduces the new structure with invented data, so
    CI checks it on every pull request (step 5 of "Adding a new layout").
-7. **Before every later change.** Run `python scripts/regression_check.py` against all locked reports. Any difference
+7. **Before every later change.** Run `python scripts/regression_check.py --real` against all locked reports. Any difference
    must be explained as intended before it is re-recorded. Never loosen an expectation to make a diff go away.
 
 ## Adding a new layout

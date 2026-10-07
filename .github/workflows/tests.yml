@@ -36,4 +36,8 @@ jobs:
               if python -c "import socket; socket.create_connection((\"pypi.org\", 443), 3)" 2>/dev/null; then
                 echo "Network is reachable inside the test sandbox" >&2; exit 1
               fi
-              python -m pytest -q'
+              python -m pytest -q -rs'
+
+      # Real patient reports are locked only in the git-ignored real_fixtures/; say loudly how many were not checked.
+      - name: Real fixtures status
+        run: python ../scripts/regression_check.py --real
