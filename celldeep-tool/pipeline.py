@@ -3885,7 +3885,11 @@ def preflight_entries(parse_exclusions, scan_notes, scan_row_exclusions, dexa_ex
             entries.append({"text": f"Lab PDF page {match[1]} (scanned): {match[2]}", "known": None})
     for item in scan_row_exclusions:
         reads = [read.strip() for read in str(item.get("reads") or "").split(" / ")]
-        handled = known_items.handling(item["name"], known_items.EXCLUDED, reads, known)
+        # Read disagreements and missing reads are never waved through: a scanned row is known only when every
+        # read printed the identical result (e.g. "SEE NOTE:" twice) and the clinic's list names it.
+        agreed = len(reads) >= 2 and len(set(reads)) == 1 and reads[0] not in ("", "not read") \
+            and not item.get("reason", "agreement gate").startswith("agreement gate")
+        handled = known_items.handling(item["name"], known_items.EXCLUDED, reads, known) if agreed else None
         entries.append({"text": f"Lab PDF page {item['page']} (scanned): result {item['name']} excluded - "
                                 f"{scan_row_reason(item)}",
                         "known": _known(item["name"], handled, item["page"]) if handled else None})

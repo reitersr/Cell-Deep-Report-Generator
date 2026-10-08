@@ -26,7 +26,8 @@ file gains one "PRE-GENERATION CHECK" line.
 
 The stop screens of every case are recorded too: `python scripts/regression_check.py --screens` compares them
 (`--record-screens` re-records; the real cases' screens stay in the git-ignored `real_fixtures/stop_screens.json`).
-With `KNOWN_ITEMS_AUTOPROCEED` off (the default) they must not change (`test_known_items.py`).
+With `KNOWN_ITEMS_AUTOPROCEED` off they must not change (`test_known_items.py`). It is on: the patient PDF text of the four
+locked cases is compared exactly with `real_fixtures/pdf_text/<case>.txt` (git-ignored; `test_known_items.py`, local only).
 
 ## Running the checks
 
