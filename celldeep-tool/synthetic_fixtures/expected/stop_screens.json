@@ -1,0 +1,236 @@
+{
+ "quest_digital": {
+  "screens": [
+   {
+    "kind": "review",
+    "items": [
+     "Lab PDF: 1 printed result(s) with a test name the tool does not recognize, shown as lab-reported (not scored) and listed in the staff notes: SYNTHETIC ASSAY X"
+    ],
+    "choices": [
+     [
+      "continue",
+      "Generate the report without them"
+     ],
+     [
+      "stop",
+      "Stop, I will fix the files"
+     ]
+    ],
+    "message": "",
+    "summary": "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 03/02/2026"
+   }
+  ],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 03/02/2026"
+  ]
+ },
+ "chl_digital": {
+  "screens": [],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 03/02/2026"
+  ]
+ },
+ "labcorp_digital": {
+  "screens": [
+   {
+    "kind": "review",
+    "items": [
+     "Lab PDF: 1 printed result(s) with a test name the tool does not recognize, shown as lab-reported (not scored) and listed in the staff notes: Synthetic Assay Y"
+    ],
+    "choices": [
+     [
+      "continue",
+      "Generate the report without them"
+     ],
+     [
+      "stop",
+      "Stop, I will fix the files"
+     ]
+    ],
+    "message": "",
+    "summary": "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 03/02/2026"
+   }
+  ],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 03/02/2026"
+  ]
+ },
+ "scanned": {
+  "screens": [],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 04/14/2026"
+  ]
+ },
+ "mixed": {
+  "screens": [],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 04/14/2026"
+  ]
+ },
+ "variant": {
+  "screens": [
+   {
+    "kind": "review",
+    "items": [
+     "Draw dates with excluded lab pages or results: 04/14/2026 (page 3)",
+     "Lab PDF page 3 (whole page): result rows printed under no recognized table header (expected 'Current'/'Historical' or 'In Range'/'Out of Range'), so they were not read: Ferritin, Vitamin B12",
+     "Lab PDF: 1 printed result(s) with a test name the tool does not recognize, shown as lab-reported (not scored) and listed in the staff notes: Thyroid Stimulating Hormone Ultra",
+     "Provider note: NOT READ - it has no '## ' section headings, so its protocol, concerns, targets and Vitality Index are not in the report (the staff notes list the required headings)"
+    ],
+    "choices": [
+     [
+      "continue",
+      "Generate the report without them"
+     ],
+     [
+      "stop",
+      "Stop, I will fix the files"
+     ]
+    ],
+    "message": "",
+    "summary": "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 04/14/2026"
+   }
+  ],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 04/14/2026"
+  ]
+ },
+ "scanned_noisy": {
+  "screens": [
+   {
+    "kind": "review",
+    "items": [
+     "Lab PDF page 2 (scanned): result FERRITIN excluded - reads disagree: 88 / 86 / 83"
+    ],
+    "choices": [
+     [
+      "continue",
+      "Generate the report without them"
+     ],
+     [
+      "stop",
+      "Stop, I will fix the files"
+     ]
+    ],
+    "message": "",
+    "summary": "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 04/14/2026"
+   }
+  ],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 04/14/2026"
+  ]
+ },
+ "clinic_dexa": {
+  "screens": [
+   {
+    "kind": "review",
+    "items": [
+     "DEXA file 1 page 6: no patient name printed and it prints age 34.1; the DEXA pages center on age 45.3; scan dates 05/18/2026, 07/06/2026"
+    ],
+    "choices": [
+     [
+      "continue",
+      "Generate the report without them"
+     ],
+     [
+      "stop",
+      "Stop, I will fix the files"
+     ]
+    ],
+    "message": "",
+    "summary": "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 06/15/2026 | DEXA scan: 03/30/2026; excluded: file 1 page 6 (no patient name printed and it prints age 34.1; the DEXA pages center on age 45.3; scan dates 05/18/2026, 07/06/2026)"
+   }
+  ],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 06/15/2026 | DEXA scan: 03/30/2026; excluded: file 1 page 6 (no patient name printed and it prints age 34.1; the DEXA pages center on age 45.3; scan dates 05/18/2026, 07/06/2026)"
+  ]
+ },
+ "clinic_dexa_no_age": {
+  "screens": [
+   {
+    "kind": "review",
+    "items": [
+     "DEXA file 1 page 6: no patient name printed and it prints age 34.1; the DEXA pages center on age 45.3; scan dates 05/18/2026, 07/06/2026"
+    ],
+    "choices": [
+     [
+      "continue",
+      "Generate the report without them"
+     ],
+     [
+      "stop",
+      "Stop, I will fix the files"
+     ]
+    ],
+    "message": "",
+    "summary": "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 06/15/2026 | DEXA scan: 03/30/2026; excluded: file 1 page 6 (no patient name printed and it prints age 34.1; the DEXA pages center on age 45.3; scan dates 05/18/2026, 07/06/2026)"
+   }
+  ],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 06/15/2026 | DEXA scan: 03/30/2026; excluded: file 1 page 6 (no patient name printed and it prints age 34.1; the DEXA pages center on age 45.3; scan dates 05/18/2026, 07/06/2026)"
+  ]
+ },
+ "access_medical": {
+  "screens": [],
+  "notices": [
+   "Name entered: Alex S; printed on the lab: SAMPLE, ALEX | Bloodwork collected: 08/07/2026 | DEXA scan: 07/20/2026"
+  ]
+ },
+ "access_medical_limited": {
+  "screens": [],
+  "notices": [
+   "Name entered: Alex S; printed on the lab: SAMPLE, ALEX | Bloodwork collected: 08/07/2026 | DEXA scan: 07/20/2026"
+  ]
+ },
+ "chl_extensive": {
+  "screens": [
+   {
+    "kind": "review",
+    "items": [
+     "Draw dates with excluded lab pages or results: 11/04/2025 (page 4)",
+     "Lab PDF page 4 (Order SYN-M-300 (collected 03/10/2026); Comprehensive Metabolic Panel): Apolipoprotein B (Order SYN-M-300 (collected 03/10/2026); Comprehensive Metabolic Panel): '12.34.5' runs result digits together with no flag or inequality between them, so its column boundary cannot be read",
+     "Lab PDF: 5 printed result(s) with a test name the tool does not recognize, shown as lab-reported (not scored) and listed in the staff notes: VLDL Size, Chol/HDL-C, LDL Size, Apolipoprotein A1"
+    ],
+    "choices": [
+     [
+      "continue",
+      "Generate the report without them"
+     ],
+     [
+      "stop",
+      "Stop, I will fix the files"
+     ]
+    ],
+    "message": "",
+    "summary": "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 03/10/2026 | DEXA scan: 03/02/2026"
+   }
+  ],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 03/10/2026 | DEXA scan: 03/02/2026"
+  ]
+ },
+ "female_chl_scanned_undated": {
+  "screens": [],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 05/12/2026 | DEXA scan: 04/20/2026; excluded: 07/25/2026 (dated after the paired scan), 08/30/2026 (dated after the paired scan)"
+  ]
+ },
+ "quest_scanned_urinalysis": {
+  "screens": [],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 03/18/2026"
+  ]
+ },
+ "quest_scanned_urinalysis_continued": {
+  "screens": [],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 03/18/2026"
+  ]
+ },
+ "scanned_mixed_reads": {
+  "screens": [],
+  "notices": [
+   "Name entered: Synthetic, Pat; printed on the lab: Synthetic, Pat | Bloodwork collected: 02/11/2026"
+  ]
+ }
+}
