@@ -191,6 +191,13 @@ UNDATED_SCAN_MIN_MATCHES = 10
 # Owner/clinic decision (docs/open_decisions.md); set True only when the clinic has confirmed the female ranges.
 FEMALE_RANGES_CONFIRMED = False
 
+# Known-items allowlist (config/known_items.json). While False (the default) it is never read: every stop screen is
+# exactly as before. When True, a run whose only stop items are on the list is built with a banner instead of the
+# screen, known exclusions are left out of the report, and the QA file lists each under "Auto-accepted (known)"; any
+# other item, or a hard stop (pipeline.hard_stop_reasons), still shows the full screen. Owner/clinic decision
+# (docs/open_decisions.md); set True only when the clinic approves the list.
+KNOWN_ITEMS_AUTOPROCEED = False
+
 # First line of the STAFF CHECK for a female report while FEMALE_RANGES_CONFIRMED is False.
 FEMALE_RANGES_STAFF_CHECK_LINE = "FEMALE RANGES NOT CLINIC-CONFIRMED - STAFF REVIEW ONLY, DO NOT RELEASE"
 

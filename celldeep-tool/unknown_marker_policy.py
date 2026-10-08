@@ -41,6 +41,7 @@ class UnrecognizedMarker:
     cells: list[dict] = field(default_factory=list)
     section_heading: Optional[str] = None   # printed section heading the row sat under, if any
     shown_as_lab_reported: bool = False     # also shown in the report as lab-reported (as printed, never scored)
+    page: Optional[int] = None              # the PDF page the row was printed on, when known
 
 
 @dataclass
@@ -54,6 +55,7 @@ class ExtractionReviewNotice:
     name_header: list = field(default_factory=list)            # "This report is for ..." and printed names
     incomplete: list = field(default_factory=list)             # pages/sections excluded by parse failures
     staff_check: list = field(default_factory=list)            # one-screen STAFF CHECK, printed first
+    auto_accepted: list | None = None   # KNOWN_ITEMS_AUTOPROCEED only: known items handled automatically (name, handling, page)
 
 
 STAFF_CHECK_END = "(end of STAFF CHECK)"
@@ -70,7 +72,7 @@ def without_staff_check(text: str) -> str:
 STAFF_NOTE_MARKERS = (
     "source=scan", "gate:", "STAFF REVIEW", "COVERAGE GAP", "NEEDS HUMAN REVIEW", "manual review required",
     "LAB-REPORTED CONFLICT", "PATIENT NAME MISMATCH", "SCANNED BLOODWORK", "ERROR: missing threshold",
-    "Unrecognized marker", "PRE-GENERATION CHECK", "POSSIBLE HALLUCINATION", "STAFF CHECK", "DEXA EXCLUDED", "LAB EXCLUDED", "DEXA PATIENT NAME MISMATCH", "DEXA name not printed", "DEXA AGE MISMATCH", "DEXA AGE NOT PRINTED", "DEXA SCAN OLDER THAN BLOODWORK", "DEXA NOT READ", "CENSORED RESULTS", "LAB FLAG DIFFERS", "DOB CONFLICT", "INCOMPLETE - ", "This report is for", "NAME MISMATCH", "TREATMENT STATUS:", "AGE CHECK", "AGE NOT COMPUTED", "PROVIDER NOTE REJECTED", "PROVIDER NOTE:", "LINE(S) NOT READ",
+    "Unrecognized marker", "Auto-accepted (known)", "PRE-GENERATION CHECK", "POSSIBLE HALLUCINATION", "STAFF CHECK", "DEXA EXCLUDED", "LAB EXCLUDED", "DEXA PATIENT NAME MISMATCH", "DEXA name not printed", "DEXA AGE MISMATCH", "DEXA AGE NOT PRINTED", "DEXA SCAN OLDER THAN BLOODWORK", "DEXA NOT READ", "CENSORED RESULTS", "LAB FLAG DIFFERS", "DOB CONFLICT", "INCOMPLETE - ", "This report is for", "NAME MISMATCH", "TREATMENT STATUS:", "AGE CHECK", "AGE NOT COMPUTED", "PROVIDER NOTE REJECTED", "PROVIDER NOTE:", "LINE(S) NOT READ",
 )
 
 
@@ -103,6 +105,11 @@ def format_review_notice(notice: ExtractionReviewNotice) -> str:
         lines.append(line)
     for note in notice.other_notes:
         lines.append(f"  - {note}")
+    if notice.auto_accepted is not None:
+        # Nothing known is ever hidden: every item the clinic's allowlist handled automatically, with how and where.
+        lines += ["", "Auto-accepted (known)"]
+        lines += [f"  - {item['name']}: {item['handling']}" + (f" (page {item['page']})" if item.get("page") else "")
+                  for item in notice.auto_accepted] or ["  none"]
     return "\n".join(lines)
 
 

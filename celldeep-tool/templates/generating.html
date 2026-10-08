@@ -82,7 +82,11 @@
         statusElement.appendChild(summary);
       }
       if (job.message) addList(statusElement, '', [job.message]);
-      if ((job.kind || 'review') === 'review') addList(statusElement, '', job.items);
+      if ((job.kind || 'review') === 'review') {
+        const known = job.known || [];
+        addList(statusElement, known.length ? 'Needs review' : '', known.length ? job.needs_review : job.items);
+        addList(statusElement, 'Known (auto-handled)', known);
+      }
       const choices = job.choices || [{action: 'continue', label: 'Generate the report without them'},
                                       {action: 'stop', label: 'Stop, I will fix the files'}];
       for (const choice of choices) {

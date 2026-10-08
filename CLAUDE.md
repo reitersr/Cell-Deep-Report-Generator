@@ -35,6 +35,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/markers_reference.py` | Marker library: canonical names, exact aliases, CellDeep scoring thresholds. |
 | `celldeep-tool/lab_reported.py` | Lab-reported, not-scored tests (CBC, chemistry, urinalysis, ...): exact aliases, section-scoped; shown with printed range and the lab's H/L flag, never a CellDeep score. |
 | `celldeep-tool/clinic_config.py` | Clinic-decision defaults (censored results, lab flags, range labels); one comment per setting. |
+| `celldeep-tool/config/known_items.json`, `known_items.py` | Clinic-approved known-items allowlist (exact names, case/whitespace only), used only while `clinic_config.KNOWN_ITEMS_AUTOPROCEED` is True (default False); any name change needs clinic approval. |
 | `celldeep-tool/tmp_cleanup.py` | Deletes uploads, reports and audits from `/tmp` after six hours. |
 | `celldeep-tool/scoring.py` | Pure scoring math, no AI; `is_censored` for results printed as a limit. |
 | `celldeep-tool/generation_prompt.py` | Deterministic patient-facing copy (template fill, no AI). |
@@ -100,7 +101,14 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    and the name guard (`name_conflicts`, `scan_bloodwork.names_match` on the names the lab pages print; "Use as
    entered" / "Stop, I will fix"; no DOB or ID matching). With no `confirm`, `DateConflict` / `NameConflict` stop the
    run. `pre_generation_line` (name entered vs printed, Collected date, DEXA scan chosen, excluded scans with why) is
-   shown on every screen and the job page (`notify`) and written to the QA file ("PRE-GENERATION CHECK").
+   shown on every screen and the job page (`notify`) and written to the QA file ("PRE-GENERATION CHECK"). Known-items
+   allowlist (`clinic_config.KNOWN_ITEMS_AUTOPROCEED`, default False: never read, every screen exactly as recorded in
+   `synthetic_fixtures/expected/stop_screens.json` / `regression_check.py --screens`): when True and every review item
+   is on `config/known_items.json` (`pipeline.preflight_entries`, `known_items.handling`) with no hard stop
+   (`pipeline.hard_stop_reasons`: female ranges unconfirmed, DEXA pairing exclusions, scanned pages with no printed
+   name), the report is built with a banner; otherwise the full screen, "Needs review" first, then "Known
+   (auto-handled)". Known exclusions are then left out of the report and the QA file ends with "Auto-accepted
+   (known)".
 2. **Bloodwork** (`pipeline.extract`):
    - Pages with a text layer: `lab_layouts.select` picks a registered layout (today `access_medical`: header
      block for patient, DOB, age, two-digit-year Coll. Date and Fasting; rows only under a section title in the

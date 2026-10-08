@@ -7,6 +7,8 @@ result with its expected-values file, so a fix for one report cannot silently ch
     python scripts/regression_check.py --diff A B      diff two snapshot directories
     python scripts/regression_check.py --record-real real:NAME   lock a hand-verified real report (local only)
     python scripts/regression_check.py --real          check only the locked real reports (local, one command)
+    python scripts/regression_check.py --screens       compare every case's stop screens with the recorded ones
+    python scripts/regression_check.py --record-screens  record them (real ones only in git-ignored real_fixtures/)
 
 Fixtures:
 - every synthetic scenario (synthetic_fixtures/scenarios.py, scripted vision reads, no network); expected rows in
@@ -132,7 +134,7 @@ def _capture(run):
     return captured["record"], captured["copy"]
 
 
-def synthetic_rows(name, folder) -> list[str]:
+def synthetic_rows(name, folder, confirm=None, notify=None) -> list[str]:
     os.environ[pipeline.VISION_FALLBACK_ENV] = "0"
     folder.mkdir(parents=True, exist_ok=True)
     labs, dexa, reads, options = scenarios.build(name, folder)
@@ -147,7 +149,7 @@ def synthetic_rows(name, folder) -> list[str]:
             labs, dexa, options.get("note"), patient, options.get("age"), options.get("sex", "male"),
             str(folder / "report.pdf"),
             vitality_index=dict(options.get("vitality_index") or VITALITY_NOT_ASSESSED),
-            collected_date=options.get("collected_date"), confirm=lambda items: True)))
+            collected_date=options.get("collected_date"), confirm=confirm or (lambda items: True), notify=notify)))
     finally:
         pipeline.Anthropic, pipeline._review_notes_path, pipeline._diagnostic_path_prefix = saved
 
@@ -185,7 +187,7 @@ class ScriptedReads:
         return SimpleNamespace(content=[SimpleNamespace(text=json.dumps(payload))], stop_reason="end_turn")
 
 
-def real_rows(spec, folder, reads_file=None) -> tuple[list[str], list[str]]:
+def real_rows(spec, folder, reads_file=None, confirm=None, notify=None) -> tuple[list[str], list[str]]:
     """(rows, skipped notes) for one git-ignored real fixture. Real DEXA and scanned lab pages are read by the vision
     model (CELLDEEP_LIVE_VISION=1 and an API key), or offline from the fixture's stored transcriptions
     ("dexa_reads", "lab_scan_reads")."""
@@ -218,8 +220,8 @@ def real_rows(spec, folder, reads_file=None) -> tuple[list[str], list[str]]:
         record, copy = _capture(lambda: pipeline.run(
             str(REAL / spec["labs"]), dexa, None, spec.get("patient"), spec.get("age"), spec.get("sex", "male"),
             str(folder / "report.pdf"), vitality_index=dict(spec_vitality(spec)),
-            collected_date=spec.get("collected_date"), confirm=lambda items: True,
-            scan_collected_date=spec.get("scan_collected_date")))
+            collected_date=spec.get("collected_date"), confirm=confirm or (lambda items: True),
+            scan_collected_date=spec.get("scan_collected_date"), notify=notify))
     finally:
         pipeline._review_notes_path, pipeline._diagnostic_path_prefix = saved
         pipeline.Anthropic = saved_client
@@ -266,6 +268,46 @@ def current(selected=None) -> dict[str, dict]:
             got = [row for row in got if dexa_checked or not _uses_dexa(row)]
             results[name] = {"rows": got, "expected": expected, "mode": spec.get("mode", "subset"),
                              "skipped": skipped, "dexa_checked": dexa_checked, "spec_file": spec_file}
+    return results
+
+
+# Stop screens: every screen a case shows before its report is built (kind, lines, choices, message, the one-line
+# pre-generation check) and every non-blocking job-page line, answered with each screen's first choice. Synthetic
+# baselines are committed; the real ones hold names and dates and stay in the git-ignored real_fixtures/.
+SCREENS_FILE = EXPECTED / "stop_screens.json"
+REAL_SCREENS_FILE = REAL / "stop_screens.json"
+
+
+def _screen(screen) -> dict:
+    return {"kind": getattr(screen, "kind", "review"), "items": list(screen),
+            "choices": [list(choice) for choice in getattr(screen, "choices", [])],
+            "message": getattr(screen, "message", ""), "summary": getattr(screen, "summary", "")}
+
+
+def stop_screens(real=False, selected=None) -> dict[str, dict]:
+    """{case: {"screens": [...], "notices": [...]}} for every synthetic scenario, or (real=True) every real fixture
+    whose files are present."""
+    results = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        cases = ([("real:" + f.name.removesuffix(".expected.json"), f) for f in sorted(REAL.glob("*.expected.json"))]
+                 if real and REAL.is_dir() else [] if real else [(name, None) for name in scenarios.SCENARIOS])
+        for name, spec_file in cases:
+            if selected and name not in selected:
+                continue
+            screens, notices = [], []
+
+            def confirm(screen, screens=screens):
+                screens.append(_screen(screen))
+                return True
+
+            if spec_file is None:
+                synthetic_rows(name, Path(tmp) / name, confirm, notices.append)
+            else:
+                spec = json.loads(spec_file.read_text())
+                if not (REAL / spec["labs"]).is_file():
+                    continue
+                real_rows(spec, Path(tmp) / spec_file.stem, None, confirm, notices.append)
+            results[name] = {"screens": screens, "notices": notices}
     return results
 
 
@@ -341,6 +383,26 @@ def diff(a, b) -> int:
     return changed
 
 
+def screens_main(record) -> int:
+    changed = 0
+    for path, real in ((SCREENS_FILE, False), (REAL_SCREENS_FILE, True)):
+        got = stop_screens(real=real)
+        if real and not got:
+            print(missing_note(real_missing()))
+            continue
+        if record:
+            path.write_text(json.dumps(got, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+            print(f"recorded the stop screens of {len(got)} case(s) in {path.name}")
+            continue
+        expected = json.loads(path.read_text()) if path.is_file() else {}
+        for name in sorted(set(got) | set(expected)):
+            same = got.get(name) == expected.get(name)
+            changed += not same
+            print(f"{name}: stop screens {'identical' if same else 'DIFFER'}")
+    print("PASS" if not changed else f"FAIL - {changed} case(s) differ")
+    return 1 if changed else 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--record", action="store_true")
@@ -352,11 +414,19 @@ def main():
                              "CELLDEEP_LIVE_VISION=1)")
     parser.add_argument("--real", action="store_true", help="check only the real fixtures in real_fixtures/")
     parser.add_argument("--dexa-reads", help="use this stored transcription (in real_fixtures/) for real DEXA files")
+    parser.add_argument("--screens", action="store_true",
+                        help="compare every case's stop screens with the recorded ones (synthetic, and real when "
+                             "real_fixtures/ is present)")
+    parser.add_argument("--record-screens", action="store_true",
+                        help="record the stop screens (synthetic: synthetic_fixtures/expected/stop_screens.json; "
+                             "real: real_fixtures/stop_screens.json, git-ignored)")
     parser.add_argument("fixtures", nargs="*", help="limit to these fixture names")
     args = parser.parse_args()
     if args.diff:
         diff(*args.diff)
         return 0
+    if args.screens or args.record_screens:
+        return screens_main(args.record_screens)
     global DEXA_READS_OVERRIDE
     DEXA_READS_OVERRIDE = args.dexa_reads
     selected = set(args.fixtures) or None

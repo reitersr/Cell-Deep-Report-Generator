@@ -1,0 +1,24 @@
+{
+  "_owner": "Clinic-approved list. Adding or changing any name requires clinic approval (docs/open_decisions.md). Names match exactly after case and whitespace normalization only: no fuzzy, substring or OCR-lookalike matching.",
+  "lab_reported_known": [
+    "Chol/HDL-C",
+    "TG/HDL-C",
+    "LDL Size",
+    "HDL Size",
+    "Large VLDL-P",
+    "VLDL Size",
+    "Apolipoprotein A1",
+    "ApoB/ApoA1 Ratio",
+    "OmegaCheck® (Whole Blood: EPA+DPA+DHA)",
+    "Omega-3 total",
+    "SARS COV2,TOT,SPKE,SEMIQN"
+  ],
+  "excluded_known": [
+    "ApoE Genotype",
+    "MTHFR Mutation",
+    "REFLEXIVE URINE CULTURE"
+  ],
+  "excluded_known_when_result": {
+    "BUN/CREATININE RATIO": ["SEE NOTE"]
+  }
+}

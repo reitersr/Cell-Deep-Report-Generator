@@ -268,12 +268,14 @@ def _run_report_job(job_directory: Path, job_data: dict, run=None) -> None:
 
 def _confirm_with_staff(job_directory: Path, items: list[str]):
     """Pause the job on a stop screen and return the action staff chose ("stop" when none in time). items may be a
-    pipeline.PreflightScreen (kind, choices, the one-line pre-generation check); a plain list is the original screen. The one-report slot is released while waiting so other uploads are not held up."""
+    pipeline.PreflightScreen (kind, choices, the one-line pre-generation check; with KNOWN_ITEMS_AUTOPROCEED the
+    "Needs review" and "Known (auto-handled)" groups); a plain list is the original screen. The one-report slot is released while waiting so other uploads are not held up."""
     choices = getattr(items, "choices", pipeline.REVIEW_CHOICES)
     decision = {"event": threading.Event(), "action": "stop", "allowed": {action for action, _ in choices}}
     _DECISIONS[job_directory.name] = decision
     _write_job_status(job_directory, "confirm", items=list(items), kind=getattr(items, "kind", "review"),
                       message=getattr(items, "message", ""), summary=getattr(items, "summary", ""),
+                      needs_review=getattr(items, "needs_review", list(items)), known=getattr(items, "known", []),
                       choices=[{"action": action, "label": label} for action, label in choices],
                       banner=_BANNERS.get(job_directory.name, []))
     _REPORT_SLOT.release()
@@ -289,7 +291,7 @@ def _confirm_with_staff(job_directory: Path, items: list[str]):
 
 
 def _notify_staff(job_directory: Path, line: str) -> None:
-    """A non-blocking line (the pre-generation check) shown on the job page while the report is built."""
+    """A non-blocking line (the pre-generation check; known items handled automatically) shown on the job page."""
     _BANNERS.setdefault(job_directory.name, []).append(line)
     _write_job_status(job_directory, "processing", banner=_BANNERS[job_directory.name])
 
