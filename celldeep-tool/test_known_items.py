@@ -1,7 +1,7 @@
-"""The known-items allowlist (config/known_items.json), behind clinic_config.KNOWN_ITEMS_AUTOPROCEED (synthetic data;
-the four locked real cases only where real_fixtures/ is present).
+"""The known-items allowlist (config/known_items.json), behind clinic_config.KNOWN_ITEMS_AUTOPROCEED (on by owner
+decision; synthetic data, and the four locked real cases only where real_fixtures/ is present).
 
-- Flag off (the default): the allowlist is never read and every case's stop screens and job-page notices are exactly
+- Flag off: the allowlist is never read and every case's stop screens and job-page notices are exactly
   the ones recorded before the allowlist existed (synthetic_fixtures/expected/stop_screens.json; real_fixtures/
   stop_screens.json locally). The QA file has no "Auto-accepted (known)" section.
 - Flag on: when every stop item is known (exact names, case and whitespace only) and no hard stop applies, the report
@@ -40,13 +40,14 @@ def _baseline(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-# --- flag off (the default): byte-identical stop screens ---------------------------------------------------------
+# --- flag off: byte-identical stop screens ----------------------------------------------------------------------
 
-def test_the_flag_is_off_by_default():
-    assert clinic_config.KNOWN_ITEMS_AUTOPROCEED is False
+def test_the_flag_is_on():
+    assert clinic_config.KNOWN_ITEMS_AUTOPROCEED is True
 
 
 def test_with_the_flag_off_every_synthetic_cases_stop_screens_are_unchanged(check, monkeypatch):
+    monkeypatch.setattr(clinic_config, "KNOWN_ITEMS_AUTOPROCEED", False)
     monkeypatch.setattr(known_items, "load", lambda *a, **k: pytest.fail("the allowlist was read with the flag off"))
     assert check.stop_screens() == _baseline(check.SCREENS_FILE)
 
@@ -54,6 +55,7 @@ def test_with_the_flag_off_every_synthetic_cases_stop_screens_are_unchanged(chec
 def test_with_the_flag_off_the_four_locked_real_cases_stop_screens_are_unchanged(check, monkeypatch):
     if not check.REAL_SCREENS_FILE.is_file():
         pytest.skip(check.missing_note(check.real_missing()) + "; stop-screen baseline not present")
+    monkeypatch.setattr(clinic_config, "KNOWN_ITEMS_AUTOPROCEED", False)
     monkeypatch.setattr(known_items, "load", lambda *a, **k: pytest.fail("the allowlist was read with the flag off"))
     got = check.stop_screens(real=True)
     if not got:
@@ -207,3 +209,69 @@ def test_female_reports_are_never_waved_through_while_female_ranges_are_unconfir
     assert screens[0].known  # the known items are still shown, grouped
 
 
+
+
+# --- flag on: nothing known is hidden; female reports unchanged -------------------------------------------------
+
+def test_every_auto_accepted_item_is_listed_in_the_qa_file(tmp_path, monkeypatch):
+    from synthetic_fixtures import scenarios
+    from unknown_marker_policy import without_staff_check
+
+    monkeypatch.setattr(clinic_config, "KNOWN_ITEMS_AUTOPROCEED", True)
+    original, seen = pipeline.extract, []
+    monkeypatch.setattr(pipeline, "extract", lambda *a, **k: seen.append(original(*a, **k)) or seen[-1])
+    accepted_somewhere = 0
+    for name in scenarios.SCENARIOS:
+        seen.clear()
+        scenarios.run_scenario(name, tmp_path / name, monkeypatch)
+        review = without_staff_check((tmp_path / name / "review.txt").read_text(encoding="utf-8"))
+        section = review[review.index("\nAuto-accepted (known)\n"):].splitlines()[2:]
+        expected = [f"  - {item['name']}: {item['handling']}" + (f" (page {item['page']})" if item.get("page") else "")
+                    for item in seen[-1]["auto_accepted"]]
+        assert section == (expected or ["  none"]), name
+        accepted_somewhere += len(expected)
+    assert accepted_somewhere  # the scenarios do auto-accept items (chl_extensive, quest urinalysis)
+
+
+def test_female_reports_keep_the_draft_mark_and_staff_check_line_with_the_flag_on(tmp_path, monkeypatch):
+    import fitz
+    from synthetic_fixtures import scenarios
+
+    monkeypatch.setattr(clinic_config, "KNOWN_ITEMS_AUTOPROCEED", True)
+    monkeypatch.setattr(clinic_config, "FEMALE_RANGES_CONFIRMED", False)
+    scenarios.run_scenario("female_chl_scanned_undated", tmp_path, monkeypatch)
+    with fitz.open(tmp_path / "report.pdf") as document:
+        pages = [page.get_text() for page in document]
+    assert all(clinic_config.FEMALE_DRAFT_MARK in page for page in pages)
+    assert (tmp_path / "review.txt").read_text(encoding="utf-8").startswith(
+        clinic_config.FEMALE_RANGES_STAFF_CHECK_LINE)
+
+
+# --- the four locked real cases: patient PDF text (local only) --------------------------------------------------
+
+PDF_TEXT = Path(__file__).resolve().parent / "real_fixtures" / "pdf_text"
+
+
+@pytest.mark.parametrize("case", ["extensive_male", "female_chl", "limited_male", "chl_quest_male"])
+def test_a_locked_real_cases_patient_pdf_text_is_identical(case, check, tmp_path, monkeypatch):
+    import json
+
+    import fitz
+
+    spec_file, baseline = check.REAL / f"{case}.expected.json", PDF_TEXT / f"{case}.txt"
+    if not spec_file.is_file() or not baseline.is_file():
+        pytest.skip(check.missing_note(check.real_missing()) + "; patient PDF text baseline not present")
+    spec = json.loads(spec_file.read_text())
+    reads = {key: json.loads((check.REAL / spec[key]).read_text())["pages"] if spec.get(key) else None
+             for key in ("dexa_reads", "lab_scan_reads")}
+    scripted = check.ScriptedReads(reads["dexa_reads"], reads["lab_scan_reads"])
+    monkeypatch.setattr(pipeline, "Anthropic", lambda **kw: scripted)
+    monkeypatch.setattr(pipeline, "_review_notes_path", lambda _n: str(tmp_path / "review.txt"))
+    monkeypatch.setattr(pipeline, "_diagnostic_path_prefix", lambda _n: str(tmp_path / "diag"))
+    pipeline.run(str(check.REAL / spec["labs"]), [str(check.REAL / d) for d in spec["dexa"]], None, spec["patient"],
+                 spec["age"], spec.get("sex", "male"), str(tmp_path / "report.pdf"),
+                 vitality_index=check.spec_vitality(spec), collected_date=spec["collected_date"],
+                 confirm=lambda screen: True, scan_collected_date=spec.get("scan_collected_date"))
+    with fitz.open(tmp_path / "report.pdf") as document:
+        text = "\n".join(page.get_text() for page in document)
+    assert text == baseline.read_text()
