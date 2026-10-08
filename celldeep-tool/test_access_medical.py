@@ -238,12 +238,19 @@ def test_header_identity_and_checks(report):
     assert "FOUND IN SOURCE BUT MISSING" not in review.replace("'Magnesium' FOUND", "")  # "mg" units: known item
 
 
-def test_a_staff_date_that_differs_from_the_header_stops_the_report(tmp_path):
-    # CHL round 1, item 5: an entered Collected date with no accepted result stops the report (it was a notice).
-    with pytest.raises(pipeline.LatestDrawNotAccepted, match="the entered bloodwork Collected date, 08/14/2026, has no "
-                                                             "accepted result"):
+def test_a_staff_date_that_differs_from_the_header_stops_the_report(tmp_path, monkeypatch):
+    # The date guard: an entered Collected date that differs from the printed one stops before anything is built,
+    # with both dates; "Stop" writes nothing, "Use the lab date" builds the report on the printed date.
+    screens = []
+    monkeypatch.setattr(pipeline, "_decision", lambda confirm, screen: screens.append(screen) or "stop")
+    with pytest.raises(pipeline.GenerationAborted):
         run_scenario("access_medical_other_date", tmp_path / "other")
     assert not (tmp_path / "other" / "report.pdf").exists()
+    assert screens[0].kind == "date" and "(08/14/2026)" in screens[0].message and "(08/07/2026)" in screens[0].message
+    assert [action for action, _ in screens[0].choices] == ["use_lab_date", "stop"]
+    monkeypatch.undo()
+    built = run_scenario("access_medical_other_date", tmp_path / "lab-date")  # True: "Use the lab date"
+    assert "DATE CHECK: staff entered 08/14/2026; the lab prints 08/07/2026; staff chose the lab date" in built["review"]
     notes = pipeline.lab_header_checks({"collected": "08/07/2026"}, "08/14/2026", None, None, {}, [])
     assert notes == ["COLLECTED DATE CHECK: staff entered 08/14/2026, the lab header prints Coll. Date 08/07/2026; "
                      "the results use the printed date - confirm which draw this is"]

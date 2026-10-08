@@ -3053,6 +3053,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
     scan_date = scan_collected_date(scan_date) if scan_date else None
     undated_scan_date = None  # assigned to undated scanned pages from the dated report's Historical column
     occurrences, unrecognized, lab_review_notes = [], [], []
+    lab_printed_scan_dates = []  # Collected dates the scanned lab pages print (both reads agreeing or not; the guard)
     row_audit = []
     scan_numbers = []
     parse_exclusions = []  # pages/sections that could not be parsed deterministically
@@ -3102,7 +3103,7 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
                 if window := _morning_window(digital_pages):
                     draw_info["morning_window"] = window
             if scans:
-                printed_scan_dates = []
+                printed_scan_dates = lab_printed_scan_dates
                 scanned, scan_unknown, scan_notes = _extract_scan_bloodwork(
                     scans, digital_pages, client, row_audit, patient_name, scan_date or collected_date, dob_sources,
                     printed_names, scan_row_exclusions, printed_scan_dates)
@@ -3212,6 +3213,13 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "lab_pages": {"text": lab_text_pages, "scanned": scan_numbers},
         "preflight": preflight_items(parse_exclusions, scan_notes if scan_numbers else [], scan_row_exclusions,
                                      dexa_exclusions, dexa_info, unrecognized) + note_preflight(note),
+        # Scanned pages that print no Collected date and are dated by the entered date itself (no scanned-pages
+        # date entered, none assigned from the Historical column): the date guard does not apply.
+        "entered_date_dates_scans": bool(scan_numbers) and not lab_printed_scan_dates and not scan_date
+                                    and not undated_scan_date,
+        "lab_printed_dates": [*draw_info.get("collected_dates", []),
+                              *([layout_info["collected"]] if layout_info.get("collected") else []),
+                              *lab_printed_scan_dates],
         "provider_note_status": note_status(note_text, note),
         "printed_names": printed_names,
         **_age_from_dob(dob_sources, latest["date_display"] if latest else None),
@@ -3225,6 +3233,10 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "blocked": latest_draw_block(
             [*draw_info.get("collected_dates", []), *([layout_info["collected"]] if layout_info.get("collected") else [])],
             collected_date if labs_pdf else None, occurrences, lab_items, parse_exclusions),
+        # The same check without the entered date: the lab's own latest draw has no accepted result.
+        "blocked_by_lab": latest_draw_block(
+            [*draw_info.get("collected_dates", []), *([layout_info["collected"]] if layout_info.get("collected") else [])],
+            None, occurrences, lab_items, parse_exclusions),
     }
 
     audit_base = Path(audit_root or tempfile.gettempdir()) / "celldeep_extraction_audits"
@@ -3656,6 +3668,97 @@ class GenerationAborted(RuntimeError):
     """Staff stopped the report at the confirmation step; nothing was written."""
 
 
+class DateConflict(GenerationBlocked):
+    """The entered Collected date differs from the lab's printed one and no staff decision could be asked."""
+
+
+class NameConflict(GenerationBlocked):
+    """The entered name differs from the name printed on the lab and no staff decision could be asked."""
+
+
+class PreflightScreen(list):
+    """One stop screen before anything is built. As a list it is the lines a caller shows, so callers that only
+    read lines keep working; the app also renders the structure. kind: "review" (pages/rows left out), "date" or
+    "name" (a conflict with what the lab prints). choices: [(action, label)], the first being what a plain "yes"
+    (True) means. summary: the one-line pre-generation check."""
+
+    def __init__(self, kind, choices, summary="", items=(), message=""):
+        super().__init__([message] if message else list(items))
+        self.kind, self.choices, self.summary, self.message = kind, list(choices), summary, message
+
+
+REVIEW_CHOICES = [("continue", "Generate the report without them"), ("stop", "Stop, I will fix the files")]
+DATE_CHOICES = [("use_lab_date", "Use the lab date"), ("stop", "Stop, I will fix the entry")]
+NAME_CHOICES = [("use_as_entered", "Use as entered"), ("stop", "Stop, I will fix")]
+_LAB_NAME_SOURCES = ("lab PDF text pages", "scanned lab page")
+_DATE_IN_TEXT_RE = re.compile(r"\d{1,2}/\d{1,2}/\d{2,4}")
+
+
+def _decision(confirm, screen):
+    """The staff's action for a screen: confirm returns an action, True (the first choice) or False (stop)."""
+    answer = confirm(screen)
+    if answer is True:
+        return screen.choices[0][0]
+    if not answer:
+        return "stop"
+    return str(answer)
+
+
+def lab_collected_date(extracted: dict):
+    """The latest Collected date the lab itself prints (report headers, a layout's header, scanned pages), as
+    MM/DD/YYYY, or None when the lab prints none."""
+    days = []
+    for text in extracted.get("lab_printed_dates", []):
+        match = _DATE_IN_TEXT_RE.search(str(text or ""))
+        if match and isinstance(day := _normalize_date_for_matching(match[0]), tuple):
+            days.append(day)
+    if not days:
+        return None
+    year, month, day = max(days)
+    return f"{month:02d}/{day:02d}/{year:04d}"
+
+
+def date_conflict(extracted: dict, entered: str | None):
+    """(entered, printed) when the staff-entered Collected date differs from the latest date the lab prints. Never
+    when the entered date is what dates scanned pages that print none (behavior unchanged)."""
+    printed = lab_collected_date(extracted)
+    if not entered or not printed or extracted.get("entered_date_dates_scans"):
+        return None
+    if _normalize_date_for_matching(entered) == _normalize_date_for_matching(printed):
+        return None
+    return entered, printed
+
+
+def name_conflicts(extracted: dict, entered: str | None) -> list[str]:
+    """Names printed on the lab (text or scanned pages) that do not match the entered name (scan_bloodwork.
+    names_match: the same words in any order and case, or first name plus last initial). No DOB or ID is compared."""
+    import scan_bloodwork
+
+    if not entered:
+        return []
+    printed = dict.fromkeys(name for kind, _, name in extracted.get("printed_names", []) if kind in _LAB_NAME_SOURCES)
+    return [name for name in printed if not scan_bloodwork.names_match(entered, name)]
+
+
+def pre_generation_line(extracted: dict, entered_name: str | None) -> str:
+    """One line before generating: name entered vs printed on the lab, the bloodwork Collected date, the DEXA scan
+    chosen and any scan left out (with why)."""
+    printed = list(dict.fromkeys(name for kind, _, name in extracted.get("printed_names", [])
+                                 if kind in _LAB_NAME_SOURCES))
+    parts = [f"Name entered: {entered_name or '(none entered)'}; printed on the lab: "
+             + (", ".join(printed) if printed else "no name read from the lab - confirm"),
+             f"Bloodwork collected: {extracted.get('collected_date') or extracted.get('latest_draw_date') or 'not entered'}"]
+    scans = [reading for reading in extracted.get("dexa_history", [])
+             if reading.get("body_fat_pct") is not None or reading.get("fat_mass_lb") is not None]
+    pairing = extracted.get("dexa_pairing") or {}
+    chosen = pairing.get("current") or (scans[-1]["date_display"] if scans else None)
+    excluded = [f"{date} (dated after the paired scan)" for date in pairing.get("excluded", [])]
+    excluded += [f"file {key[0]} page {key[1]} ({reason})" for key, reason in extracted.get("dexa_exclusions", [])]
+    if chosen or excluded or extracted.get("dexa_info"):
+        parts.append(f"DEXA scan: {chosen or 'none'}" + (f"; excluded: {', '.join(excluded)}" if excluded else ""))
+    return " | ".join(parts)
+
+
 _SCAN_PAGE_EXCLUDED_RE = re.compile(r"source=scan page (\d+): (.+); page excluded$")
 
 
@@ -4002,11 +4105,15 @@ def resolve_age(extracted: dict, staff_age: int | None) -> int | None:
 
 
 def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitality_index=None,
-        collected_date=None, confirm=None, scan_collected_date=None):
+        collected_date=None, confirm=None, scan_collected_date=None, notify=None):
     """Build the patient report and staff notes. confirm(items) is called after the documents are read and
     before anything is built, only when pages or rows were left out; returning False stops the run
-    (GenerationAborted) so staff can fix the inputs instead of sending a report with gaps. scan_collected_date:
-    the staff-entered date of scanned pages that are an earlier draw than the digital report."""
+    (GenerationAborted) so staff can fix the inputs instead of sending a report with gaps. It is also called with
+    a "date" screen (the entered Collected date differs from the printed one) and a "name" screen (the entered name
+    differs from the printed one); each answer is an action from the screen's choices (True means the first,
+    False "stop"). With no confirm, those conflicts stop the run (DateConflict, NameConflict). notify(line) gets the
+    one-line pre-generation check. scan_collected_date: the staff-entered date of scanned pages that are an earlier
+    draw than the digital report."""
     raw_lab_text = _pdf_row_text(labs_pdf)
     raw_dexa_text = "\n".join(_pdf_text(path) for path in dexa_pdfs)
     client = Anthropic(
@@ -4018,6 +4125,29 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     print("Step 1/3: parsing source documents...")
     extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client,
                         collected_date=collected_date, age=age, sex=sex, scan_date=scan_collected_date)
+    guard_notes = []
+    # Date guard: a typed Collected date never silently replaces the one the lab prints.
+    if labs_pdf and not extracted.get("blocked_by_lab") and (
+            conflict := date_conflict(extracted, extracted.get("collected_date"))):
+        entered, printed = conflict
+        message = (f"The bloodwork Collected date entered ({entered}) differs from the date the lab prints "
+                   f"({printed}).")
+        if confirm is None:
+            raise DateConflict(f"Report not generated: {message} Correct the entered date and try again.")
+        action = _decision(confirm, PreflightScreen("date", DATE_CHOICES, message=message))
+        if action != "use_lab_date":
+            raise GenerationAborted("stopped by staff at the date check")
+        extracted = extract(labs_pdf, dexa_pdfs, note_text, patient_name=patient_name, client=client,
+                            collected_date=printed, age=age, sex=sex, scan_date=scan_collected_date)
+        guard_notes.append(f"DATE CHECK: staff entered {entered}; the lab prints {printed}; staff chose the lab date")
+    elif labs_pdf and extracted.get("collected_date") and extracted.get("entered_date_dates_scans"):
+        printed = lab_collected_date(extracted)
+        guard_notes.append(f"DATE CHECK: the scanned pages print no Collected date; the entered date "
+                           f"{extracted['collected_date']} dates them"
+                           + (f" (the digital report prints {printed})" if printed else ""))
+    elif labs_pdf and extracted.get("collected_date") and lab_collected_date(extracted) is None:
+        guard_notes.append(f"DATE CHECK: the lab prints no Collected date; the entered date "
+                           f"{extracted['collected_date']} is used")
     if extracted.get("blocked"):
         print("generation blocked: the latest bloodwork draw has no accepted result")  # value-free
         raise LatestDrawNotAccepted(extracted["blocked"])
@@ -4028,8 +4158,24 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
         raise NoResultsRead(f"{NO_RESULTS_MESSAGE}. No lab result could be read" + (
             f"; {excluded}" if (excluded := excluded_draw_dates(extracted["parse_exclusions"])) else "")
             + ". Check that the right lab PDF was uploaded; the staff notes are not written for an empty report.")
-    if confirm is not None and extracted["preflight"] and not confirm(list(extracted["preflight"])):
+    summary = pre_generation_line(extracted, patient_name)
+    # Name guard: a name the lab prints that does not match the entered one stops before anything is built.
+    if mismatched := name_conflicts(extracted, patient_name):
+        message = (f"The name entered ({patient_name}) differs from the name printed on the lab "
+                   f"({', '.join(mismatched)}).")
+        if confirm is None:
+            raise NameConflict(f"Report not generated: {message} Correct the entered name and try again.")
+        if _decision(confirm, PreflightScreen("name", NAME_CHOICES, summary=summary, message=message)) != \
+                "use_as_entered":
+            raise GenerationAborted("stopped by staff at the name check")
+        guard_notes.append(f"NAME CHECK: {message} Staff chose to use the name as entered")
+    if confirm is not None and extracted["preflight"] and _decision(confirm, PreflightScreen(
+            "review", REVIEW_CHOICES, summary=summary, items=extracted["preflight"])) != "continue":
         raise GenerationAborted("stopped by staff at the confirmation step")
+    if notify is not None:
+        notify(summary)
+    guard_notes.append(f"PRE-GENERATION CHECK: {summary}")
+    extracted.setdefault("other_notes", []).extend(guard_notes)
     extracted["name"] = patient_name
     extracted["age"] = resolve_age(extracted, age)
     extracted["sex"] = sex if sex in ("male", "female") else extracted.get("resolved_sex")

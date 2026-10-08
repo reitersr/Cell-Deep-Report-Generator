@@ -204,7 +204,8 @@ _REPORT_SLOT = threading.Lock()
 # not made within this time stops the job (nothing is written).
 CONFIRM_TIMEOUT_SECONDS = 30 * 60
 STOPPED_MESSAGE = "Report not generated: stopped at the confirmation step. Nothing was written."
-_DECISIONS: dict[str, dict] = {}  # job id -> {"event": threading.Event, "go": bool}, while a job waits
+_DECISIONS: dict[str, dict] = {}  # job id -> {"event": threading.Event, "action": str}, while a job waits
+_BANNERS: dict[str, list] = {}  # job id -> non-blocking lines shown while and after the report is built
 # Job folder contents kept after a job ends; uploads and the intermediate HTML are deleted.
 _JOB_OUTPUTS = {"report.pdf", "review_notes.txt", "status.json", "status.tmp", "heartbeat"}
 
@@ -265,22 +266,32 @@ def _run_report_job(job_directory: Path, job_data: dict, run=None) -> None:
         stop_heartbeat.set()
 
 
-def _confirm_with_staff(job_directory: Path, items: list[str]) -> bool:
-    """Pause the job and show staff what was left out; True only when staff choose to continue. The
-    one-report slot is released while waiting so other uploads are not held up."""
-    decision = {"event": threading.Event(), "go": False}
+def _confirm_with_staff(job_directory: Path, items: list[str]):
+    """Pause the job on a stop screen and return the action staff chose ("stop" when none in time). items may be a
+    pipeline.PreflightScreen (kind, choices, the one-line pre-generation check); a plain list is the original screen. The one-report slot is released while waiting so other uploads are not held up."""
+    choices = getattr(items, "choices", pipeline.REVIEW_CHOICES)
+    decision = {"event": threading.Event(), "action": "stop", "allowed": {action for action, _ in choices}}
     _DECISIONS[job_directory.name] = decision
-    _write_job_status(job_directory, "confirm", items=items)
+    _write_job_status(job_directory, "confirm", items=list(items), kind=getattr(items, "kind", "review"),
+                      message=getattr(items, "message", ""), summary=getattr(items, "summary", ""),
+                      choices=[{"action": action, "label": label} for action, label in choices],
+                      banner=_BANNERS.get(job_directory.name, []))
     _REPORT_SLOT.release()
     try:
         decided = decision["event"].wait(CONFIRM_TIMEOUT_SECONDS)
     finally:
         _REPORT_SLOT.acquire()
         _DECISIONS.pop(job_directory.name, None)
-    if decided and decision["go"]:
-        _write_job_status(job_directory, "processing")
-        return True
-    return False
+    if decided and decision["action"] != "stop":
+        _write_job_status(job_directory, "processing", banner=_BANNERS.get(job_directory.name, []))
+        return decision["action"]
+    return "stop"
+
+
+def _notify_staff(job_directory: Path, line: str) -> None:
+    """A non-blocking line (the pre-generation check) shown on the job page while the report is built."""
+    _BANNERS.setdefault(job_directory.name, []).append(line)
+    _write_job_status(job_directory, "processing", banner=_BANNERS[job_directory.name])
 
 
 def _run_report(job_directory: Path, job_data: dict, run) -> None:
@@ -297,9 +308,10 @@ def _run_report(job_directory: Path, job_data: dict, run) -> None:
             collected_date=job_data.get("collected_date"),
             scan_collected_date=job_data.get("scan_collected_date"),
             confirm=lambda items: _confirm_with_staff(job_directory, items),
+            notify=lambda line: _notify_staff(job_directory, line),
         )
         shutil.move(review_path, job_directory / "review_notes.txt")
-        _write_job_status(job_directory, "done")
+        _write_job_status(job_directory, "done", banner=_BANNERS.get(job_directory.name, []))
     except pipeline.GenerationAborted:
         _write_job_status(job_directory, "stopped", error=STOPPED_MESSAGE)
         print(f"generation stopped at confirmation job_id={job_directory.name}")
@@ -314,6 +326,7 @@ def _run_report(job_directory: Path, job_data: dict, run) -> None:
         print(traceback.format_exc())
         _write_job_status(job_directory, "error", error=f"Generation failed. Job ID: {job_id}", job_id=job_id)
     finally:
+        _BANNERS.pop(job_directory.name, None)
         _delete_job_inputs(job_directory)
 
 
@@ -422,9 +435,10 @@ def generate_decision(job_id):
     decision = _DECISIONS.get(job_id) if _job_directory(job_id) else None
     if decision is None:
         return jsonify({"status": "error", "error": "This job is not waiting for a decision."}), 409
-    decision["go"] = request.form.get("action") == "continue"
+    action = request.form.get("action")
+    decision["action"] = action if action in decision.get("allowed", {"continue", "stop"}) else "stop"
     decision["event"].set()
-    return jsonify({"status": "processing" if decision["go"] else "stopping"})
+    return jsonify({"status": "processing" if decision["action"] != "stop" else "stopping"})
 
 
 @app.route("/download/<job_id>/report", methods=["GET"])
