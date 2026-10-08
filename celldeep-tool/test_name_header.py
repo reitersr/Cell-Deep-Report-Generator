@@ -14,7 +14,7 @@ Follow-up visit.
 """
 
 
-def _review(tmp_path, monkeypatch, capsys, other_scan_name=None):
+def _review(tmp_path, monkeypatch, capsys, other_scan_name=None, confirm=None):
     labs = fx.write_lab_pdf(tmp_path / "labs.pdf", [
         fx.section_preamble("SYN-NAME", "02/03/2026") + fx.header_line(100) + fx.row(130, "TSH", "1.0")
         + [(300, 54, "DOB: 03/15/1982")], [], []])
@@ -43,7 +43,7 @@ def _review(tmp_path, monkeypatch, capsys, other_scan_name=None):
     monkeypatch.setattr(pipeline, "_review_notes_path", lambda name: str(tmp_path / "review.txt"))
     monkeypatch.setattr(pipeline, "_diagnostic_path_prefix", lambda name: str(tmp_path / "diag"))
     pipeline.run(str(labs), [str(dexa)], NOTE, "Synthetic, Pat", None, "male", str(tmp_path / "r.pdf"),
-                 collected_date="04/14/2026")
+                 collected_date="04/14/2026", confirm=confirm)
     review = without_staff_check((tmp_path / "review.txt").read_text(encoding="utf-8"))
     return review.splitlines(), capsys.readouterr().out
 
@@ -60,7 +60,11 @@ def test_header_lists_every_source_name_and_matches(tmp_path, monkeypatch, capsy
 
 
 def test_mismatching_source_is_flagged(tmp_path, monkeypatch, capsys):
-    lines, _ = _review(tmp_path, monkeypatch, capsys, other_scan_name="Other, Person")
+    # A lab page printing another name stops before anything is built (the name guard); staff chose "Use as entered".
+    screens = []
+    lines, _ = _review(tmp_path, monkeypatch, capsys, other_scan_name="Other, Person",
+                       confirm=lambda screen: screens.append(screen) or "use_as_entered")
+    assert [screen.kind for screen in screens] == ["name"] and "(Other, Person)" in screens[0].message
     assert "  scanned lab page (2): Synthetic, Pat - matches" in lines[:6]
     assert ("  scanned lab page (3): Other, Person - NAME MISMATCH - confirm this source belongs to the patient"
             in lines[:6])

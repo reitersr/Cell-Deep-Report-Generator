@@ -93,7 +93,14 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    when anything was left out (`extracted["preflight"]`: a lab page/section, a scanned result row, a printed
    result with an unrecognized test name, a DEXA page, or a provider note not read); headings are never
    listed. The generating page lists them and staff continue or stop (`/generate/decision/<id>`,
-   `GenerationAborted`).
+   `GenerationAborted`). Pre-generation guards (they only add stops): the date guard (`date_conflict`: an entered Collected
+   date that differs from the latest printed one stops, "Use the lab date" re-reads with the printed date / "Stop, I
+   will fix the entry"; no printed date, or undated scanned pages that the entered date itself dates (no scanned-pages
+   date entered, no Historical-column match): unchanged, with a "DATE CHECK" note naming both dates)
+   and the name guard (`name_conflicts`, `scan_bloodwork.names_match` on the names the lab pages print; "Use as
+   entered" / "Stop, I will fix"; no DOB or ID matching). With no `confirm`, `DateConflict` / `NameConflict` stop the
+   run. `pre_generation_line` (name entered vs printed, Collected date, DEXA scan chosen, excluded scans with why) is
+   shown on every screen and the job page (`notify`) and written to the QA file ("PRE-GENERATION CHECK").
 2. **Bloodwork** (`pipeline.extract`):
    - Pages with a text layer: `lab_layouts.select` picks a registered layout (today `access_medical`: header
      block for patient, DOB, age, two-digit-year Coll. Date and Fasting; rows only under a section title in the

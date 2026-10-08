@@ -14,10 +14,14 @@
     .confirm { border: 1px solid #C9A23B; background: #C9A23B14; padding: 16px; border-radius: 6px; }
     .confirm li { margin-top: 6px; font-size: 14px; }
     .confirm button { margin: 12px 8px 0 0; padding: 8px 14px; font-size: 14px; cursor: pointer; }
+    .confirm h2 { font-size: 14px; margin: 14px 0 0; }
+    .summary { font-size: 13px; margin: 8px 0; }
+    #banner { font-size: 13px; color: #3E7C93; margin-bottom: 10px; }
   </style>
 </head>
 <body>
   <h1>Generating your report...</h1>
+  <div id="banner"></div>
   <div id="status" data-job-id="{{ job_id }}">Your files are being processed.</div>
   <script>
     const statusUrl = {{ url_for('generate_status', job_id=job_id)|tojson }};
@@ -27,31 +31,66 @@
 
     async function decide(action) {
       statusElement.className = '';
-      statusElement.textContent = action === 'continue' ? 'Generating your report...' : 'Stopping...';
+      statusElement.textContent = action === 'stop' ? 'Stopping...' : 'Generating your report...';
       const body = new FormData();
       body.append('action', action);
       await fetch(decisionUrl, {method: 'POST', body});
       window.setTimeout(checkStatus, 500);
     }
 
-    function showConfirmation(items) {
-      statusElement.className = 'confirm';
-      statusElement.textContent = '';
-      const title = document.createElement('strong');
-      title.textContent = 'Some pages or rows will be left out of this report. Check them before continuing:';
+    function addList(parent, heading, items) {
+      if (!items || !items.length) return;
+      if (heading) {
+        const title = document.createElement('h2');
+        title.textContent = heading;
+        parent.appendChild(title);
+      }
       const list = document.createElement('ul');
       for (const item of items) {
         const entry = document.createElement('li');
         entry.textContent = item;
         list.appendChild(entry);
       }
-      const go = document.createElement('button');
-      go.textContent = 'Generate the report without them';
-      go.onclick = () => decide('continue');
-      const stop = document.createElement('button');
-      stop.textContent = 'Stop, I will fix the files';
-      stop.onclick = () => decide('stop');
-      statusElement.append(title, list, go, stop);
+      parent.appendChild(list);
+    }
+
+    function showBanner(lines) {
+      const banner = document.getElementById('banner');
+      banner.textContent = '';
+      for (const line of lines || []) {
+        const entry = document.createElement('div');
+        entry.textContent = line;
+        banner.appendChild(entry);
+      }
+    }
+
+    function showConfirmation(job) {
+      statusElement.className = 'confirm';
+      statusElement.textContent = '';
+      const titles = {
+        review: 'Some pages or rows will be left out of this report. Check them before continuing:',
+        date: 'The entered Collected date does not match the lab report.',
+        name: 'The entered name does not match the name printed on the lab report.',
+      };
+      const title = document.createElement('strong');
+      title.textContent = titles[job.kind || 'review'] || titles.review;
+      statusElement.appendChild(title);
+      if (job.summary) {
+        const summary = document.createElement('div');
+        summary.className = 'summary';
+        summary.textContent = job.summary;
+        statusElement.appendChild(summary);
+      }
+      if (job.message) addList(statusElement, '', [job.message]);
+      if ((job.kind || 'review') === 'review') addList(statusElement, '', job.items);
+      const choices = job.choices || [{action: 'continue', label: 'Generate the report without them'},
+                                      {action: 'stop', label: 'Stop, I will fix the files'}];
+      for (const choice of choices) {
+        const button = document.createElement('button');
+        button.textContent = choice.label;
+        button.onclick = () => decide(choice.action);
+        statusElement.appendChild(button);
+      }
     }
 
     async function checkStatus() {
@@ -64,13 +103,14 @@
           return;
         }
         const job = await response.json();
+        showBanner(job.banner);
         if (job.status === 'interrupted') {
           statusElement.className = 'error';
           statusElement.textContent = interruptedMessage;
           return;
         }
         if (job.status === 'confirm') {
-          showConfirmation(job.items);
+          showConfirmation(job);
           return;  // polling resumes after staff decide
         }
         if (job.status === 'stopped') {

@@ -401,6 +401,12 @@ C. Keep a clinic-maintained list of tests that are deliberately not reported, an
 
 **Proposal.** C, once the clinic has gone through item 13.
 
+**Added stops.** Two pre-generation guards now stop the run before anything is built: an entered Collected date
+that differs from the date the lab prints ("Use the lab date" / "Stop, I will fix the entry"), and an entered name
+that does not match the printed one (first name plus last name or last initial; "Use as entered" / "Stop, I will
+fix"; no DOB or ID matching). Each screen and the job page show one line: name entered vs printed, Collected date,
+DEXA scan chosen and any scan left out.
+
 ## 18. "Where you are now" when the latest scan has no body composition
 
 **Evidence.** "When you came in" and "Where you are now" are the first and latest accepted scans with a body

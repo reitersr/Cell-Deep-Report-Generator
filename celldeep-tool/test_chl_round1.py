@@ -195,8 +195,9 @@ def test_a_latest_draw_with_no_accepted_result_blocks_the_report(tmp_path, monke
 
 
 def test_a_staff_date_with_no_accepted_result_blocks_the_report(tmp_path, monkeypatch):
-    with pytest.raises(pipeline.LatestDrawNotAccepted, match="the entered bloodwork Collected date, 03/17/2026, has no "
-                                                             "accepted result"):
+    # The date guard: the entered date differs from the one the lab prints (with no staff to ask, nothing is built).
+    with pytest.raises(pipeline.DateConflict, match=r"entered \(03/17/2026\) differs from the date the lab prints "
+                                                    r"\(03/10/2026\)"):
         _run(tmp_path, collected="03/17/2026", monkeypatch=monkeypatch)
 
 

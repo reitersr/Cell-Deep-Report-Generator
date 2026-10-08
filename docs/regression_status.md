@@ -12,6 +12,18 @@ expected values live only in the git-ignored `celldeep-tool/real_fixtures/`; not
 | `limited_male` | Male, limited panel | Access Medical Laboratories digital report + Lunar DEXA | yes |
 | `chl_quest_male` | Male, CHL panels plus a scanned Quest draw | Cleveland HeartLab digital report + scanned Quest pages + Lunar DEXA | yes |
 
+## Stop screens on the locked cases
+
+The pre-generation guards only add stops; the patient PDF text and the review screen's items are unchanged. Every QA
+file gains one "PRE-GENERATION CHECK" line.
+
+| Case | Stop screens |
+|---|---|
+| extensive_male | New: name screen (the de-identified lab prints a name variant), then the review screen as before |
+| female_chl | Review screen as before |
+| limited_male | None, as before (the Access Medical layout does not read the printed name, so the name guard cannot check it) |
+| chl_quest_male | As before |
+
 ## Running the checks
 
 - **Locally, all real cases, one command** (from the repository root):
