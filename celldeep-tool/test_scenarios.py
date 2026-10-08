@@ -21,7 +21,8 @@ EXPECTED_CONFIRMATIONS = {
     "clinic_dexa_no_age": 1,  # the same page without a staff-entered age
     "access_medical": 0,      # every printed test is known ("PSA, Free" maps to Free PSA)
     "access_medical_limited": 0,  # the summary above the column header is ignored silently
-    "chl_extensive": 3,       # one unreadable Historical cell, the draw date it belongs to, unknown test names
+    "chl_extensive": 7,       # needs review: one unreadable Historical cell and its draw date; known (auto-handled,
+                              # KNOWN_ITEMS_AUTOPROCEED): five cardiometabolic lab-reported rows, one line each with its page
     "female_chl_scanned_undated": 0,  # every scanned row agrees and is dated by the Historical-column match
     "quest_scanned_urinalysis": 0,    # urine rows under Quest's full urinalysis heading are known urinalysis tests
     "quest_scanned_urinalysis_continued": 0,  # urine rows with no heading on their page continue page 1's section

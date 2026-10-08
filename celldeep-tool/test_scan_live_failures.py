@@ -97,9 +97,13 @@ def test_urine_rows_on_a_page_with_no_heading_are_urinalysis_rows(tmp_path, monk
     urine = {item.name: [r["disp_value"] for r in item.results] for item in record.lab_reported
              if item.group == lab_reported.URINALYSIS}
     for name, value in (("Glucose", "NEGATIVE"), ("Blood", "NEGATIVE"), ("Ketones", "1+"), ("pH", "6.0"),
-                        ("Hyaline Cast", "NONE SEEN"), ("Reflexive Urine Culture", "NO CULTURE INDICATED")):
+                        ("Hyaline Cast", "NONE SEEN")):
         assert urine.get(f"Urinalysis — {name}") == [value], name
-    assert len(urine) == len(qu.URINE_ON_PAGE_TWO) + (3 if heading_on_page_one else 0)
+    # The reflexive urine culture is read as a urine row too, but the clinic's known-items list leaves it out of
+    # the report: it is listed in the QA file under "Auto-accepted (known)" instead (never hidden).
+    assert "Urinalysis — Reflexive Urine Culture" not in urine
+    assert "  - REFLEXIVE URINE CULTURE: excluded (page 2)" in review
+    assert len(urine) == len(qu.URINE_ON_PAGE_TWO) - 1 + (3 if heading_on_page_one else 0)
     assert _values(record, "Glucose (fasting)") + _values(record, "Glucose (non-fasting)") == [qu.BLOOD_GLUCOSE]
     assert _values(record, "Cortisol, Total (AM)") == ["13.0"]  # printed after the urine block: still a blood test
     assert _values(record, "C-Reactive Protein") == ["<3.0"]
