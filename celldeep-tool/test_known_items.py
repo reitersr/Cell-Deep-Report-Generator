@@ -195,6 +195,23 @@ def test_a_near_miss_name_never_matches_the_allowlist(near_miss, tmp_path, monke
         assert screens and any(near_miss in line for line in screens[0].needs_review)
 
 
+@pytest.mark.parametrize("reads, reason", [
+    ("NO CULTURE INDICATED / not read / not read", "agreement gate"),        # missing reads
+    ("NO CULTURE INDICATED / NO CULTURE / NO CULTURE INDICATED", "agreement gate"),  # reads disagree
+    ("SEE NOTE: / SEE NOTE: / 14", "agreement gate"),
+])
+def test_a_listed_scanned_row_the_reads_did_not_agree_on_still_needs_review(reads, reason):
+    known = known_items.load()
+    for name in ("REFLEXIVE URINE CULTURE", "BUN/CREATININE RATIO"):
+        item = {"name": name, "page": 2, "reads": reads, "reason": reason}
+        entries = pipeline.preflight_entries([], [], [item], [], {}, [], known)
+        assert [entry["known"] for entry in entries] == [None], (name, reads)
+    agreed = {"name": "BUN/CREATININE RATIO", "page": 3, "reads": "SEE NOTE: / SEE NOTE:",
+              "reason": "format gate: unsupported printed result"}
+    assert pipeline.preflight_entries([], [], [agreed], [], {}, [], known)[0]["known"] == {
+        "name": "BUN/CREATININE RATIO", "handling": "excluded", "page": 3}
+
+
 def test_bun_creatinine_ratio_is_known_only_when_it_prints_see_note():
     assert known_items.handling("BUN/CREATININE RATIO", known_items.EXCLUDED, ["SEE NOTE:", "SEE NOTE:"]) == "excluded"
     assert known_items.handling("BUN/CREATININE RATIO", known_items.EXCLUDED, ["SEE NOTE:", "not read"]) is None
