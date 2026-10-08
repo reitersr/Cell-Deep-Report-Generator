@@ -1382,7 +1382,7 @@ def _parse_bloodwork_row(words: list[tuple], header: dict, section: dict,
         unrecognized.append({
             "raw_name": raw_name, "raw_value": " | ".join(cells[i] for i in sorted(cells)),
             "raw_unit": "", "raw_range": " ".join(range_words), "source_context": _section_label(section),
-            "cells": parsed_cells, "section_heading": section.get("heading"),
+            "cells": parsed_cells, "section_heading": section.get("heading"), "page": section.get("_page"),
         })
         return True
 
@@ -2264,7 +2264,7 @@ def _extract_scan_bloodwork(pages, digital_pages, client, row_audit, patient_nam
         (320, 90, 350, 100, "Reference"), (352, 90, 380, 100, "Range"),
     ])
     for row in accepted:
-        section = {"order_id": None, "dates": [row["date"]], "heading": row["section"]}
+        section = {"order_id": None, "dates": [row["date"]], "heading": row["section"], "_page": row["page"]}
         name = _clean_row_name(row["name"], lab_codes)
         if (folded := _ocr_folded_name(name, row["section"])) is not None:
             notes.append(f"STAFF REVIEW - name matched after OCR folding: scanned page {row['page']} prints "
@@ -3153,6 +3153,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
             phase_ranges, moved_to_lab_reported, draw_info))
     lab_items, unrecognized, lab_notes = lab_reported.build(unrecognized)
     lab_review_notes.extend(lab_notes)
+    autoproceed = clinic_config.KNOWN_ITEMS_AUTOPROCEED  # off (default): the allowlist is never read
+    lab_items, auto_excluded = drop_excluded_known(lab_items, row_audit) if autoproceed else (lab_items, [])
     unrecognized, labels = split_no_result_rows(unrecognized)
     if labels:
         lab_review_notes.append("PRINTED WITH NO RESULT (a heading, label or test not performed; not a result, not an "
@@ -3213,6 +3215,12 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "lab_pages": {"text": lab_text_pages, "scanned": scan_numbers},
         "preflight": preflight_items(parse_exclusions, scan_notes if scan_numbers else [], scan_row_exclusions,
                                      dexa_exclusions, dexa_info, unrecognized) + note_preflight(note),
+        # The allowlist's view of the same items (only with KNOWN_ITEMS_AUTOPROCEED): each line known or not.
+        **({"preflight_entries": (entries := preflight_entries(
+            parse_exclusions, scan_notes if scan_numbers else [], scan_row_exclusions, dexa_exclusions, dexa_info,
+            unrecognized) + [{"text": line, "known": None} for line in note_preflight(note)]),
+            "auto_accepted": [*(entry["known"] for entry in entries if entry["known"]), *auto_excluded]}
+           if autoproceed else {}),
         # Scanned pages that print no Collected date and are dated by the entered date itself (no scanned-pages
         # date entered, none assigned from the Historical column): the date guard does not apply.
         "entered_date_dates_scans": bool(scan_numbers) and not lab_printed_scan_dates and not scan_date
@@ -3680,11 +3688,13 @@ class PreflightScreen(list):
     """One stop screen before anything is built. As a list it is the lines a caller shows, so callers that only
     read lines keep working; the app also renders the structure. kind: "review" (pages/rows left out), "date" or
     "name" (a conflict with what the lab prints). choices: [(action, label)], the first being what a plain "yes"
-    (True) means. summary: the one-line pre-generation check."""
+    (True) means. summary: the one-line pre-generation check. With KNOWN_ITEMS_AUTOPROCEED, a review screen lists
+    the items that need review first and the known ones after them."""
 
-    def __init__(self, kind, choices, summary="", items=(), message=""):
-        super().__init__([message] if message else list(items))
+    def __init__(self, kind, choices, summary="", items=(), message="", known=()):
+        super().__init__([message] if message else [*items, *known])
         self.kind, self.choices, self.summary, self.message = kind, list(choices), summary, message
+        self.needs_review, self.known = list(items), list(known)  # known: "Known (auto-handled)", listed last
 
 
 REVIEW_CHOICES = [("continue", "Generate the report without them"), ("stop", "Stop, I will fix the files")]
@@ -3757,6 +3767,19 @@ def pre_generation_line(extracted: dict, entered_name: str | None) -> str:
     if chosen or excluded or extracted.get("dexa_info"):
         parts.append(f"DEXA scan: {chosen or 'none'}" + (f"; excluded: {', '.join(excluded)}" if excluded else ""))
     return " | ".join(parts)
+
+
+def hard_stop_reasons(extracted: dict) -> list[str]:
+    """Conditions the known-items allowlist never waves through: the stop screen is shown whenever it has items."""
+    reasons = []
+    if extracted.get("female_report") and not clinic_config.FEMALE_RANGES_CONFIRMED:
+        reasons.append("Female report: CellDeep female ranges are not yet confirmed (draft)")
+    for date in (extracted.get("dexa_pairing") or {}).get("excluded", []):
+        reasons.append(f"DEXA scan {date} left out by the pairing rule (dated after the paired scan)")
+    scanned = (extracted.get("lab_pages") or {}).get("scanned")
+    if scanned and not any(kind == "scanned lab page" for kind, _, _ in extracted.get("printed_names", [])):
+        reasons.append("Scanned lab pages print no patient name - confirm they are this patient's")
+    return reasons
 
 
 _SCAN_PAGE_EXCLUDED_RE = re.compile(r"source=scan page (\d+): (.+); page excluded$")
@@ -3837,6 +3860,80 @@ def preflight_items(parse_exclusions, scan_notes, scan_row_exclusions, dexa_excl
         items.append(f"Lab PDF: {len(shown)} printed result(s) with a test name the tool does not recognize, shown "
                      f"as lab-reported (not scored) and listed in the staff notes: {names}")
     return items
+
+
+def _known(name, handling, page):
+    return {"name": " ".join(str(name).split()), "handling": handling, "page": page}
+
+
+def preflight_entries(parse_exclusions, scan_notes, scan_row_exclusions, dexa_exclusions, dexa_info,
+                      unrecognized=(), known=None) -> list[dict]:
+    """Every lab page/section, scanned result row, unrecognized printed result and DEXA page left out of the
+    report, one entry each ({"text": line, "known": None or {name, handling, page}}), for the confirmation step
+    before the report is built (staff can stop there). Only result rows count: a heading or label row with no value
+    is never listed. An entry is "known" only when the clinic's allowlist (known_items, exact names) already decides
+    its handling and the tool handled it that way; everything else needs review. Empty when nothing was left out."""
+    import known_items
+
+    known = known if known is not None else known_items.load()
+    entries = [{"text": f"Lab PDF page {item['page']} ({item['section']}): {item['reason']}", "known": None}
+               for item in parse_exclusions]
+    if summary := excluded_draw_dates(parse_exclusions):
+        entries.insert(0, {"text": summary, "known": None})
+    for note in scan_notes:
+        if match := _SCAN_PAGE_EXCLUDED_RE.match(note):
+            entries.append({"text": f"Lab PDF page {match[1]} (scanned): {match[2]}", "known": None})
+    for item in scan_row_exclusions:
+        reads = [read.strip() for read in str(item.get("reads") or "").split(" / ")]
+        handled = known_items.handling(item["name"], known_items.EXCLUDED, reads, known)
+        entries.append({"text": f"Lab PDF page {item['page']} (scanned): result {item['name']} excluded - "
+                                f"{scan_row_reason(item)}",
+                        "known": _known(item["name"], handled, item["page"]) if handled else None})
+    entries += [{"text": f"DEXA file {key[0]} page {key[1]}: {reason}", "known": None} for key, reason in dexa_exclusions]
+    entries += [{"text": f"DEXA file {key[0]} page {key[1]}: could not be read ({reason})", "known": None}
+                for key, reason in dexa_info.get("failed", [])]
+    review = {True: [], False: []}  # shown as lab-reported? -> unknown names, in printed order
+    for item in unrecognized:
+        name = " ".join(item["raw_name"].split())
+        shown = bool(item.get("shown_as_lab_reported"))
+        handled = known_items.handling(name, known_items.LAB_REPORTED if shown else known_items.EXCLUDED,
+                                       known=known)
+        if handled:
+            entry = _known(name, handled, item.get("page"))
+            if entry not in [e["known"] for e in entries]:
+                entries.append({"text": f"{name} - {handled}" + (f" (page {entry['page']})" if entry["page"] else ""),
+                                "known": entry})
+        elif name not in review[shown]:
+            review[shown].append(name)
+    for shown, names in ((False, review[False]), (True, review[True])):
+        if not names:
+            continue
+        count = sum(1 for item in unrecognized if bool(item.get("shown_as_lab_reported")) == shown
+                    and " ".join(item["raw_name"].split()) in names)
+        what = ("shown as lab-reported (not scored) and listed in the staff notes" if shown
+                else "left out of the report and listed in the staff notes")
+        entries.append({"text": f"Lab PDF: {count} printed result(s) with a test name the tool does not recognize, "
+                                f"{what}: {', '.join(names)}", "known": None})
+    return entries
+
+
+def drop_excluded_known(lab_items, row_audit=()):
+    """Lab-reported items whose printed name the clinic's allowlist marks excluded_known (e.g. a reflexive urine
+    culture): left out of the report and listed as auto-accepted (known) in the QA file, never hidden."""
+    import known_items
+
+    known = known_items.load()
+    kept, dropped = [], []
+    for item in lab_items:
+        names = [*item.get("printed_names", []), item["name"].split(" \u2014 ")[-1]]
+        name = next((name for name in names if known_items.normalize(name) in known["excluded"]), None)
+        if name is None:
+            kept.append(item)
+            continue
+        pages = sorted({row["page"] for row in row_audit if row.get("page") and known_items.normalize(row.get("name"))
+                        == known_items.normalize(name)})
+        dropped.append(_known(name, known_items.EXCLUDED, ", ".join(map(str, pages)) or None))
+    return kept, dropped
 
 
 def staff_check_block(extracted: dict, record: PatientRecord, notice: ExtractionReviewNotice) -> list[str]:
@@ -4169,7 +4266,22 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
                 "use_as_entered":
             raise GenerationAborted("stopped by staff at the name check")
         guard_notes.append(f"NAME CHECK: {message} Staff chose to use the name as entered")
-    if confirm is not None and extracted["preflight"] and _decision(confirm, PreflightScreen(
+    if "preflight_entries" in extracted:
+        # KNOWN_ITEMS_AUTOPROCEED: when every item is on the clinic's known-items list and no hard stop applies, the
+        # report is built with a banner; otherwise the full screen, items needing review first, known ones after.
+        entries = extracted["preflight_entries"]
+        review = [entry["text"] for entry in entries if not entry["known"]]
+        known = [entry["text"] for entry in entries if entry["known"]]
+        if known and not review:
+            review = hard_stop_reasons(extracted)  # never waved through: these alone keep the screen
+        if entries and confirm is not None:
+            if not review:
+                if notify is not None:
+                    notify(f"{len(known)} known items handled automatically - listed in staff notes")
+            elif _decision(confirm, PreflightScreen("review", REVIEW_CHOICES, summary=summary, items=review,
+                                                    known=known)) != "continue":
+                raise GenerationAborted("stopped by staff at the confirmation step")
+    elif confirm is not None and extracted["preflight"] and _decision(confirm, PreflightScreen(
             "review", REVIEW_CHOICES, summary=summary, items=extracted["preflight"])) != "continue":
         raise GenerationAborted("stopped by staff at the confirmation step")
     if notify is not None:
@@ -4199,6 +4311,8 @@ def run(labs_pdf, dexa_pdfs, note_text, patient_name, age, sex, out_path, vitali
     notice.unrecognized_markers.extend(UnrecognizedMarker(**{key: value for key, value in raw.items() if key in fields})
                                        for raw in extracted["unrecognized_markers"])
     notice.other_notes.extend(completeness_notice.other_notes)
+    if "auto_accepted" in extracted:  # KNOWN_ITEMS_AUTOPROCEED only
+        notice.auto_accepted = list(extracted["auto_accepted"])
 
     print("Step 3/3: filling report templates (deterministic, no AI)...")
     copy = _sanitize_em_dashes(build_copy(record))

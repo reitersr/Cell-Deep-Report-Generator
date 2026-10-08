@@ -24,6 +24,10 @@ file gains one "PRE-GENERATION CHECK" line.
 | limited_male | None, as before (the Access Medical layout does not read the printed name, so the name guard cannot check it) |
 | chl_quest_male | As before |
 
+The stop screens of every case are recorded too: `python scripts/regression_check.py --screens` compares them
+(`--record-screens` re-records; the real cases' screens stay in the git-ignored `real_fixtures/stop_screens.json`).
+With `KNOWN_ITEMS_AUTOPROCEED` off (the default) they must not change (`test_known_items.py`).
+
 ## Running the checks
 
 - **Locally, all real cases, one command** (from the repository root):
