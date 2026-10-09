@@ -9,6 +9,9 @@ fact. "Baseline"/"starting point" claims resolve via min() on normalized date;
 "Next 30/90 Days" priority comes from select_priority_marker().
 """
 
+import json
+from pathlib import Path
+
 from markers_reference import (CATEGORY_TAGLINES, DATA_TO_PATIENT_CATEGORY, MARKER_DESCRIPTIONS,
                                NARRATIVE_CATEGORY_OVERRIDE, SYSTEM_ORDER)
 from schema import normalize_date_for_matching
@@ -249,6 +252,60 @@ def _protocol_reason(item, record) -> str:
     return "Part of your provider's current plan."
 
 
+_CONFIG = Path(__file__).resolve().parent / "config"
+# Static, clinic-reviewed tables (never generated text): what each scored marker does, and the markers a protocol item
+# is established to act on. A marker or item that is not listed gets no specific sentence.
+MARKER_EXPLANATIONS = json.loads((_CONFIG / "marker_explanations.json").read_text(encoding="utf-8"))["explanations"]
+PROTOCOL_MARKER_MAP = json.loads((_CONFIG / "protocol_marker_map.json").read_text(encoding="utf-8"))["map"]
+GOAL_DAYS = 90  # the existing Next 90 days time frame
+MAINTAIN_TEXT = "Maintain your current score"
+GENERIC_REGIMEN_LINE = "Continuing your protocol supports this goal."
+_ACTION_VERBS = {"start": "Starting", "continue": "Continuing", "adjust": "Adjusting"}
+
+
+def goal_texts(overall_now: int, ceiling: int | None) -> dict:
+    """The goal wording: never a forecast, never above the ceiling (the score with every not-yet-optimized scored
+    marker optimized). At or above the ceiling there is no number to aim for, so the patient maintains."""
+    if ceiling is None or ceiling <= overall_now:
+        return {"hero_question": MAINTAIN_TEXT, "hero_target_line": "YOUR GOAL", "by_age_sub": MAINTAIN_TEXT}
+    return {"hero_question": f"Your goal: {ceiling}% optimized in {GOAL_DAYS} days",
+            "hero_target_line": f"YOUR GOAL FOR THE NEXT {GOAL_DAYS} DAYS",
+            "by_age_sub": f"Goal: {ceiling}% optimized"}
+
+
+def regimen_line(record) -> str:
+    """One line linking the current protocol (items marked Start, Continue or Adjust in the provider note) to the
+    not-yet-optimized markers it is established to act on (config/protocol_marker_map.json). An item not in the
+    table, or one acting on no marker that is not yet optimized, gives only the generic line; no such items, no
+    line. It never says an item caused a change."""
+    items = [item for item in record.protocol if (getattr(item, "action", None) or "").lower() in _ACTION_VERBS]
+    if not items:
+        return ""
+    targets = {m.name: m for m in record.markers if m.now_tier in ("moderate", "flag")}  # not yet optimized
+    for item in items:
+        for name in PROTOCOL_MARKER_MAP.get(item.name, []):
+            if name in targets and (system := _system_of(targets[name])):
+                return (f"{_ACTION_VERBS[item.action.lower()]} {item.name} supports your {name} and moves your "
+                        f"{system} toward optimized.")
+    return GENERIC_REGIMEN_LINE
+
+
+def _category_explanation(markers, system: str) -> str:
+    """One sentence for the first marker the category text names whose result moved: what it does (static table)
+    and whether this part of the system is optimized. Nothing when the marker has no entry."""
+    named = (_attention_markers(markers) + [m for m in _not_retested_markers(markers) if _precedence(m) is None])[:3]
+    for m in named:
+        moved = is_retested(m) and m.then is not None and m.now is not None and m.then != m.now
+        if not moved or m.now_tier not in _TIER_WORDS:
+            continue
+        clause = MARKER_EXPLANATIONS.get(m.name)
+        if not clause:
+            return ""
+        state = "optimized" if m.now_tier == "optimal" else "not yet optimized"
+        return f"{clause}, so this part of your {system} is {state}."
+    return ""
+
+
 def build_copy(record) -> dict:
     """Fill every copy slot template.render() reads, directly from the scored record."""
     markers = list(record.markers)
@@ -316,7 +373,8 @@ def build_copy(record) -> dict:
     for system in PATIENT_SYSTEMS:
         system_markers = _system_markers(record, system)
         headlines[system] = _headline(system_markers)
-        box_stories[system] = _box_story(system_markers)
+        box_stories[system] = " ".join(filter(None, [_box_story(system_markers),
+                                                     _category_explanation(system_markers, system)]))
         recheck = _attention_markers(system_markers)
         box_forward[system] = ("" if not system_markers else
                                f"Next 90 days: retest {', '.join(m.name for m in recheck)}." if recheck
@@ -331,8 +389,7 @@ def build_copy(record) -> dict:
     marker_what = {m.name: MARKER_DESCRIPTIONS[m.name] for m in noteworthy if m.name in MARKER_DESCRIPTIONS}
 
     return {
-        "hero_question": "What if you were fully optimized by your next birthday?",
-        "hero_target_line": "TARGET: FULLY OPTIMIZED BY YOUR NEXT BIRTHDAY",
+        "regimen_line": regimen_line(record),
         "optimization_summary_bullets": bullets,
         "headlines": headlines,
         "box_stories": box_stories,
@@ -341,7 +398,6 @@ def build_copy(record) -> dict:
         "next_30_sub": next_30_sub,
         "next_90_label": next_90_label,
         "next_90_sub": next_90_sub,
-        "by_age_sub": "Everything, optimized",
         "category_taglines": {c: CATEGORY_TAGLINES[c] for c in {m.category for m in markers}
                               if c in CATEGORY_TAGLINES},
         "marker_notes": marker_notes,

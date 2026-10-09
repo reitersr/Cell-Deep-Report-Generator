@@ -1,0 +1,39 @@
+{
+ "_status": "DRAFT - pending clinic review. Standard, medically established relationships only: protocol item (as named in protocol_reference.PROTOCOL_LIBRARY) -> the scored markers it acts on. Static data; an item not listed gets only the generic regimen line. Never used to claim an item caused a past change.",
+ "map": {
+  "Testosterone": [
+   "Testosterone, Total",
+   "Free Testosterone",
+   "Bioavailable Testosterone"
+  ],
+  "Enclomiphene": [
+   "Testosterone, Total",
+   "Free Testosterone",
+   "LH",
+   "FSH"
+  ],
+  "Progesterone": [
+   "Progesterone"
+  ],
+  "T3/T4": [
+   "TSH",
+   "Free T4",
+   "Free T3",
+   "Total T4",
+   "Total T3"
+  ],
+  "Omega-3 HP-D": [
+   "Omega-3 Index",
+   "Triglycerides"
+  ],
+  "Vitamin D-3": [
+   "Vitamin D"
+  ],
+  "Retatrutide": [
+   "Glucose (fasting)",
+   "HbA1c",
+   "Fasting Insulin",
+   "Triglycerides"
+  ]
+ }
+}

@@ -2694,9 +2694,11 @@ def _parse_structured_note(note_text: str):
                 continue
             parsed["pain_points"].append({"text": match.group("text"), "categories": [systems[s] for s in names]})
         elif section == "protocol":
-            match = re.fullmatch(r"(?P<name>[^|]+?)(?:\s*\|\s*Cadence:\s*(?P<cadence>[^|]+?))?", item)
+            match = re.fullmatch(r"(?P<name>[^|]+?)(?:\s*\|\s*Cadence:\s*(?P<cadence>[^|]+?))?"
+                                 r"(?:\s*\|\s*Action:\s*(?P<action>Start|Continue|Adjust))?", item, re.IGNORECASE)
             if not match:
-                reject(number, line, "protocol item must read '- <compound> | Cadence: <cadence>'")
+                reject(number, line, "protocol item must read '- <compound> | Cadence: <cadence> | Action: <Start, "
+                       "Continue or Adjust>' (Cadence and Action are optional)")
                 continue
             known = lookup_protocol_item(match.group("name"))
             config = known[1] if known else {}
@@ -2705,6 +2707,7 @@ def _parse_structured_note(note_text: str):
                 "cadence": match.group("cadence"),
                 "target_categories": list(config.get("typical_categories", [])),
                 "lab_visible": config.get("lab_visible", True),
+                "action": match.group("action").capitalize() if match.group("action") else None,
             })
         elif section == "marker targets":
             match = re.fullmatch(r"(?P<marker>[^:]+):\s*(?P<lo>\d+(?:\.\d+)?)\s*[-–]\s*(?P<hi>\d+(?:\.\d+)?)", item)
@@ -3582,6 +3585,7 @@ def score_and_build_record(extracted: dict) -> tuple[PatientRecord, ExtractionRe
                 cadence=raw.get("cadence"),
                 target_categories=raw.get("target_categories", []),
                 lab_visible=raw.get("lab_visible", True),
+                action=raw.get("action"),
             ))
 
     pain_points = [PainPoint(text=p["text"], categories=p.get("categories", []))
