@@ -268,10 +268,15 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    optimized" (age column), X = the ceiling: the same rollup with every not-yet-optimized scored marker not scored on
    the lab's fallback range counted at the lowest optimized score (88); at or above it "Maintain your current score",
    no number; female reports count only clinic-confirmed female thresholds (none while `FEMALE_RANGES_CONFIRMED` is
-   False). `regimen_line`: one line under the goal from `config/protocol_marker_map.json` for protocol items marked
-   `| Action: Start/Continue/Adjust` in the provider note (an unmapped item: "Continuing your protocol supports this
-   goal."; none: no line). Category text adds one sentence for the first named marker that moved
-   (`_category_explanation`, `config/marker_explanations.json`; no entry, no sentence; never a cause). Full-panel column headers name a date only when every
+   False). `regimen_line`: one line under the goal from `config/protocol_marker_map.json` (markers each item raises or
+   lowers) for protocol items marked `| Action: Start/Continue/Adjust` in the provider note: "<Continuing> <item>
+   supports your <marker> and moves your <system> toward optimized." only when the marker sits on the side the item
+   moves it from (`optimized_side`, from the scoring threshold), else "Your protocol includes <item>, which acts on
+   <marker>."; an unmapped item: "Continuing your protocol supports this goal."; none: no line. Stop and Considering
+   items are never current protocol ("PROTOCOL NOT CURRENT" staff note). Category text adds, directly after the first
+   named marker that moved and has a side, "<clause>. Yours is below|above the optimized range, which holds this part
+   of your <system> back." (`_category_explanation`, `config/marker_explanations.json`; none for a marker scored on the
+   lab's printed range, without an entry or without a side; never a cause). Full-panel column headers name a date only when every
    value in the column is from it (`template.panel_column_headers`). The lab's own flag is shown under a
    current result only where CellDeep calls it Optimal (`clinic_config.LAB_FLAG_DISAGREES_WITH`; the clinic
    deliberately does not show it on Moderate or unscored results); a censored value shows it next to the value.

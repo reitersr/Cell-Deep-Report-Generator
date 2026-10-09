@@ -103,41 +103,80 @@ def _with_protocol(record, *items):
     return dataclasses.replace(record, protocol=list(items))
 
 
-def test_the_regimen_line(tmp_path, monkeypatch):
+def _testosterone(record, value):
+    """The record with Testosterone, Total at value (the male CellDeep range, 600-900 ng/dL), rescored."""
+    import scoring
+
+    marker = next(m for m in record.markers if m.name == "Testosterone, Total")
+    changed = dataclasses.replace(marker, now=value, disp_now=str(value))
+    scoring.attach_scores(changed, sex="male")
+    return dataclasses.replace(record, markers=[changed if m is marker else m for m in record.markers]), changed
+
+
+def test_a_high_testosterone_never_reads_as_moving_toward_optimized(tmp_path, monkeypatch):
     record, _ = _record_and_copy("scanned_mixed_reads", tmp_path, monkeypatch)
-    targets = {m.name for m in record.markers if m.now_tier in ("moderate", "flag")}
-    mapped = next(item for item, names in gp.PROTOCOL_MARKER_MAP.items() if targets & set(names))
-    marker = next(n for n in gp.PROTOCOL_MARKER_MAP[mapped] if n in targets)
-    line = gp.regimen_line(_with_protocol(record, ProtocolItem(name=mapped, cadence="weekly", action="Continue")))
-    assert line.startswith(f"Continuing {mapped} supports your {marker} and moves your ")
-    assert line.endswith(" toward optimized.")
+    high, marker = _testosterone(record, 1214)  # above the 600-900 range; testosterone raises it
+    assert marker.now_tier == "flag" and gp.optimized_side(marker) == "above"
+    item = ProtocolItem(name="Testosterone", cadence="weekly", action="Continue")
+    assert gp.regimen_line(_with_protocol(high, item)) == (
+        "Your protocol includes Testosterone, which acts on Testosterone, Total.")
+    low, marker = _testosterone(record, 410)  # below the range: the item moves it toward optimized
+    assert gp.optimized_side(marker) == "below"
+    assert gp.regimen_line(_with_protocol(low, item)) == (
+        "Continuing Testosterone supports your Testosterone, Total and moves your Drive toward optimized.")
+    assert gp.regimen_line(_with_protocol(low, dataclasses.replace(item, action="Adjust"))).startswith(
+        "Adjusting Testosterone supports")
+
+
+def test_the_regimen_line_otherwise(tmp_path, monkeypatch):
+    record, _ = _record_and_copy("scanned_mixed_reads", tmp_path, monkeypatch)
     # Not in the table: only the generic line.
     unmapped = ProtocolItem(name="Semax", cadence="as directed", action="Start")
     assert gp.regimen_line(_with_protocol(record, unmapped)) == "Continuing your protocol supports this goal."
-    # No item marked Start, Continue or Adjust, or no protocol at all: no line.
-    assert gp.regimen_line(_with_protocol(record, ProtocolItem(name=mapped, cadence="weekly"))) == ""
+    # No item marked Start, Continue or Adjust (none, Stop, Considering), or no protocol at all: no line.
+    for action in (None, "Stop", "Considering"):
+        item = ProtocolItem(name="Testosterone", cadence="weekly", action=action)
+        assert gp.regimen_line(_with_protocol(record, item)) == "", action
     assert gp.regimen_line(_with_protocol(record)) == ""
 
 
 def test_the_provider_note_action_field_is_read_and_checked():
     note = pipeline.parse_provider_note("## Protocol\n\n- Testosterone | Cadence: weekly | Action: Continue\n"
-                                        "- Vitamin D-3 | Action: start\n- BPC-157\n- Retatrutide | Action: Stop\n")
+                                        "- Vitamin D-3 | Action: start\n- BPC-157\n- Retatrutide | Action: Stop\n"
+                                        "- Enclomiphene | Action: Considering\n- Semax | Action: Pause\n")
     assert [(p["name"], p["action"]) for p in note["protocol"]] == [
         ("Testosterone", "Continue"), ("Vitamin D-3", "Start"), ("BPC-157", None)]
-    assert any("Retatrutide | Action: Stop" in line for line in note["other_notes"])  # never guessed
+    # Stop / Considering are not current protocol: never shown as such, listed for staff.
+    assert note["inactive_protocol"] == ["Retatrutide (Action: Stop)", "Enclomiphene (Action: Considering)"]
+    assert any("Semax | Action: Pause" in line for line in note["other_notes"])  # never guessed
 
 
 # --- the category sentence ------------------------------------------------------------------------------------------
 
-def test_a_marker_with_no_library_entry_gets_no_added_sentence(tmp_path, monkeypatch):
+_ADDED = re.compile(r"\. Yours is (below|above) the optimized range, which holds this part of your (\w+) back\.")
+
+
+def test_the_added_sentences_follow_their_marker_and_say_which_side(tmp_path, monkeypatch):
     record, copy = _record_and_copy("chl_digital", tmp_path, monkeypatch)
-    with_sentence = {s: t for s, t in copy["box_stories"].items() if ", so this part of your " in t}
-    assert with_sentence
+    story = copy["box_stories"]["Repair"]
+    marker = next(m for m in record.markers if m.name == "hs-CRP")
+    pair = (f"{gp.MARKER_EXPLANATIONS['hs-CRP']}. Yours is above the optimized range, which holds this part of your "
+            "Repair back.")
+    assert gp.optimized_side(marker) == "above"
+    assert story == f"{gp.marker_sentence(marker)} {pair}"  # directly after the marker's own sentence
+    assert len(pair.split()) <= 35
+
+
+def test_no_added_sentence_without_an_entry_a_side_or_a_celldeep_threshold(tmp_path, monkeypatch):
+    record, copy = _record_and_copy("chl_digital", tmp_path, monkeypatch)
+    assert _ADDED.search(copy["box_stories"]["Repair"])
     monkeypatch.setattr(gp, "MARKER_EXPLANATIONS", {})
-    bare = gp.build_copy(record)["box_stories"]
-    assert not any(", so this part of your " in text for text in bare.values())
-    for system, text in with_sentence.items():
-        assert text.startswith(bare[system])  # the rest of the category text is unchanged
+    assert not any(_ADDED.search(text) for text in gp.build_copy(record)["box_stories"].values())
+    monkeypatch.undo()
+    as_lab = [dataclasses.replace(m, range_source="lab") if m.name == "hs-CRP" else m for m in record.markers]
+    assert not _ADDED.search(gp.build_copy(dataclasses.replace(record, markers=as_lab))["box_stories"]["Repair"])
+    marker = next(m for m in record.markers if m.name == "hs-CRP")
+    assert gp._category_explanation(dataclasses.replace(marker, now_tier="optimal"), "Repair") == ""  # no side
 
 
 def test_the_static_tables_follow_the_voice_rules():
@@ -150,16 +189,19 @@ def test_the_static_tables_follow_the_voice_rules():
         assert not any(word in lowered for word in FORBIDDEN), name
         assert not re.search(r"\b(good|bad|flagged|caused?|because)\b", lowered), name
         assert not clause.endswith(".")  # a clause: the sentence is composed deterministically
-    for item, names in gp.PROTOCOL_MARKER_MAP.items():
-        assert item in protocol_reference.PROTOCOL_LIBRARY
-        assert all(n in markers_reference.MARKER_LIBRARY for n in names)
+        longest = f"{clause}. Yours is below the optimized range, which holds this part of your Reserves back."
+        assert len(longest.split()) <= 35, name
+    for item, effects in gp.PROTOCOL_MARKER_MAP.items():
+        assert item in protocol_reference.PROTOCOL_LIBRARY and set(effects) <= {"raises", "lowers"}
+        assert all(n in markers_reference.MARKER_LIBRARY for names in effects.values() for n in names)
     for text in (gp.MAINTAIN_TEXT, gp.GENERIC_REGIMEN_LINE, *gp.goal_texts(1, 2).values()):
         assert not any(word in text.lower() for word in FORBIDDEN)
 
 
 # --- the four locked real cases (local only) ----------------------------------------------------------------------
 
-_NEW_SENTENCE = re.compile(r" [A-Z][^.]*?, so this part of your \w+ is (?:not yet )?optimized\.")
+_NEW_SENTENCE = re.compile(r" [A-Z][^.]*?\. Yours is (?:below|above) the optimized range, which holds this part of "
+                           r"your \w+ back\.")
 _OLD = ["What if you were fully optimized by your next birthday?", "TARGET: FULLY OPTIMIZED BY YOUR NEXT BIRTHDAY",
         "Everything, optimized"]
 _NEW = re.compile(r"Your goal: \d+% optimized in 90 days|YOUR GOAL FOR THE NEXT 90 DAYS|YOUR GOAL|"
@@ -187,11 +229,13 @@ def test_a_locked_cases_pdf_changes_only_in_the_goal_and_category_sentences(case
                  collected_date=spec["collected_date"], confirm=lambda screen: True,
                  scan_collected_date=spec.get("scan_collected_date"))
     text, _ = _pdf_text(tmp_path / "report.pdf")
-    before = " ".join(baseline.read_text().split())
-    after = " ".join(text.split())
-    for old in _OLD:
-        before = before.replace(old, " ")
-    after = _NEW_SENTENCE.sub(" ", _NEW.sub(" ", after))
+    def content(raw):  # the text with the goal wording (old or new) and the added sentences set aside
+        flat = " ".join(raw.split())
+        for phrase in _OLD:
+            flat = flat.replace(phrase, " ")
+        return _NEW_SENTENCE.sub(" ", _NEW.sub(" ", flat))
+
+    before, after = content(baseline.read_text()), content(text)
     # Every score, status, value, date and DEXA word is still there exactly as often as before (the added sentences
     # can move a row onto the next page, so the order may shift at a page break, never the content).
     assert collections.Counter(after.split()) == collections.Counter(before.split())

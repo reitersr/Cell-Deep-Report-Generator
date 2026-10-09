@@ -2637,7 +2637,7 @@ def _parse_structured_note(note_text: str):
     """Read the documented '## ' template line by line. A line that matches its section's format is
     read; every other line is returned in `rejected` with its line number and reason, and is never
     interpreted any other way. Returns (parsed, rejected, sections_seen, accepted_text)."""
-    parsed = {"protocol": [], "pain_points": [], "marker_overrides": [], "vitality_index": {},
+    parsed = {"protocol": [], "inactive_protocol": [], "pain_points": [], "marker_overrides": [], "vitality_index": {},
               "treatment_status": None}
     # Blank out comments but keep their newlines so reported line numbers match the note as typed.
     text = re.sub(r"<!--.*?-->", lambda match: "\n" * match.group(0).count("\n"), note_text, flags=re.DOTALL)
@@ -2695,10 +2695,16 @@ def _parse_structured_note(note_text: str):
             parsed["pain_points"].append({"text": match.group("text"), "categories": [systems[s] for s in names]})
         elif section == "protocol":
             match = re.fullmatch(r"(?P<name>[^|]+?)(?:\s*\|\s*Cadence:\s*(?P<cadence>[^|]+?))?"
-                                 r"(?:\s*\|\s*Action:\s*(?P<action>Start|Continue|Adjust))?", item, re.IGNORECASE)
+                                 r"(?:\s*\|\s*Action:\s*(?P<action>Start|Continue|Adjust|Stop|Considering))?", item,
+                                 re.IGNORECASE)
             if not match:
                 reject(number, line, "protocol item must read '- <compound> | Cadence: <cadence> | Action: <Start, "
-                       "Continue or Adjust>' (Cadence and Action are optional)")
+                       "Continue, Adjust, Stop or Considering>' (Cadence and Action are optional)")
+                continue
+            if (match.group("action") or "").lower() in ("stop", "considering"):
+                # Not a current protocol item: never shown to the patient as one; listed for staff.
+                parsed["inactive_protocol"].append(f"{match.group('name').strip()} (Action: "
+                                                   f"{match.group('action').capitalize()})")
                 continue
             known = lookup_protocol_item(match.group("name"))
             config = known[1] if known else {}
@@ -2757,7 +2763,7 @@ def check_provider_note(note_text: str | None) -> dict:
 def parse_provider_note(note_text: str | None) -> dict:
     """Read only lines that follow the structured template; list every other line for staff with its
     reason. Free text is never mined for protocol, concerns, targets or status."""
-    result = {"accepted": False, "protocol": [], "pain_points": [], "marker_overrides": [],
+    result = {"accepted": False, "protocol": [], "inactive_protocol": [], "pain_points": [], "marker_overrides": [],
               "vitality_index": {}, "other_notes": [], "accepted_text": None, "treatment_status": None}
     if not note_text or not note_text.strip():
         return result
@@ -3235,6 +3241,8 @@ def extract(labs_pdf: str | None, dexa_pdfs: list[str], note_text: str | None,
         "printed_names": printed_names,
         **_age_from_dob(dob_sources, latest["date_display"] if latest else None),
         "other_notes": [*lab_review_notes, *note["other_notes"],
+                        *([f"PROTOCOL NOT CURRENT: {', '.join(note['inactive_protocol'])} - marked Stop or Considering in "
+                           "the provider note; not shown as current protocol"] if note.get("inactive_protocol") else []),
                         *lab_header_checks(layout_info, collected_date, age, sex, dexa_info, occurrences)],
         "lab_layout": layout.NAME if layout is not None else None,
         "lab_header": layout_info,

@@ -212,7 +212,7 @@ def _count_phrase(count: int, singular: str, plural_form: str) -> str:
     return f"{count} {plural(count, singular, plural_form)}"
 
 
-def _box_story(markers) -> str:
+def _box_story(markers, system: str | None = None) -> str:
     if not markers:
         return "No markers in this category this round."
     attention = _attention_markers(markers) + [m for m in _not_retested_markers(markers)
@@ -224,7 +224,12 @@ def _box_story(markers) -> str:
         if len(scored) == 1:
             return "Your 1 scored marker in this system is optimal."
         return f"All {len(scored)} scored markers in this system are optimal."
-    sentences = [marker_sentence(m) for m in attention[:3]]
+    sentences, explained = [], False
+    for m in attention[:3]:
+        sentences.append(marker_sentence(m))
+        if system and not explained and (extra := _category_explanation(m, system)):
+            sentences.append(extra)  # directly after the marker it explains; one per category
+            explained = True
     if len(attention) > 3:
         more = len(attention) - 3
         sentences.append(f"{_count_phrase(more, 'more marker', 'more markers')} in this system "
@@ -260,7 +265,7 @@ PROTOCOL_MARKER_MAP = json.loads((_CONFIG / "protocol_marker_map.json").read_tex
 GOAL_DAYS = 90  # the existing Next 90 days time frame
 MAINTAIN_TEXT = "Maintain your current score"
 GENERIC_REGIMEN_LINE = "Continuing your protocol supports this goal."
-_ACTION_VERBS = {"start": "Starting", "continue": "Continuing", "adjust": "Adjusting"}
+_ACTION_VERBS = {"start": "Starting", "continue": "Continuing", "adjust": "Adjusting"}  # Stop / Considering: never
 
 
 def goal_texts(overall_now: int, ceiling: int | None) -> dict:
@@ -273,37 +278,61 @@ def goal_texts(overall_now: int, ceiling: int | None) -> dict:
             "by_age_sub": f"Goal: {ceiling}% optimized"}
 
 
+def optimized_side(marker) -> str | None:
+    """Which side of the optimized range a not-yet-optimized scored result sits on ("below" or "above"), read from the
+    same threshold scoring used. None when it cannot be told: optimized, no numeric result, scored on the lab's printed
+    range, or a threshold that gives no side."""
+    if marker.now_tier not in ("moderate", "flag") or marker.now is None or marker.range_source == "lab":
+        return None
+    if marker.kind == "bounded" and marker.optimal is not None:
+        if marker.direction == "lower" and marker.now >= marker.optimal:
+            return "above"
+        if marker.direction == "higher" and marker.now <= marker.optimal:
+            return "below"
+        return None
+    if marker.kind == "range" and marker.lo is not None and marker.hi is not None:
+        if marker.now < marker.lo:
+            return "below"
+        if marker.now > marker.hi:
+            return "above"
+    return None
+
+
 def regimen_line(record) -> str:
-    """One line linking the current protocol (items marked Start, Continue or Adjust in the provider note) to the
-    not-yet-optimized markers it is established to act on (config/protocol_marker_map.json). An item not in the
-    table, or one acting on no marker that is not yet optimized, gives only the generic line; no such items, no
-    line. It never says an item caused a change."""
+    """One line linking the current protocol (items marked Start, Continue or Adjust in the provider note) to a
+    not-yet-optimized marker it is established to act on (config/protocol_marker_map.json: the markers each item
+    raises or lowers). "Moves your <system> toward optimized" only when the marker sits on the side the item moves it
+    from (raises and below, lowers and above); otherwise the neutral form. An item not in the table, or acting on no
+    such marker, gives only the generic line; no such items, no line. It never says an item caused a change."""
     items = [item for item in record.protocol if (getattr(item, "action", None) or "").lower() in _ACTION_VERBS]
     if not items:
         return ""
-    targets = {m.name: m for m in record.markers if m.now_tier in ("moderate", "flag")}  # not yet optimized
+    targets = {m.name: m for m in record.markers
+               if m.now_tier in ("moderate", "flag") and m.range_source != "lab"}  # not yet optimized
+    neutral = None
     for item in items:
-        for name in PROTOCOL_MARKER_MAP.get(item.name, []):
-            if name in targets and (system := _system_of(targets[name])):
-                return (f"{_ACTION_VERBS[item.action.lower()]} {item.name} supports your {name} and moves your "
-                        f"{system} toward optimized.")
-    return GENERIC_REGIMEN_LINE
+        for effect, names in PROTOCOL_MARKER_MAP.get(item.name, {}).items():
+            for name in names:
+                marker = targets.get(name)
+                if marker is None:
+                    continue
+                side, system = optimized_side(marker), _system_of(marker)
+                if system and (effect, side) in (("raises", "below"), ("lowers", "above")):
+                    return (f"{_ACTION_VERBS[item.action.lower()]} {item.name} supports your {name} and moves your "
+                            f"{system} toward optimized.")
+                neutral = neutral or f"Your protocol includes {item.name}, which acts on {name}."
+    return neutral or GENERIC_REGIMEN_LINE
 
 
-def _category_explanation(markers, system: str) -> str:
-    """One sentence for the first marker the category text names whose result moved: what it does (static table)
-    and whether this part of the system is optimized. Nothing when the marker has no entry."""
-    named = (_attention_markers(markers) + [m for m in _not_retested_markers(markers) if _precedence(m) is None])[:3]
-    for m in named:
-        moved = is_retested(m) and m.then is not None and m.now is not None and m.then != m.now
-        if not moved or m.now_tier not in _TIER_WORDS:
-            continue
-        clause = MARKER_EXPLANATIONS.get(m.name)
-        if not clause:
-            return ""
-        state = "optimized" if m.now_tier == "optimal" else "not yet optimized"
-        return f"{clause}, so this part of your {system} is {state}."
-    return ""
+def _category_explanation(marker, system: str) -> str:
+    """Two sentences for a named marker whose result moved: what it does (static table) and which side of the
+    optimized range it sits on (optimized_side). Nothing when the marker has no entry, is scored on the lab's printed
+    range, or its side cannot be told. Never a cause."""
+    moved = is_retested(marker) and marker.then is not None and marker.now is not None and marker.then != marker.now
+    clause, side = MARKER_EXPLANATIONS.get(marker.name), optimized_side(marker)
+    if not moved or not clause or not side:
+        return ""
+    return f"{clause}. Yours is {side} the optimized range, which holds this part of your {system} back."
 
 
 def build_copy(record) -> dict:
@@ -373,8 +402,7 @@ def build_copy(record) -> dict:
     for system in PATIENT_SYSTEMS:
         system_markers = _system_markers(record, system)
         headlines[system] = _headline(system_markers)
-        box_stories[system] = " ".join(filter(None, [_box_story(system_markers),
-                                                     _category_explanation(system_markers, system)]))
+        box_stories[system] = _box_story(system_markers, system)
         recheck = _attention_markers(system_markers)
         box_forward[system] = ("" if not system_markers else
                                f"Next 90 days: retest {', '.join(m.name for m in recheck)}." if recheck

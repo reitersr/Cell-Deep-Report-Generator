@@ -24,8 +24,9 @@ scoring (e.g. LH/FSH suppression on TRT, postmenopausal BHRT targets). -->
 
 ## Protocol
 
-<!-- One per line: - <compound name> | Cadence: <daily / weekly / as directed> | Action: <Start / Continue / Adjust>
-(the Cadence and Action parts are optional; an item with an Action is linked to the markers it supports on page 1) -->
+<!-- One per line: - <compound name> | Cadence: <daily / weekly / as directed> | Action: <Start / Continue / Adjust / Stop / Considering>
+(the Cadence and Action parts are optional; an item marked Start, Continue or Adjust is linked to the markers it acts on on
+page 1; Stop and Considering items are not shown as current protocol and are listed in the staff notes) -->
 
 ## Marker Targets
 
