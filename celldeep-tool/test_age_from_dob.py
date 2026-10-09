@@ -47,7 +47,7 @@ def _run(tmp_path, monkeypatch, dob=None, staff_age=None, scan_dob=None, scan_do
 def test_age_is_computed_from_printed_dob_and_collection_date(tmp_path, monkeypatch):
     text, review = _run(tmp_path, monkeypatch, dob="03/15/1982")
     assert "AGE 44" in text
-    assert "By 45" in text  # the age at the next birthday, matching the hero's target
+    assert "By 45" in text  # the age column keeps its label; its text is a goal, never a promise
     assert "1982" not in review
 
 
@@ -66,7 +66,7 @@ def test_staff_age_that_differs_is_noted_and_the_printed_dob_wins(tmp_path, monk
 def test_disagreeing_dob_sources_give_no_age_and_a_staff_notice(tmp_path, monkeypatch):
     text, review = _run(tmp_path, monkeypatch, dob="03/15/1982", staff_age=44, scan_dob="03/15/1983")
     assert not re.search(r"AGE \d", text) and "By 4" not in text
-    assert "By your next birthday" in text
+    assert "Longer term" in text and "by your next birthday" not in text.lower()  # no age, no age promise
     assert ("DOB CONFLICT: the printed dates of birth differ between sources (lab page 1, scanned lab page 2, "
             "scanned lab page 3)") in review
     assert "1982" not in review and "1983" not in review
