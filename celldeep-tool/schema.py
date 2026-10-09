@@ -160,6 +160,7 @@ class ProtocolItem:
     cadence: str                       # e.g. "weekly", "daily", "as directed"
     target_categories: list = field(default_factory=list)   # e.g. ["Fuel"] — empty list is valid and meaningful
     lab_visible: bool = True           # False = "Also in your protocol, not reflected in bloodwork" section
+    action: Optional[str] = None       # "Start", "Continue" or "Adjust" when the provider note states it
 
 
 @dataclass

@@ -27,6 +27,8 @@ from markers_reference import DATA_TO_PATIENT_CATEGORY, NARRATIVE_CATEGORY_OVERR
 from unknown_marker_policy import STAFF_NOTE_MARKERS
 from html import escape as html_escape
 import clinic_config
+import dataclasses
+from generation_prompt import goal_texts
 
 AQUA = "#81CADF"
 AQUA_DK = "#3E7C93"
@@ -232,6 +234,7 @@ h1,h2,h3{{font-family:Georgia,'Times New Roman',serif; font-weight:700;}}
 .bl-list li b{{color:#fff;}}
 .hero-top{{display:flex; justify-content:space-between; gap:16px; margin-bottom:8px; align-items:center;}}
 .hero-top .big{{font-family:Georgia,serif; font-size:22px; font-weight:700; max-width:5.1in; line-height:1.28;}}
+.hero-top .big .regimen{{font-family:inherit; font-size:10.5px; font-weight:400; line-height:1.3; margin-top:6px;}}
 .hero-ring{{flex:none;}}
 .gauge-legend{{display:none;}}
 .gauge-legend span{{display:flex; align-items:center; gap:5px;}}
@@ -357,6 +360,22 @@ def markers_for_category(record: PatientRecord, patient_cat: str):
     override_rows = [m for m in record.markers if NARRATIVE_CATEGORY_OVERRIDE.get(m.name) == patient_cat
                       and m.category != data_cat]
     return rows + override_rows
+
+
+GOAL_OPTIMIZED_PCT = 88  # the lowest optimized marker score (scoring.score_bounded): the goal never assumes more
+
+
+def goal_ceiling(record: PatientRecord, structure_now: int | None, structure_then: int | None,
+                 structure_improved: bool) -> int:
+    """The overall score this record would have if every not-yet-optimized scored marker with a CellDeep threshold
+    (not one scored on the lab's printed fallback range, range_source "lab") were optimized (at the lowest optimized score), everything else unchanged: the same rollup, re-run. A female
+    report counts only clinic-confirmed female thresholds, so while FEMALE_RANGES_CONFIRMED is False nothing moves."""
+    countable = record.sex != "female" or clinic_config.FEMALE_RANGES_CONFIRMED
+    markers = [dataclasses.replace(m, now_pct=max(m.now_pct, GOAL_OPTIMIZED_PCT), now_tier="optimal")
+               if countable and m.now_tier in ("moderate", "flag") and m.range_source != "lab"
+               and m.now_pct is not None else m for m in record.markers]
+    return build_rollups(dataclasses.replace(record, markers=markers), structure_now, structure_then,
+                         structure_improved)[2]
 
 
 def build_rollups(record: PatientRecord, structure_now: int | None, structure_then: int | None,
@@ -898,6 +917,9 @@ def render(record: PatientRecord, copy: dict, out_path: str,
 
     roll, order, overall_now, overall_then, has_dexa = build_rollups(
         record, structure_now, structure_then, structure_improved)
+    # The goal is a goal, never a forecast, and never above the ceiling (generation_prompt.goal_texts).
+    copy = {**copy, **goal_texts(overall_now, goal_ceiling(record, structure_now, structure_then,
+                                                           structure_improved))}
 
     resolved_logo_path = logo_traced_path or _load_logo_traced_path()
     logo_mark = logo_svg(CHARCOAL, resolved_logo_path)
@@ -963,9 +985,9 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     next_30_sub = fmt(copy.get("next_30_sub", ""))
     next_90_label = fmt(copy.get("next_90_label", "Next 90 days"))
     next_90_sub = fmt(copy.get("next_90_sub", ""))
-    # The hero targets "your next birthday", so the step names the age the patient turns next.
+    # The step keeps its age label; its text is the goal (goal_texts), never a promise for that age.
     by_age_label = fmt(copy.get("by_age_label", f"By {record.age + 1}" if record.age is not None
-                                else "By your next birthday"))
+                                else "Longer term"))
     by_age_sub = fmt(copy.get("by_age_sub", ""))
     overall_then_display = f"{overall_then}%" if overall_then is not None else fmt(overall_then)
     # With one draw there is no first visit to improve on, so the "improved" key is left out of the legend.
@@ -989,7 +1011,7 @@ def render(record: PatientRecord, copy: dict, out_path: str,
     <div class="hero">
     <div class="hero-eyebrow">{f"AGE {record.age} &nbsp;&rarr;&nbsp; " if record.age else ""}{fmt(copy.get("hero_target_line", ""))}</div>
     <div class="hero-top">
-      <div class="big">{fmt(copy.get("hero_question", ""))}</div>
+      <div class="big">{fmt(copy.get("hero_question", ""))}{f'<div class="regimen">{fmt(copy["regimen_line"])}</div>' if copy.get("regimen_line") else ""}</div>
       <div class="hero-ring">
         {gauge_svg(overall_then, overall_now, gauge_zone)}
       </div>

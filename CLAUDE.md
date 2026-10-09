@@ -36,6 +36,7 @@ These override any other instruction, convenience or test shortcut.
 | `celldeep-tool/lab_reported.py` | Lab-reported, not-scored tests (CBC, chemistry, urinalysis, ...): exact aliases, section-scoped; shown with printed range and the lab's H/L flag, never a CellDeep score. |
 | `celldeep-tool/clinic_config.py` | Clinic-decision defaults (censored results, lab flags, range labels); one comment per setting. |
 | `celldeep-tool/config/known_items.json`, `known_items.py` | Clinic-approved known-items allowlist (exact names, case/whitespace only), used while `clinic_config.KNOWN_ITEMS_AUTOPROCEED` is True (on); any name change needs clinic approval. |
+| `celldeep-tool/config/marker_explanations.json`, `config/protocol_marker_map.json` | Static, clinic-reviewed tables for patient copy: what each scored marker does (one clause), and the markers each protocol item is established to act on. Not generated text; a missing entry means no sentence. |
 | `celldeep-tool/tmp_cleanup.py` | Deletes uploads, reports and audits from `/tmp` after six hours. |
 | `celldeep-tool/scoring.py` | Pure scoring math, no AI; `is_censored` for results printed as a limit. |
 | `celldeep-tool/generation_prompt.py` | Deterministic patient-facing copy (template fill, no AI). |
@@ -262,7 +263,20 @@ ANTHROPIC_API_KEY=offline-mocked-key python -m pytest -q`. Tests that need
    parser read (`_pdf_row_text` gives lines by word position); unit text, headings and prose never count. The
    STAFF CHECK "Scored markers" count is the markers with a CellDeep tier, as in the report.
 6. **Copy and render**: `generation_prompt.build_copy` fills patient-facing text;
-   `template.render` writes the patient PDF. Full-panel column headers name a date only when every
+   `template.render` writes the patient PDF. Goal wording (`generation_prompt.goal_texts`, `template.goal_ceiling`): a
+   goal for a time frame, never a promise for an age: "Your goal: X% optimized in 90 days" (hero) and "Goal: X%
+   optimized" (age column), X = the ceiling: the same rollup with every not-yet-optimized scored marker not scored on
+   the lab's fallback range counted at the lowest optimized score (88); at or above it "Maintain your current score",
+   no number; female reports count only clinic-confirmed female thresholds (none while `FEMALE_RANGES_CONFIRMED` is
+   False). `regimen_line`: one line under the goal from `config/protocol_marker_map.json` (markers each item raises or
+   lowers) for protocol items marked `| Action: Start/Continue/Adjust` in the provider note: "<Continuing> <item>
+   supports your <marker> and moves your <system> toward optimized." only when the marker sits on the side the item
+   moves it from (`optimized_side`, from the scoring threshold), else "Your protocol includes <item>, which acts on
+   <marker>."; an unmapped item: "Continuing your protocol supports this goal."; none: no line. Stop and Considering
+   items are never current protocol ("PROTOCOL NOT CURRENT" staff note). Category text adds, directly after the first
+   named marker that moved and has a side, "<clause>. Yours is below|above the optimized range, which holds this part
+   of your <system> back." (`_category_explanation`, `config/marker_explanations.json`; none for a marker scored on the
+   lab's printed range, without an entry or without a side; never a cause). Full-panel column headers name a date only when every
    value in the column is from it (`template.panel_column_headers`). The lab's own flag is shown under a
    current result only where CellDeep calls it Optimal (`clinic_config.LAB_FLAG_DISAGREES_WITH`; the clinic
    deliberately does not show it on Moderate or unscored results); a censored value shows it next to the value.

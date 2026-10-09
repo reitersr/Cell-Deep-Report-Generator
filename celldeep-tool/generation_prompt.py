@@ -9,6 +9,9 @@ fact. "Baseline"/"starting point" claims resolve via min() on normalized date;
 "Next 30/90 Days" priority comes from select_priority_marker().
 """
 
+import json
+from pathlib import Path
+
 from markers_reference import (CATEGORY_TAGLINES, DATA_TO_PATIENT_CATEGORY, MARKER_DESCRIPTIONS,
                                NARRATIVE_CATEGORY_OVERRIDE, SYSTEM_ORDER)
 from schema import normalize_date_for_matching
@@ -209,7 +212,7 @@ def _count_phrase(count: int, singular: str, plural_form: str) -> str:
     return f"{count} {plural(count, singular, plural_form)}"
 
 
-def _box_story(markers) -> str:
+def _box_story(markers, system: str | None = None) -> str:
     if not markers:
         return "No markers in this category this round."
     attention = _attention_markers(markers) + [m for m in _not_retested_markers(markers)
@@ -221,7 +224,12 @@ def _box_story(markers) -> str:
         if len(scored) == 1:
             return "Your 1 scored marker in this system is optimal."
         return f"All {len(scored)} scored markers in this system are optimal."
-    sentences = [marker_sentence(m) for m in attention[:3]]
+    sentences, explained = [], False
+    for m in attention[:3]:
+        sentences.append(marker_sentence(m))
+        if system and not explained and (extra := _category_explanation(m, system)):
+            sentences.append(extra)  # directly after the marker it explains; one per category
+            explained = True
     if len(attention) > 3:
         more = len(attention) - 3
         sentences.append(f"{_count_phrase(more, 'more marker', 'more markers')} in this system "
@@ -247,6 +255,84 @@ def _protocol_reason(item, record) -> str:
     if categories:
         return f"Supports your {', '.join(categories)} system."
     return "Part of your provider's current plan."
+
+
+_CONFIG = Path(__file__).resolve().parent / "config"
+# Static, clinic-reviewed tables (never generated text): what each scored marker does, and the markers a protocol item
+# is established to act on. A marker or item that is not listed gets no specific sentence.
+MARKER_EXPLANATIONS = json.loads((_CONFIG / "marker_explanations.json").read_text(encoding="utf-8"))["explanations"]
+PROTOCOL_MARKER_MAP = json.loads((_CONFIG / "protocol_marker_map.json").read_text(encoding="utf-8"))["map"]
+GOAL_DAYS = 90  # the existing Next 90 days time frame
+MAINTAIN_TEXT = "Maintain your current score"
+GENERIC_REGIMEN_LINE = "Continuing your protocol supports this goal."
+_ACTION_VERBS = {"start": "Starting", "continue": "Continuing", "adjust": "Adjusting"}  # Stop / Considering: never
+
+
+def goal_texts(overall_now: int, ceiling: int | None) -> dict:
+    """The goal wording: never a forecast, never above the ceiling (the score with every not-yet-optimized scored
+    marker optimized). At or above the ceiling there is no number to aim for, so the patient maintains."""
+    if ceiling is None or ceiling <= overall_now:
+        return {"hero_question": MAINTAIN_TEXT, "hero_target_line": "YOUR GOAL", "by_age_sub": MAINTAIN_TEXT}
+    return {"hero_question": f"Your goal: {ceiling}% optimized in {GOAL_DAYS} days",
+            "hero_target_line": f"YOUR GOAL FOR THE NEXT {GOAL_DAYS} DAYS",
+            "by_age_sub": f"Goal: {ceiling}% optimized"}
+
+
+def optimized_side(marker) -> str | None:
+    """Which side of the optimized range a not-yet-optimized scored result sits on ("below" or "above"), read from the
+    same threshold scoring used. None when it cannot be told: optimized, no numeric result, scored on the lab's printed
+    range, or a threshold that gives no side."""
+    if marker.now_tier not in ("moderate", "flag") or marker.now is None or marker.range_source == "lab":
+        return None
+    if marker.kind == "bounded" and marker.optimal is not None:
+        if marker.direction == "lower" and marker.now >= marker.optimal:
+            return "above"
+        if marker.direction == "higher" and marker.now <= marker.optimal:
+            return "below"
+        return None
+    if marker.kind == "range" and marker.lo is not None and marker.hi is not None:
+        if marker.now < marker.lo:
+            return "below"
+        if marker.now > marker.hi:
+            return "above"
+    return None
+
+
+def regimen_line(record) -> str:
+    """One line linking the current protocol (items marked Start, Continue or Adjust in the provider note) to a
+    not-yet-optimized marker it is established to act on (config/protocol_marker_map.json: the markers each item
+    raises or lowers). "Moves your <system> toward optimized" only when the marker sits on the side the item moves it
+    from (raises and below, lowers and above); otherwise the neutral form. An item not in the table, or acting on no
+    such marker, gives only the generic line; no such items, no line. It never says an item caused a change."""
+    items = [item for item in record.protocol if (getattr(item, "action", None) or "").lower() in _ACTION_VERBS]
+    if not items:
+        return ""
+    targets = {m.name: m for m in record.markers
+               if m.now_tier in ("moderate", "flag") and m.range_source != "lab"}  # not yet optimized
+    neutral = None
+    for item in items:
+        for effect, names in PROTOCOL_MARKER_MAP.get(item.name, {}).items():
+            for name in names:
+                marker = targets.get(name)
+                if marker is None:
+                    continue
+                side, system = optimized_side(marker), _system_of(marker)
+                if system and (effect, side) in (("raises", "below"), ("lowers", "above")):
+                    return (f"{_ACTION_VERBS[item.action.lower()]} {item.name} supports your {name} and moves your "
+                            f"{system} toward optimized.")
+                neutral = neutral or f"Your protocol includes {item.name}, which acts on {name}."
+    return neutral or GENERIC_REGIMEN_LINE
+
+
+def _category_explanation(marker, system: str) -> str:
+    """Two sentences for a named marker whose result moved: what it does (static table) and which side of the
+    optimized range it sits on (optimized_side). Nothing when the marker has no entry, is scored on the lab's printed
+    range, or its side cannot be told. Never a cause."""
+    moved = is_retested(marker) and marker.then is not None and marker.now is not None and marker.then != marker.now
+    clause, side = MARKER_EXPLANATIONS.get(marker.name), optimized_side(marker)
+    if not moved or not clause or not side:
+        return ""
+    return f"{clause}. Yours is {side} the optimized range, which holds this part of your {system} back."
 
 
 def build_copy(record) -> dict:
@@ -316,7 +402,7 @@ def build_copy(record) -> dict:
     for system in PATIENT_SYSTEMS:
         system_markers = _system_markers(record, system)
         headlines[system] = _headline(system_markers)
-        box_stories[system] = _box_story(system_markers)
+        box_stories[system] = _box_story(system_markers, system)
         recheck = _attention_markers(system_markers)
         box_forward[system] = ("" if not system_markers else
                                f"Next 90 days: retest {', '.join(m.name for m in recheck)}." if recheck
@@ -331,8 +417,7 @@ def build_copy(record) -> dict:
     marker_what = {m.name: MARKER_DESCRIPTIONS[m.name] for m in noteworthy if m.name in MARKER_DESCRIPTIONS}
 
     return {
-        "hero_question": "What if you were fully optimized by your next birthday?",
-        "hero_target_line": "TARGET: FULLY OPTIMIZED BY YOUR NEXT BIRTHDAY",
+        "regimen_line": regimen_line(record),
         "optimization_summary_bullets": bullets,
         "headlines": headlines,
         "box_stories": box_stories,
@@ -341,7 +426,6 @@ def build_copy(record) -> dict:
         "next_30_sub": next_30_sub,
         "next_90_label": next_90_label,
         "next_90_sub": next_90_sub,
-        "by_age_sub": "Everything, optimized",
         "category_taglines": {c: CATEGORY_TAGLINES[c] for c in {m.category for m in markers}
                               if c in CATEGORY_TAGLINES},
         "marker_notes": marker_notes,
